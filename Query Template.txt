@@ -1,0 +1,107 @@
+-------------------------------------
+Pour info requete rajouter au début :
+-------------------------------------
+
+/* Infos requête
+Code : xxxx
+Description : xxxxxx
+Hide : 0 / 1 / 2
+Debug : xxxxx
+*/
+
+Le code est utilisé dans la liste des requetes, si pas renseigné alors le nom du fichier est utilisé
+La description est utlisé dans la liste des requetes
+La valeur de hide défini qui peut voir la requête :
+	0 tout le monde (valeur par défaut),
+	1 les superusers,
+	2 personne (requête à usage interne pour Pytre)
+
+D'autres infos peuvent être ajoutée (comme une note de version) mais ne sont pas utilisées par Pytre
+
+-------------------------------------------
+Pour les paramètres créer un bloc DECLARE :
+-------------------------------------------
+
+DECLARE
+@1 as TYPE_VARIABLE = 'VAL_DEFAUT'	-- LIBELLE|PARAMETRES
+;
+
+TYPE_VARIABLE => int, date, nvarchar(), etc...
+VAL_DEFAUT => valeur par défaut qui sera aussi utilisé dans Pytre
+
+Les infos supplémentaire de la variable sont récupérées dans le commentaire  de la ligne.
+Attention de bien utiliser "--" pour le commentaire
+
+Le commentaire est splitté dans un premier temps en utilisant le pipe ("|") pour récupérer :
+		LIBELLE : pour le libellé du paramètre
+		PARAMETRES : pour les paramètres de la variable
+
+Les paramètres ne sont pas obligatoire et il peut n'y en avoir aucun.
+Les types de paramètres possibles sont au nombre de 3. Pour en indiquer plusieurs il convient d'utiliser la virgule entre chaque paramètre.
+Les types possibles sont :
+		OPTIONAL : si la variable n'est pas obligatoire alors indiquer "optional"
+		HIDE : si la variable ne doit pas être montrée / modifiée par l'utilisateur
+		VAL_FORMULE : valeur calculée à utiliser plutot que la VALEUR_DEFAUT (cf.ci-dessous)
+		UI_CTRL(LISTE_VAL_AUTORISEES) : UI_CTRL pour le type de contrôle à afficher et LISTE_VAL_AUTORISEES pour valeurs possibles (cf.ci-dessous)
+=> nb : si pas de types mais juste des valeurs entre parentheses alors il est considéré qu'il s'agit d'une liste des valeures autorisées.
+
+VAL_FORMULE : fonctions possibles pour valeur calculée d'un paramètre
+---------------------------------------------------------------------
+- user_info(attribute) : récupération de l'attribut utilisateur définit par les settings
+		par exemple pour l'id de l'utilisateur dans X3 : "x3_id"
+
+- month_end(months_offset, days_offset) : décalage mois en fonction de la valeur months_offset
+		positionnement en fin de mois
+		puis déclage optionnel mois en fonction de months_offset
+		puis décalage optionnel jour
+
+- fiscal_year(last_month, months_offset, days_offset) : fin de l'exercice fiscal avec last_month pour le numéro du mois de cloture
+		positionnement à la fin de l'exercice fiscal en cours (en fonction du mois de clôture)
+		puis décalage optionnel mois
+		puis déclage optionnel jour
+
+- today(days_offset) : date du jour
+		date du jour
+		puis décalage optionnel en fonction de la valeur days_offset
+
+UI_CTRL(LISTE_VAL_AUTORISEES) : précisions sur le fonctionnement
+----------------------------------------------------------------
+- UI_CTRL :
+		si non précisé alors zone classique d'entrée (ENTRY) ; les types possibles sont :
+			ENTRY : champs d'entrée standard (valeur défaut)
+			LIST : liste déroulante ne permettant que la sélection d'une valeur dans LISTE_VAL_AUTORISEES
+			CHECK : case à cocher ; attention cf.précision sur LISTE_VAL_AUTORISEES plus bas
+
+- LISTE_VAL_AUTORISEES : 
+		les valeurs autorisées doivent être spécifiées sous la forme suivante : "CMD_VAL: DISPLAY_VAL"
+			CMD_VAL : est la valeur attendue par la commande SQL
+			DISPLAY_VAL : est le texte à afficher, si pas préciser alors idem que CMD_VAL
+		plusieurs valeurs peuvent être précisé en les séparant d'une virgule
+
+		attention :
+			si le paramètre est optionnel alors il faut ajouter une valeur nulle pour qu'elle puisse être sélectionnée
+			CHECK doit indiquer en 1er la valeur si coché et en 2ième si décoché => DISPLAY_VAL est tjrs ignoré pour ce ctrl
+
+- Exemples :
+		ENTRY(FRA, SITU)
+		ENTRY(FRA: Social, SITU: Situation)
+		LIST(1: Social, 4: Situation)
+		CHECK(1, 0)    => pour ce ctrl arg 1 est la valeur quand coché (ici 1), arg 2 quand décoché (ici 0)
+		CHECK(2, 1)    => pour ce ctrl arg 1 est la valeur quand coché (ici 2), arg 2 quand décoché (ici 1)
+
+========================================================================================================================================
+Pour faciliter conversion d'une requête dans X3 en requête permettant d'interroger en direct la base SQL
+========================================================================================================================================
+---------------------------
+Regex pour modif variable :
+---------------------------
+- Recherche de : %(\d+)%
+- Remplacer par : @\1
+
+----------------------------------------------------------
+Regex pour rajouter les infos de la base pour les tables :
+----------------------------------------------------------
+- Recherche de : (FROM|JOIN)([^\w\(]*)(\w+)
+- Remplacer par : \1\2x3v12prod.PROSOL2.\3
+=> attention sur cette partie à bien rechecker, par défaut on considère que toute table est une table dans X3
+(alors qu'on a pu faire des sous-requetes ou des tables qui référence déjà une base)

@@ -1,0 +1,598 @@
+from os import name
+import re
+import typing
+from datetime import datetime
+from dateutil.relativedelta import relativedelta
+from pathlib import Path
+
+import pymssql
+
+import config, utils, sql_user
+
+CWD = Path.cwd()  # dossier du script ou de l'executable
+PRINT_DATE_FORMAT = "%d/%m/%Y à %H:%M:%S"  # pour le format de la date pour les logs / output
+USER = sql_user.User()
+
+
+class Query:
+    def __init__(self, filename: Path, encoding_format: str = "utf-8"):
+        self.query_execute = _QueryExecute(self)
+
+        self.last_extracted_file = ""  # info du dernier fichier extrait
+        self.msg_list: typing.List[
+            str
+        ] = []  # liste de messages pour affichage à l'utilisateur (pour interface graphique)
+
+        self.filename = filename
+        self.file_content = self._init_file_content(encoding_format)
+
+        self.raw_command = self._init_raw_command()
+
+        self.infos = self._init_infos()
+        self.params: typing.Dict[str, _Param] = self._init_params()
+        self.command = ""
+        self.name = self.infos.get("code", self.filename.stem)
+        self.description = self.infos.get("description", "")
+
+    def _init_file_content(self, encoding_format: str = "utf-8") -> str:
+        file_content = ""
+        try:
+            with open(self.filename, mode="r", encoding=encoding_format) as f:
+                file_content = f.read()
+        except FileNotFoundError:
+            pass
+        except UnicodeDecodeError:
+            alternative_encoding_format = "ansi" if encoding_format == "utf-8" else "utf-8"
+            with open(self.filename, mode="r", encoding=alternative_encoding_format) as f:
+                file_content = f.read()
+
+        return file_content
+
+    def _init_infos(self) -> dict:
+        infos = {}
+        regex_match = re.search(
+            r"^\/\*[^\n]*?\n(.*?)\n^\*\/", self.file_content, re.MULTILINE | re.DOTALL
+        )  # récupération des infos d'entête de la requete (premier bloc de commentaires)
+
+        if not regex_match is None:
+            for line in regex_match.group(1).splitlines():
+                regex_infos = re.search(r"^([^:]*?)\s*:\s*(.*$)", line)
+                if not regex_infos is None:
+                    info_key = regex_infos.group(1).lower()
+                    info_value = regex_infos.group(2)
+                    infos[info_key] = info_value  # rajout dans un dictionnaire de l'info
+
+        return infos
+
+    def _init_params(self) -> dict:
+        regex_match = re.search(r"^(DECLARE[^;]*;)", self.file_content, re.MULTILINE | re.DOTALL)  # section DECLARE
+
+        params = {}
+        params_txt = regex_match.group(1) if not regex_match is None else ""
+        for line in params_txt.splitlines():
+            if line[0:1] == "@":
+                my_param = _Param(line)
+                params[my_param.var_name] = my_param
+
+        return params
+
+    def _init_raw_command(self) -> str:
+        regex_match = re.search(r"^DECLARE[^;]*;[\s]*(.*)", self.file_content, re.MULTILINE | re.DOTALL)
+        return regex_match.group(1) if not regex_match is None else self.file_content
+
+    def reset_values(self):
+        for p in self.params:
+            p.reset_param()
+
+        self.command = ""
+
+    def update_values(self, key: str = None) -> None:
+        """
+        If key is none then update all key
+        """
+        my_list = [key] if not key is None else self.params.keys()
+
+        for key in my_list:
+            self.params[key].update_value_cmd()
+
+    def values_ok(self, key: str = None) -> bool:
+        my_list = [key] if not key is None else self.params.keys()
+
+        for key in my_list:
+            if self.params[key].value_is_ok == False:
+                return False
+
+        return True
+
+    def execute_cmd(self) -> bool:
+        self.last_extracted_file = ""
+
+        if self._update_cmd():
+            self.query_execute.command = self.command
+            extract_file = CWD / (
+                f"{self.name}_Extract_{USER.x3_login.upper()}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+            )
+            try:
+                result = self.query_execute.execute(extract_file)
+                self.last_extracted_file = extract_file
+                return result
+            except pymssql._pymssql.OperationalError as err:
+                err_msg = str("=") * 50 + "\n" + str(err)
+                self._broadcast(err_msg)
+                return False
+        else:
+            err_msg = f"\nImpossible d'executer des paramètres sont invalides"
+            self._broadcast(err_msg)
+            return False
+
+    def _update_cmd(self) -> bool:
+        self.update_values()
+
+        if self.values_ok():
+            command = self.raw_command
+            for key in self.params:
+                key_id = key
+                key_value = self.params[key].value_cmd
+                command = re.sub(rf"{key_id}((?=[^\d\w#_\$@])|$)", rf"{key_value}", command)
+
+            self.command = command
+        else:
+            self.command = ""
+            return False
+
+        return True
+
+    def _broadcast(self, msg_to_broadcast: str) -> None:
+        self.msg_list.append(msg_to_broadcast)
+        print(msg_to_broadcast)
+
+
+class _Param:
+    def __init__(self, sql_declare: str):
+        self.converter = _Convert()  # objet pour gérer les conversions des string en valeurs et l'inverse
+        self.sql_declare = sql_declare
+        self.reset_param()
+
+    def reset_param(self) -> None:
+        self.var_name = re.search(r"^@[\d\w#_\$@]+", self.sql_declare)[0]
+        self.type_name = re.search(r"^[^(=]+as\s+([^(\s=]+)", self.sql_declare, re.IGNORECASE)[1].lower()
+        self.type_args = self._init_type_args()
+        self.display_value = re.search(r"^[^=]*=\s*('.*?'|[^,\s]*)", self.sql_declare)[1].replace("'", "").strip()
+
+        # infos additionnelles
+        self.description = ""
+        self.is_optional = False
+        self.value_cmd = ""
+        self.value_is_ok = False
+
+        self._init_other_infos()
+
+        # conversion valeur affichage défaut pour vérifier si bien ok
+        self.display_value = self.converter.to_display(self.type_name, self.display_value)
+
+    def _init_type_args(self) -> list:
+        str_type_args = re.search(r"^[^(=]+\(([^)]+)\)", self.sql_declare)
+        str_type_args = str_type_args[1].lower().split(",") if str_type_args else []
+        return [arg.strip() for arg in str_type_args]
+
+    def _init_other_infos(self) -> None:
+        other_infos = re.search(r"--\s*(.*$)", self.sql_declare)
+        if other_infos:
+            infos = other_infos[1].split("|")
+
+            self.description = infos[0] if len(infos) > 0 else ""
+
+            if len(infos) > 1:
+                self.is_optional = True if infos[1] == "1" else False
+
+            if len(infos) > 2:
+                self.display_value = self._init_dynamic_value(infos[2])
+
+    def _init_dynamic_value(self, str_value: str) -> str:
+        def fiscal_year(last_month: int, month_offset: int = 0, days_offset: int = 0) -> str:
+            last_month = int(last_month)
+            month_offset = int(month_offset)
+            days_offset = int(days_offset)
+
+            my_year = datetime.today().year
+            my_year += 1 if datetime.today().month > last_month else 0
+            my_date = (
+                datetime(my_year, last_month, 1)
+                + relativedelta(months=month_offset + 1)
+                + relativedelta(days=-1 + days_offset)
+            )
+
+            return datetime.strftime(my_date, self.converter.date_val_format)
+
+        def month_end(month_offset: int = 0, days_offset: int = 0) -> str:
+            month_offset = int(month_offset)
+            days_offset = int(days_offset)
+
+            my_date = datetime(datetime.today().year, datetime.today().month, 1)
+            my_date += relativedelta(months=month_offset + 1) + relativedelta(days=-1 + days_offset)
+
+            return datetime.strftime(my_date, self.converter.date_val_format)
+
+        my_dict = {"fiscal_year": fiscal_year, "month_end": month_end}
+
+        match_func = re.search(r"^[^\(]*", str_value)
+        my_func = match_func.group(0).lower() if match_func else None
+
+        args_func = re.search(r"(?<=\()[^\)]*", str_value)
+        my_args = args_func.group(0).lower().split(",") if args_func else None
+
+        return my_dict.get(my_func)(*my_args) if my_func in my_dict else str_value
+
+    def update_value_cmd(self) -> None:
+        self.value_is_ok = False
+
+        if not self.display_value and not self.is_optional:
+            raise ValueError("paramètre obligatoire")
+        else:
+            self.value_cmd = self.converter.to_cmd(self.type_name, self.display_value, self.type_args)
+
+        self.value_is_ok = True
+
+
+class _Convert:
+    def __init__(self):
+        self.date_txt_format = config.DATE_FORMAT  # pour affichage utilisateurs ou extraction
+        self.date_val_format = "%Y-%m-%d"  # pour commande SQL
+
+        self.datetime_txt_format = "%d/%m/%Y %H:%M:%S"  # pour affichage utilisateurs ou extraction
+        self.datetime_val_format = "%Y-%m-%d %H:%M:%S"  # pour commande SQL
+
+        self.field_separator = config.FIELD_SEPARATOR
+        self.decimal_separator = config.DECIMAL_SEPARATOR
+
+        self.cls_to_cmd = self._ToCmd(self)
+        self.cls_to_display = self._ToDisplay(self)
+        self.cls_from_result = self._FromResult(self)
+
+    def to_cmd(self, type_name: str, string_to_convert: str, type_args=[]) -> str:
+        return self.cls_to_cmd.transform(type_name, string_to_convert, type_args)
+
+    def to_display(self, type_name: str, value_to_convert: str) -> str:
+        return self.cls_to_display.transform(type_name, value_to_convert)
+
+    def from_result(self, value) -> str:
+        return self.cls_from_result.transform(value)
+
+    class _ToCmd:
+        def __init__(self, parent):
+            self.parent: _Convert = parent
+
+        def transform(self, type_name: str, string_to_convert: str, type_args=[]) -> str:
+            if string_to_convert == "":
+                return self._convert_to_null_value(type_name)
+
+            if self.func_dict().get(type_name):
+                if type_args == []:
+                    return self.func_dict()[type_name](string_to_convert)
+                else:
+                    return self.func_dict()[type_name](string_to_convert, type_args)
+            else:
+                return string_to_convert
+
+        def func_dict(self) -> dict:
+            my_dict = {
+                "bit": self._str_to_bit,
+                "int": self._str_to_int,
+                "date": self._str_to_date,
+                "datetime": self._str_to_datetime,
+                "nchar": self._str_tochar,
+                "char": self._str_tochar,
+                "varchar": self._str_to_nvarchar,
+                "nvarchar": self._str_to_nvarchar,
+                "text": self._str_to_nvarchar,
+                "ntext": self._str_to_nvarchar,
+            }
+
+            return my_dict
+
+        def _str_to_bit(self, string_to_convert: str) -> str:
+            try:
+                my_int = int(string_to_convert)
+                value = string_to_convert
+                if not my_int == 0 and not my_int == 1:
+                    raise ValueError(f"Erreur valeur, {string_to_convert} ne peut être que 0 ou 1")
+            except ValueError:
+                if not my_int == 0 and not my_int == 1:
+                    raise ValueError(f"{string_to_convert} ne peut être que 0 ou 1")
+                else:
+                    raise ValueError(f"{string_to_convert} n'est pas un nombre entier valide")
+
+            return value
+
+        def _str_to_int(self, string_to_convert: str) -> str:
+            try:
+                _ = int(string_to_convert)
+                value = string_to_convert
+            except ValueError:
+                raise ValueError(f"{string_to_convert} n'est pas un nombre entier valide")
+
+            return value
+
+        def _str_to_date(self, string_to_convert: str) -> str:
+            try:
+                my_date = datetime.strptime(string_to_convert, self.parent.date_txt_format)
+                value = "'" + my_date.strftime(self.parent.date_val_format) + "'"
+            except ValueError:
+                raise ValueError(f"{string_to_convert} n'est pas une date valide (jj/mm/aaaa)")
+
+            return value
+
+        def _str_to_datetime(self, string_to_convert: str) -> str:
+            try:
+                my_date = datetime.strptime(string_to_convert, self.parent.datetime_txt_format)
+                value = "'" + my_date.strftime(self.parent.datetime_val_format) + "'"
+            except ValueError:
+                raise ValueError(f"{string_to_convert} n'est pas une date valide (jj/mm/aaaa hh:mm:ss)")
+
+            return value
+
+        def _str_to_nvarchar(self, string_to_convert: str, type_args: typing.List[str] = []) -> str:
+            max_size = 255 if type_args[0] == "max" or type_args == [] else int(type_args[0])
+
+            if len(string_to_convert) <= max_size:
+                value = "'" + string_to_convert + "'"
+            else:
+                raise ValueError(f"{string_to_convert} a plus de charactères qu'autorisés (max : {max_size})")
+
+            return value
+
+        def _str_tochar(self, string_to_convert: str, params: typing.List[str] = ["0"]) -> str:
+            size = int(params[0])
+
+            if len(string_to_convert) == size:
+                value = "'" + string_to_convert + "'"
+            else:
+                raise ValueError(f"{string_to_convert} n'est pas de la bonne taille ({size})")
+
+            return value
+
+        def _convert_to_null_value(self, type_name: str) -> str:
+            null_value_dict = {"int": 0}
+            default_null_value = "' '"
+
+            return null_value_dict.get(type_name, default_null_value)
+
+    class _ToDisplay:
+        def __init__(self, parent):
+            self.parent: _Convert = parent
+
+        def transform(self, type_name: str, value_to_convert: str) -> str:
+            if value_to_convert == "":
+                return self._convert_to_null_value(type_name)
+            elif self.func_dict().get(type_name):
+                return self.func_dict()[type_name](value_to_convert)
+            else:
+                return value_to_convert
+
+        def func_dict(self) -> dict:
+            my_dict = {"date": self._date_to_str, "datetime": self._datetime_to_str}
+
+            return my_dict
+
+        def _date_to_str(self, value_to_convert: str) -> str:
+            my_string = datetime.strptime(value_to_convert, self.parent.date_val_format).strftime(
+                self.parent.date_txt_format
+            )
+            return my_string
+
+        def _datetime_to_str(self, value_to_convert: str) -> str:
+            my_string = datetime.strptime(value_to_convert, self.parent.datetime_val_format).strftime(
+                self.parent.datetime_txt_format
+            )
+            return my_string
+
+        def _convert_to_null_value(self, type_name: str) -> str:
+            null_value_dict = {"int": 0}
+            default_null_value = ""
+
+            return null_value_dict.get(type_name, default_null_value)
+
+    class _FromResult:
+        def __init__(self, parent):
+            self.parent: _Convert = parent
+
+        def transform(self, value) -> str:
+            type_name = str(type(value))
+
+            if self.func_dict().get(type_name):
+                return self.func_dict()[type_name](value)
+            else:
+                return str(value).replace(self.parent.field_separator, "")  # enlever txt identique au délim de champs
+
+        def func_dict(self) -> dict:
+            my_dict = {
+                "<class 'str'>": self._from_string,
+                "<class 'decimal.Decimal'>": self._from_decimal,
+                "<class 'bool'>": self._from_bool,
+                "<class 'datetime.datetime'>": self._from_datetime,
+                "<class 'NoneType'>": self._from_none,
+            }
+
+            return my_dict
+
+        def _from_string(self, value: str) -> str:
+            if value == " ":
+                value_txt = ""
+            else:
+                value_txt = value.replace(self.parent.field_separator, "")  # enlever txt identique au délim de champs
+
+            return value_txt
+
+        def _from_decimal(self, value) -> str:
+            if str(value)[0:3] == "0E-":
+                value_txt = ""
+            else:
+                value_txt = str(value).replace(".", self.parent.decimal_separator)
+
+            return value_txt
+
+        def _from_bool(self, value: bool) -> str:
+            if value == True:
+                value_txt = "Vrai"
+            else:
+                value_txt = "Faux"
+
+            return value_txt
+
+        def _from_datetime(self, value: datetime) -> str:
+            if str(value) == "1753-01-01 00:00:00":
+                value_txt = ""
+            elif value.strftime("%H:%M:%S") == "00:00:00":
+                value_txt = value.strftime(self.parent.date_txt_format)
+            else:
+                value_txt = value.strftime(self.parent.datetime_txt_format)
+
+            return value_txt
+
+        def _from_none(self, _) -> str:
+            return ""
+
+
+class _QueryExecute:
+    def __init__(self, parent: Query):
+        self.converter = _Convert()
+        self.parent = parent  # pour retourner des messages pour l'interface graphique
+
+        self.command = ""
+        self.extract_file = ""
+        self.sql_server_params = {
+            "server": "",
+            "host": config.SQL_SERVER["host"],
+            "user": config.SQL_SERVER["user"],
+            "password": config.SQL_SERVER["password"],
+            "database": config.SQL_SERVER["database"],
+            "timeout": 300,
+            "login_timeout": 60,
+            "charset": "UTF-8",
+            "as_dict": False,
+            "appname": None,
+            "port": "1433",
+        }
+
+        self.field_separator = config.FIELD_SEPARATOR
+        self.print_date_format = PRINT_DATE_FORMAT
+
+    def execute(self, extract_file):
+        self.parent.msg_list = []
+        self.extract_file = extract_file
+
+        if self.command == "" or self.extract_file == "":
+            return False
+
+        starting_date = self._time_log()
+        self._broadcast(self._time_log() + " - Connection à la base de données...")
+
+        with pymssql.connect(**self.sql_server_params) as conn:
+            with conn.cursor() as cursor:
+                self._broadcast(self._time_log() + " - Requête en cours d'execution...")
+                try:
+                    cursor.execute(self.command, "")
+                except pymssql._pymssql.ProgrammingError as err:
+                    error_code = err.args[0]
+                    error_msg = str(err.args[1])[2:-2]
+                    self._broadcast(self._time_log() + f" - Erreur {error_code} : {error_msg}")
+                    return False
+
+                self._broadcast(self._time_log() + " - Début récupération des lignes...")
+                rows_count = self._extract_to_file(cursor)
+
+                ending_date = self._time_log()
+                self._broadcast(
+                    str("=") * 50
+                    + "\nLigne(s) extraite(s) : "
+                    + "{:,}".format(rows_count).replace(",", " ")
+                    + f"\nDébut : {starting_date}\nFin : {ending_date}"
+                )
+                if rows_count > 0:
+                    self._broadcast(f"Fichier extrait : {self.extract_file}\n" + str("=") * 50)
+                else:
+                    self._broadcast(f"Fichier extrait : aucune ligne de récupérée, pas de fichier\n" + str("=") * 50)
+
+        return rows_count
+
+    def _extract_to_file(self, cursor):
+        if cursor is None:
+            return False
+
+        buffer_block_size = 50000  # nombre de lignes pour déclencher écriture dans fichier
+        buffer = []
+
+        line_header = self.field_separator.join(
+            [colname[0] for colname in cursor.description]
+        )  # ligne des entêtes de colonnes
+        buffer.append(line_header)  # stockage des entêtes de colonne dans le buffer
+
+        row_number = 0
+        for row_number, record in enumerate(cursor):  # parcours résultats
+            line_buffer = self._sql_record_to_text(record)
+            buffer.append(line_buffer)
+            if not row_number == 0 and (row_number + 1) % buffer_block_size == 0:  # écriture dans le fichier par blocs
+                block_start = row_number + 1 - buffer_block_size + 1
+                block_end = row_number + 1
+                self._broadcast(
+                    self._time_log()
+                    + " - Ecriture lignes "
+                    + "{:,}".format(block_start).replace(",", " ")
+                    + " à "
+                    + "{:,}".format(block_end).replace(",", " ")
+                    + "..."
+                )
+                self._file_write(buffer)
+                buffer.clear()
+
+        if len(buffer) > 1:  # si buffer pas vide (et pas que entête) alors écrire ce qui reste
+            self._broadcast(self._time_log() + f" - Ecriture des dernières lignes...")
+            self._file_write(buffer)
+            buffer.clear()
+
+        self._broadcast(self._time_log() + f" - Ecriture finie")
+        return row_number + 1
+
+    def _sql_record_to_text(self, record):
+        line_buffer = ""
+
+        for j in range(len(record)):  # récup champs et conversion valeur récupérée en texte pour export
+            value = record[j]
+            value_txt = self.converter.from_result(value)
+            line_buffer += value_txt
+            if not j == len(record) - 1:
+                line_buffer += self.field_separator
+
+        return line_buffer
+
+    def _broadcast(self, msg_to_display: str) -> None:
+        self.parent._broadcast(msg_to_display)
+
+    def _file_write(self, list_to_write: typing.List[str], encoding_format: str = "utf-8") -> None:  # Ecrire texte
+        filename = self.extract_file
+        with open(filename, mode="a", encoding=encoding_format) as f:
+            f.write("\n".join(list_to_write) + "\n")  # écriture du buffer
+
+    def _time_log(self):
+        return datetime.now().strftime(self.print_date_format)
+
+
+def get_queries(folder) -> typing.List[Query]:
+    queries: typing.List[Query] = []
+    for file in Path(folder).iterdir():
+        if file.is_file() and file.suffix == ".sql":
+            my_query = Query(file)
+            queries.append(my_query)
+
+    queries.sort(key=lambda k: k.name)
+
+    return queries
+
+
+if __name__ == "__main__":
+    APP_PATH = Path(utils.get_app_path())
+    sql_script = APP_PATH / config.QUERY_FOLDER / "ZIMMOCTR - Immos vs Cpta - V12.sql"
+
+    my_query = Query(sql_script)
+    my_query._update_cmd()
+    print(my_query.command)

@@ -1,0 +1,47 @@
+/* Infos requête
+Code : ZBISALU5
+Description : Synthèse fac Alusta -> TVA
+*/
+
+DECLARE
+@1 as date = ' ',	-- Date début|0|month_end(-2, 1)
+@2 as date = ' ',	-- Date fin|0|month_end(-1)
+@3 as nchar(5) = 'ZA002',	-- Société
+@4 as int = 1,	-- Filtre sur date création ? (2 pour oui et 1 pour non)
+@5 as date = ' ',	-- Création début (renseigner que si filtre sur date création)|1
+@6 as date = ' '	-- Création fin (renseigner que si filtre sur date création)|1
+;
+
+SELECT
+	HAE.CPY_0,
+	coalesce(PIH.PIVTYP_0, HAE.TYP_0, ' '),
+	BPR.BPRNUM_0,
+	BPR.BPRNAM_0,
+	coalesce(PIH.VAC_0, BPS.VACBPR_0, ' '),
+	BPR.CRY_0,
+	HAE.REF_0,
+	HAE.ACCDAT_0,
+	DAE.ACC_0,
+	sum(DAE.AMTLED_0*DAE.SNS_0),
+	PIH.NUM_0,
+	PIH.YNUMSCAN_0
+FROM
+	x3v12prod.PROSOL2.GACCENTRY HAE
+	LEFT OUTER JOIN x3v12prod.PROSOL2.GACCENTRYD DAE ON DAE.TYP_0 = HAE.TYP_0 AND DAE.NUM_0 = HAE.NUM_0 AND DAE.LEDTYP_0 = 1
+	LEFT OUTER JOIN (	SELECT DISTINCT TYP_0, NUM_0, LEDTYP_0, MAX(BPR_0) as BPR_0
+						FROM x3v12prod.PROSOL2.GACCENTRYD
+						WHERE LEDTYP_0 = 1 AND NUM_0 IN (SELECT NUM_0 FROM x3v12prod.PROSOL2.GACCENTRYD WHERE LEDTYP_0 = 1 AND (ACC_0 LIKE '4010%' OR ACC_0 LIKE '607%'))
+						GROUP BY TYP_0, NUM_0, LEDTYP_0
+					) as DAE_BPR ON DAE_BPR.TYP_0 = HAE.TYP_0 AND DAE_BPR.NUM_0 = HAE.NUM_0
+	LEFT OUTER JOIN x3v12prod.PROSOL2.PINVOICE PIH ON PIH.NUM_0 = HAE.REF_0
+	LEFT OUTER JOIN x3v12prod.PROSOL2.BPSUPPLIER BPS ON DAE_BPR.BPR_0 = BPS.BPSNUM_0
+	LEFT OUTER JOIN x3v12prod.PROSOL2.BPARTNER BPR ON BPS.BPSNUM_0 = BPR.BPRNUM_0
+WHERE
+	HAE.TYP_0 in ('FAF', 'AVF', 'ODI', 'ODG')
+	AND HAE.ACCDAT_0 >= @1 AND HAE.ACCDAT_0 <= @2
+	AND HAE.CPY_0 = @3
+	AND (@4 = 1 OR (HAE.CREDAT_0>=@5 AND HAE.CREDAT_0<=@6))
+GROUP BY
+	HAE.CPY_0, PIH.PIVTYP_0, HAE.TYP_0, BPR.BPRNUM_0, BPR.BPRNAM_0, PIH.VAC_0, BPS.VACBPR_0, BPR.CRY_0, HAE.REF_0, HAE.ACCDAT_0, DAE.ACC_0, PIH.NUM_0, PIH.YNUMSCAN_0
+ORDER BY
+	HAE.CPY_0, BPR.BPRNUM_0, HAE.REF_0

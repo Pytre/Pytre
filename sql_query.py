@@ -86,7 +86,7 @@ class Query:
 
         self.command = ""
 
-    def update_values(self, key: str = None) -> None:
+    def update_values(self, key: str = None) -> bool:
         """
         If key is none then update all key
         """
@@ -94,6 +94,8 @@ class Query:
 
         for key in my_list:
             self.params[key].update_value_cmd()
+            
+        return True
 
     def values_ok(self, key: str = None) -> bool:
         my_list = [key] if not key is None else self.params.keys()

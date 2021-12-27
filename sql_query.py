@@ -152,12 +152,12 @@ class _Param:
     def __init__(self, sql_declare: str):
         self.converter = _Convert()  # objet pour gérer les conversions des string en valeurs et l'inverse
         self.sql_declare = sql_declare
-        self.reset_param()
+        self.set_default()
 
-    def reset_param(self) -> None:
+    def set_default(self) -> None:
         self.var_name = re.search(r"^@[\d\w#_\$@]+", self.sql_declare)[0]
         self.type_name = re.search(r"^[^(=]+as\s+([^(\s=]+)", self.sql_declare, re.IGNORECASE)[1].lower()
-        self.type_args = self._init_type_args()
+        self.type_args = self._get_type_args()
         self.display_value = re.search(r"^[^=]*=\s*('.*?'|[^,\s]*)", self.sql_declare)[1].replace("'", "").strip()
 
         # infos additionnelles
@@ -166,20 +166,20 @@ class _Param:
         self.value_cmd = ""
         self.value_is_ok = False
 
-        self._init_other_infos()
+        self._infos_from_comment()
 
         # conversion valeur affichage défaut pour vérifier si bien ok
         self.display_value = self.converter.to_display(self.type_name, self.display_value)
 
-    def _init_type_args(self) -> list:
+    def _get_type_args(self) -> list:
         str_type_args = re.search(r"^[^(=]+\(([^)]+)\)", self.sql_declare)
         str_type_args = str_type_args[1].lower().split(",") if str_type_args else []
         return [arg.strip() for arg in str_type_args]
 
-    def _init_other_infos(self) -> None:
-        other_infos = re.search(r"--\s*(.*$)", self.sql_declare)
-        if other_infos:
-            infos = other_infos[1].split("|")
+    def _infos_from_comment(self) -> None:
+        comment_infos = re.search(r"--\s*(.*$)", self.sql_declare)
+        if comment_infos:
+            infos = comment_infos[1].split("|")
 
             self.description = infos[0] if len(infos) > 0 else ""
 
@@ -187,9 +187,9 @@ class _Param:
                 self.is_optional = True if infos[1] == "1" else False
 
             if len(infos) > 2:
-                self.display_value = self._init_dynamic_value(infos[2])
+                self.display_value = self._value_calc_func(infos[2])
 
-    def _init_dynamic_value(self, str_value: str) -> str:
+    def _value_calc_func(self, str_value: str) -> str:
         def fiscal_year(last_month: int, month_offset: int = 0, days_offset: int = 0) -> str:
             last_month = int(last_month)
             month_offset = int(month_offset)
@@ -214,15 +214,15 @@ class _Param:
 
             return datetime.strftime(my_date, self.converter.date_val_format)
 
-        my_dict = {"fiscal_year": fiscal_year, "month_end": month_end}
+        func_dict = {"fiscal_year": fiscal_year, "month_end": month_end}
 
         match_func = re.search(r"^[^\(]*", str_value)
-        my_func = match_func.group(0).lower() if match_func else None
+        func = match_func.group(0).lower() if match_func else None
 
         args_func = re.search(r"(?<=\()[^\)]*", str_value)
         my_args = args_func.group(0).lower().split(",") if args_func else None
 
-        return my_dict.get(my_func)(*my_args) if my_func in my_dict else str_value
+        return func_dict.get(func)(*my_args) if func in func_dict else str_value
 
     def update_value_cmd(self) -> None:
         self.value_is_ok = False

@@ -18,8 +18,8 @@ class App(tk.Tk):
         self.user = sql_user.User()
 
         self.queries: typing.List[sql_query.Query] = sql_query.get_queries(APP_PATH / settings.QUERY_FOLDER)
-        self.current_query: sql_query.Query = self.queries[0]
-        self.params_widgets = {}
+        self.query: sql_query.Query = self.queries[0]
+        self.params_widgets: typing.Dict[str, ttk.Widget] = {}
 
         self.setup_ui()
         self.setup_events_binds()
@@ -110,33 +110,33 @@ class App(tk.Tk):
         self.right_frame.grid(row=0, column=1, padx=0, pady=0, sticky="nswe")
 
         self.setup_ui_right_panned()
-        self.setup_ui_parameters_frame()
+        self.setup_ui_params_frame()
         self.setup_ui_output_and_btn_frame()
 
         self.right_frame.rowconfigure(0, weight=1)
         self.right_frame.columnconfigure(0, weight=1)
 
-        self.right_panned.add(self.parameters_frame, weight=1)
+        self.right_panned.add(self.params_frame, weight=1)
         self.right_panned.add(self.output_and_btn_frame, weight=0)
 
     def setup_ui_right_panned(self):
         self.right_panned = ttk.PanedWindow(self.right_frame, orient="vertical")
         self.right_panned.grid(row=0, column=0, padx=0, pady=0, sticky="nswe")
 
-    def setup_ui_parameters_frame(self):
+    def setup_ui_params_frame(self):
         style = ttk.Style()
         self.style_label_txt_name = "Bold.TLabelFrame.Label"
         style.configure(self.style_label_txt_name, font=("TkDefaultFont", 10, "bold"))  # style texte pour label frame
 
-        self.parameters_frame_label = ttk.Label(text="Saisie des paramètres", style=self.style_label_txt_name)
-        self.parameters_frame = ttk.LabelFrame(
+        self.params_frame_label = ttk.Label(text="Saisie des paramètres", style=self.style_label_txt_name)
+        self.params_frame = ttk.LabelFrame(
             self.right_panned,
-            labelwidget=self.parameters_frame_label,
+            labelwidget=self.params_frame_label,
             padding=0,
             borderwidth=2,
         )
 
-        self.parameters_frame.grid(row=0, column=0, padx=0, pady=0, sticky="nswe")
+        self.params_frame.grid(row=0, column=0, padx=0, pady=0, sticky="nswe")
 
     def setup_ui_output_and_btn_frame(self):
         self.output_and_btn_frame = ttk.Frame(self.right_panned, padding=1, borderwidth=2)
@@ -185,13 +185,11 @@ class App(tk.Tk):
         self.btn_frame = ttk.Frame(self.output_and_btn_frame, padding=1, borderwidth=2)
         self.btn_frame.grid(row=1, column=0, padx=0, pady=0, sticky="nswe")
 
-        self.parameters_btn_execute = ttk.Button(
-            self.btn_frame, text="Executer", state="disable", command=self.execute_query
-        )
-        self.parameters_btn_quit = ttk.Button(self.btn_frame, text="Quitter", command=self.app_exit)
+        self.btn_execute = ttk.Button(self.btn_frame, text="Executer", state="disable", command=self.execute_query)
+        self.btn_quit = ttk.Button(self.btn_frame, text="Quitter", command=self.app_exit)
 
-        self.parameters_btn_execute.grid(row=0, column=1, padx=2, pady=0, sticky="nswe")
-        self.parameters_btn_quit.grid(row=0, column=2, padx=0, pady=0, sticky="nswe")
+        self.btn_execute.grid(row=0, column=1, padx=2, pady=0, sticky="nswe")
+        self.btn_quit.grid(row=0, column=2, padx=0, pady=0, sticky="nswe")
 
         # paramètrage des poids des lignes et colonnes
         self.btn_frame.rowconfigure(0, weight=1)
@@ -216,66 +214,73 @@ class App(tk.Tk):
     # ------------------------------------------------------------------------------------------
     # Gestion de l'interface pour la frame de saisie des paramètres
     # ------------------------------------------------------------------------------------------
-    def parameters_frame_reset(self):
+    def params_frame_reset(self):
         for param_key in self.params_widgets:
             for widget_key in self.params_widgets[param_key]:
                 self.params_widgets[param_key][widget_key].destroy()
 
         self.params_widgets = {}
 
-    def parameters_frame_update(self, params: typing.Dict[str, sql_query._Param] = None):
-        self.parameters_frame_reset()
-        if not params is None and not params == {}:
-            for i, key in enumerate(params):
-                my_widgets = {}
+    def params_frame_update(self, params: typing.Dict[str, sql_query._Param] = None):
+        self.params_frame_reset()
 
-                my_widgets["label"] = ttk.Label(
-                    self.parameters_frame,
-                    text=params[key].description + " : ",
-                    justify=tk.LEFT,
-                )
-                my_widgets["entry"] = ttk.Entry(self.parameters_frame)
-                my_widgets["entry"].insert("end", params[key].display_value)
-                my_widgets["check"] = ttk.Label(
-                    self.parameters_frame,
-                    text="",
-                    width=3,
-                    relief="groove",
-                    justify=tk.LEFT,
-                    background="red",
-                )
-
-                my_widgets["label"].grid(row=i, column=0, padx=2, pady=2, sticky="nswe")
-                my_widgets["entry"].grid(row=i, column=1, padx=2, pady=2, sticky="nswe")
-                my_widgets["check"].grid(row=i, column=2, padx=2, pady=2, sticky="nswe")
-
-                my_widgets["entry"].bind("<FocusOut>", self.parameter_input)
-
-                self.params_widgets[key] = my_widgets
-
-            self.parameters_retrieve_user_input()  # pour mise à jour aussi des widgets pour les checks
-
-            # paramètrage des poids des lignes et colonnes
-            for row in range(self.parameters_frame.grid_size()[1]):
-                self.parameters_frame.rowconfigure(row, weight=0)
-            self.parameters_frame.columnconfigure(0, weight=0)
-            self.parameters_frame.columnconfigure(1, weight=1)
-            self.parameters_frame.columnconfigure(2, weight=0)
+        if params is None or params == {}:
+            self._no_param_frame_update()
         else:
+            self._with_param_frame_update(params)
+
+    def _with_param_frame_update(self, params: typing.Dict[str, sql_query._Param] = None):
+        for i, key in enumerate(params):
             my_widgets = {}
+
             my_widgets["label"] = ttk.Label(
-                self.parameters_frame,
-                text="Pas de paramètres à renseigner pour cette requête",
-                font=("TkDefaultFont", 0, "bold"),
-                wraplength=350,
-                justify=tk.CENTER,
+                self.params_frame,
+                text=params[key].description + " : ",
+                justify=tk.LEFT,
             )
-            my_widgets["label"].grid(row=0, column=0, columnspan=2, sticky="ns")
+            my_widgets["entry"] = ttk.Entry(self.params_frame)
+            my_widgets["entry"].insert("end", params[key].display_value)
+            my_widgets["check"] = ttk.Label(
+                self.params_frame,
+                text="",
+                width=3,
+                relief="groove",
+                justify=tk.LEFT,
+                background="red",
+            )
 
-            self.params_widgets["no_param"] = my_widgets
+            my_widgets["label"].grid(row=i, column=0, padx=2, pady=2, sticky="nswe")
+            my_widgets["entry"].grid(row=i, column=1, padx=2, pady=2, sticky="nswe")
+            my_widgets["check"].grid(row=i, column=2, padx=2, pady=2, sticky="nswe")
 
-            self.parameters_frame.rowconfigure(0, weight=1)
-            self.parameters_frame.columnconfigure(0, weight=1)
+            my_widgets["entry"].bind("<FocusOut>", self.param_input)
+
+            self.params_widgets[key] = my_widgets
+
+        self.params_get_user_input()  # pour mise à jour aussi des widgets pour les checks
+
+        # paramètrage des poids des lignes et colonnes
+        for row in range(self.params_frame.grid_size()[1]):
+            self.params_frame.rowconfigure(row, weight=0)
+        self.params_frame.columnconfigure(0, weight=0)
+        self.params_frame.columnconfigure(1, weight=1)
+        self.params_frame.columnconfigure(2, weight=0)
+
+    def _no_param_frame_update(self):
+        my_widgets = {}
+        my_widgets["label"] = ttk.Label(
+            self.params_frame,
+            text="Pas de paramètres à renseigner pour cette requête",
+            font=("TkDefaultFont", 0, "bold"),
+            wraplength=350,
+            justify=tk.CENTER,
+        )
+        my_widgets["label"].grid(row=0, column=0, columnspan=2, sticky="ns")
+
+        self.params_widgets["no_param"] = my_widgets
+
+        self.params_frame.rowconfigure(0, weight=1)
+        self.params_frame.columnconfigure(0, weight=1)
 
     # ------------------------------------------------------------------------------------------
     # Définition des évènements générer par les traitements
@@ -298,7 +303,7 @@ class App(tk.Tk):
         self.logging_thread.start()
 
         self.lock_ui()
-        self.current_query.execute_cmd()
+        self.query.execute_cmd()
         self.execute_thread_running = False
 
         while self.logging_thread_running:  # attendre l'écriture de tous les messages
@@ -307,7 +312,7 @@ class App(tk.Tk):
         self.unlock_ui()
 
     def lock_ui(self):
-        self.parameters_btn_execute["state"] = "disable"
+        self.btn_execute["state"] = "disable"
         self.queries_btn_filter["state"] = "disable"
         self.queries_entry_filter["state"] = "disable"
         self.queries_tree["selectmode"] = "none"
@@ -316,7 +321,7 @@ class App(tk.Tk):
                 widget_entry["state"] = "disable"
 
     def unlock_ui(self):
-        self.parameters_btn_execute["state"] = "enable"
+        self.btn_execute["state"] = "enable"
         self.queries_btn_filter["state"] = "enable"
         self.queries_entry_filter["state"] = "enable"
         self.queries_tree["selectmode"] = "browse"
@@ -332,9 +337,9 @@ class App(tk.Tk):
         update_speed = 1
 
         my_counter = 0
-        while self.execute_thread_running or len(self.current_query.msg_list) > my_counter:
+        while self.execute_thread_running or len(self.query.msg_list) > my_counter:
             time.sleep(update_speed)
-            my_msg_list = self.current_query.msg_list
+            my_msg_list = self.query.msg_list
 
             if len(my_msg_list) > my_counter:
                 msg_to_print = "\n" + "\n".join(my_msg_list[my_counter:])
@@ -349,34 +354,34 @@ class App(tk.Tk):
     # Traitements
     # ------------------------------------------------------------------------------------------
     def execute_query(self):
-        if self.current_query is None:
+        if self.query is None:
             messagebox.showwarning("Warning", "Aucune requête de sélectionnée !")
             return False
 
         self.output_message("")
-        if self.parameters_retrieve_user_input():
+        if self.params_get_user_input():
             self.output_message("")
             self.execute_thread = Thread(target=self.start_execute_thread, daemon=True)  # thread execution requete
             self.execute_thread.start()
         else:
             self.output_message("Impossible d'executer, tant que des paramètres ne sont pas valides :\n", "1.0", "1.0")
 
-    def parameters_retrieve_user_input(self):
+    def params_get_user_input(self):
         for key in self.params_widgets:
-            widget_entry = self.params_widgets[key].get("entry", None)
-            widget_check = self.params_widgets[key].get("check", None)
+            w_entry_var = self.params_widgets[key].get("entry", None)
+            w_check = self.params_widgets[key].get("check", None)
 
-            if not widget_entry is None:
-                self.current_query.params[key].display_value = widget_entry.get()
+            if not w_entry_var is None:
+                self.query.params[key].display_value = w_entry_var.get()
                 try:
-                    self.current_query.update_values(key)
-                    widget_check["background"] = "green"
+                    self.query.update_values(key)
+                    w_check["background"] = "green"
                 except ValueError as err:
-                    widget_check["background"] = "red"
-                    msg = "    - " + self.current_query.params[key].description + " : " + str(err) + "\n"
+                    w_check["background"] = "red"
+                    msg = "    - " + self.query.params[key].description + " : " + str(err) + "\n"
                     self.output_message(msg, "end")
 
-        return self.current_query.values_ok()
+        return self.query.values_ok()
 
     def app_exit(self, event: Event = None):
         self.quit()
@@ -388,8 +393,8 @@ class App(tk.Tk):
         for item in self.queries_tree.get_children():
             self.queries_tree.delete(item)
 
-        self.parameters_frame_reset()
-        self.current_query = None
+        self.params_frame_reset()
+        self.query = None
         self.output_message("")
 
         for item in self.queries:
@@ -407,18 +412,18 @@ class App(tk.Tk):
         self.output_message("")
 
         if selected_values == "":
-            self.parameters_btn_execute["state"] = "disable"
-            self.parameters_frame_label["text"] = "Saisie des paramètres"
+            self.btn_execute["state"] = "disable"
+            self.params_frame_label["text"] = "Saisie des paramètres"
         else:
-            self.parameters_btn_execute["state"] = "enable"
-            self.parameters_frame_label["text"] = "Saisie des paramètres " + selected_values[0]
+            self.btn_execute["state"] = "enable"
+            self.params_frame_label["text"] = "Saisie des paramètres " + selected_values[0]
             for query in self.queries:
                 if selected_iid == str(id(query)):
-                    self.current_query = query
-                    self.parameters_frame_update(self.current_query.params)
+                    self.query = query
+                    self.params_frame_update(self.query.params)
                     break
 
-    def parameter_input(self, event: Event):
+    def param_input(self, event: Event):
         widget = event.widget
         key = ""
 
@@ -430,9 +435,16 @@ class App(tk.Tk):
             if not key == "":
                 break
 
-        self.current_query.params[key].display_value = widget.get()
+        self._param_input(key)
+
+    def param_input_tracevar(self, name, *_):
+        self._param_input(name)
+
+    def _param_input(self, key: str):
+        self.query.params[key].display_value = self.params_widgets[key]["entry_var"].get()
+
         try:
-            color = "green" if self.current_query.update_values(key) else "red"
+            color = "green" if self.query.update_values(key) else "red"
         except ValueError as e:
             color = "red"
             self.output_message(e)

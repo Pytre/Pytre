@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_all
 
-datas = [('Requetes SQL\\*.sql', 'Requetes SQL')]
+datas = [('Requetes SQL\\*.sql', 'Requetes SQL'), ('settings.json', '.')]
 binaries = []
 hiddenimports = ['pymssql', 'uuid']
 

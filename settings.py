@@ -1,6 +1,11 @@
 import json
+from pathlib import Path
 
-config_file = "settings.json"
+import utils
+
+APP_PATH = Path(utils.get_app_path())
+
+config_file = APP_PATH / "settings.json"
 with open(config_file, mode="r", encoding="utf-8") as f:
     config: dict = json.load(f)
 

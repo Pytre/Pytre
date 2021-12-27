@@ -8,7 +8,7 @@ from pathlib import Path
 import settings, utils, sql_user, sql_query
 
 APP_PATH = Path(utils.get_app_path())  # dossier ou les fichiers de l'executable sont extraits
-PYTRE_VERSION = "0.803"
+PYTRE_VERSION = "0.850"
 
 
 class App(tk.Tk):
@@ -378,7 +378,7 @@ class App(tk.Tk):
 
         return self.current_query.values_ok()
 
-    def app_exit(self, event: Event=None):
+    def app_exit(self, event: Event = None):
         self.quit()
 
     # ------------------------------------------------------------------------------------------

@@ -1,7 +1,7 @@
 import os, getpass
 
 
-from config import USERS
+from settings import USERS
 
 
 class User:

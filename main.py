@@ -1,6 +1,6 @@
 from pathlib import Path
 
-import config, utils, sql_user, sql_query
+import settings, utils, sql_user, sql_query
 
 CWD = Path.cwd()  # dossier du script ou de l'executable
 APP_PATH = Path(utils.get_app_path())  # dossier ou les fichiers de l'executable sont extraits
@@ -10,7 +10,7 @@ PRINT_DATE_FORMAT = "%d/%m/%Y at %H:%M:%S"  # pour le format de la date à écri
 def main():
     print(str("=") * 100 + f"\nListe des requêtes disponibles\n" + str("=") * 100 + "\n")
 
-    sql_file = choose_file(APP_PATH / config.QUERY_FOLDER)  # selection de la requête à utiliser
+    sql_file = choose_file(APP_PATH / settings.QUERY_FOLDER)  # selection de la requête à utiliser
     if sql_file == "":
         return False  # stopper si aucun fichier sélectionné
     else:

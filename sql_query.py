@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pymssql
 
-import config, utils, sql_user
+import settings, utils, sql_user
 
 CWD = Path.cwd()  # dossier du script ou de l'executable
 PRINT_DATE_FORMAT = "%d/%m/%Y à %H:%M:%S"  # pour le format de la date pour les logs / output
@@ -94,7 +94,7 @@ class Query:
 
         for key in my_list:
             self.params[key].update_value_cmd()
-            
+
         return True
 
     def values_ok(self, key: str = None) -> bool:
@@ -238,14 +238,14 @@ class _Param:
 
 class _Convert:
     def __init__(self):
-        self.date_txt_format = config.DATE_FORMAT  # pour affichage utilisateurs ou extraction
+        self.date_txt_format = settings.DATE_FORMAT  # pour affichage utilisateurs ou extraction
         self.date_val_format = "%Y-%m-%d"  # pour commande SQL
 
         self.datetime_txt_format = "%d/%m/%Y %H:%M:%S"  # pour affichage utilisateurs ou extraction
         self.datetime_val_format = "%Y-%m-%d %H:%M:%S"  # pour commande SQL
 
-        self.field_separator = config.FIELD_SEPARATOR
-        self.decimal_separator = config.DECIMAL_SEPARATOR
+        self.field_separator = settings.FIELD_SEPARATOR
+        self.decimal_separator = settings.DECIMAL_SEPARATOR
 
         self.cls_to_cmd = self._ToCmd(self)
         self.cls_to_display = self._ToDisplay(self)
@@ -464,10 +464,10 @@ class _QueryExecute:
         self.extract_file = ""
         self.sql_server_params = {
             "server": "",
-            "host": config.SQL_SERVER["host"],
-            "user": config.SQL_SERVER["user"],
-            "password": config.SQL_SERVER["password"],
-            "database": config.SQL_SERVER["database"],
+            "host": settings.SQL_SERVER["host"],
+            "user": settings.SQL_SERVER["user"],
+            "password": settings.SQL_SERVER["password"],
+            "database": settings.SQL_SERVER["database"],
             "timeout": 300,
             "login_timeout": 60,
             "charset": "UTF-8",
@@ -476,7 +476,7 @@ class _QueryExecute:
             "port": "1433",
         }
 
-        self.field_separator = config.FIELD_SEPARATOR
+        self.field_separator = settings.FIELD_SEPARATOR
         self.print_date_format = PRINT_DATE_FORMAT
 
     def execute(self, extract_file):
@@ -593,7 +593,7 @@ def get_queries(folder) -> typing.List[Query]:
 
 if __name__ == "__main__":
     APP_PATH = Path(utils.get_app_path())
-    sql_script = APP_PATH / config.QUERY_FOLDER / "ZIMMOCTR - Immos vs Cpta - V12.sql"
+    sql_script = APP_PATH / settings.QUERY_FOLDER / "ZIMMOCTR - Immos vs Cpta - V12.sql"
 
     my_query = Query(sql_script)
     my_query._update_cmd()

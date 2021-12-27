@@ -5,7 +5,7 @@ from tkinter import Event, ttk, messagebox
 from threading import Thread
 from pathlib import Path
 
-import config, utils, sql_user, sql_query
+import settings, utils, sql_user, sql_query
 
 APP_PATH = Path(utils.get_app_path())  # dossier ou les fichiers de l'executable sont extraits
 PYTRE_VERSION = "0.803"
@@ -17,7 +17,7 @@ class App(tk.Tk):
 
         self.user = sql_user.User()
 
-        self.queries: typing.List[sql_query.Query] = sql_query.get_queries(APP_PATH / config.QUERY_FOLDER)
+        self.queries: typing.List[sql_query.Query] = sql_query.get_queries(APP_PATH / settings.QUERY_FOLDER)
         self.current_query: sql_query.Query = self.queries[0]
         self.params_widgets = {}
 

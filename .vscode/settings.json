@@ -4,5 +4,7 @@
         "--line-length",
         "119"
     ],
-    "editor.formatOnSave": true
+    "[python]": {
+        "editor.formatOnSave": true
+      }
 }

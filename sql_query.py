@@ -1,4 +1,3 @@
-from os import name
 import re
 import typing
 from datetime import datetime

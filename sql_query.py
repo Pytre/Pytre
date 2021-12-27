@@ -165,10 +165,13 @@ class _Param:
         self.is_optional = False
         self.value_cmd = ""
         self.value_is_ok = False
+        self.ui_control = ""
+        self.authorized_values = {}
 
         self._infos_from_comment()
 
         # conversion valeur affichage défaut pour vérifier si bien ok
+        self.display_value = self.authorized_values.get(self.display_value, self.display_value)
         self.display_value = self.converter.to_display(self.type_name, self.display_value)
 
     def _get_type_args(self) -> list:
@@ -181,15 +184,23 @@ class _Param:
         if comment_infos:
             infos = comment_infos[1].split("|")
 
-            self.description = infos[0] if len(infos) > 0 else ""
+            try:
+                self.description = infos[0]
 
-            if len(infos) > 1:
-                self.is_optional = True if infos[1] == "1" else False
+                self.is_optional = True if infos[1] == "0" else False
 
-            if len(infos) > 2:
-                self.display_value = self._value_calc_func(infos[2])
+                if not infos[2].strip() == "":
+                    self.display_value = self._calc_func(infos[2])
 
-    def _value_calc_func(self, str_value: str) -> str:
+                if not infos[3].strip() == "":
+                    my_list = re.search(r"(^[^(]*)\((.+)\)", infos[3])
+                    self.ui_control = my_list.group(1).lower()
+                    self._authorized_values(my_list.group(2).split(","))
+
+            except IndexError:
+                pass
+
+    def _calc_func(self, str_value: str) -> str:
         def fiscal_year(last_month: int, month_offset: int = 0, days_offset: int = 0) -> str:
             last_month = int(last_month)
             month_offset = int(month_offset)
@@ -222,15 +233,32 @@ class _Param:
         args_func = re.search(r"(?<=\()[^\)]*", str_value)
         my_args = args_func.group(0).lower().split(",") if args_func else None
 
-        return func_dict.get(func)(*my_args) if func in func_dict else str_value
+        return func_dict.get(func)(*my_args) if func in func_dict else self.display_value
+
+    def _authorized_values(self, values: typing.List[str]):
+        for item in values:
+            key_val = item.split(":")
+            key = key_val[0].strip()
+            val = key_val[1].strip() if len(key_val) > 1 else key
+            self.authorized_values[key] = val
 
     def update_value_cmd(self) -> None:
         self.value_is_ok = False
+        val_to_test = self.display_value
 
-        if not self.display_value and not self.is_optional:
+        if not self.authorized_values == {}:
+            if not val_to_test in self.authorized_values.values():
+                raise ValueError(
+                    f"{val_to_test}, ne fait pas partie des valeurs autorisées : "
+                    + ", ".join(self.authorized_values.values())
+                )
+            else:
+                val_to_test = [k for k, v in self.authorized_values.items() if v == val_to_test][0]
+
+        if not val_to_test and not self.is_optional:
             raise ValueError("paramètre obligatoire")
         else:
-            self.value_cmd = self.converter.to_cmd(self.type_name, self.display_value, self.type_args)
+            self.value_cmd = self.converter.to_cmd(self.type_name, val_to_test, self.type_args)
 
         self.value_is_ok = True
 
@@ -592,7 +620,7 @@ def get_queries(folder) -> typing.List[Query]:
 
 if __name__ == "__main__":
     APP_PATH = Path(utils.get_app_path())
-    sql_script = APP_PATH / settings.QUERY_FOLDER / "ZIMMOCTR - Immos vs Cpta - V12.sql"
+    sql_script = APP_PATH / settings.QUERY_FOLDER / "test.sql"
 
     my_query = Query(sql_script)
     my_query._update_cmd()

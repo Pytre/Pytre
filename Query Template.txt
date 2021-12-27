@@ -16,7 +16,7 @@ Pour les paramètres créer un bloc DECLARE :
 -------------------------------------------
 
 DECLARE
-@1 as TYPE_VARIABLE = 'VAL²_DEFAUT'	-- LIBELLE|OPTIONNEL|CALC_VAL_DEFAUT
+@1 as TYPE_VARIABLE = 'VAL_DEFAUT'	-- LIBELLE|OBLIGATOIRE|VAL_FORMULE|UI_CTRL(LISTE_VAL_AUTORISEES)
 ;
 
 TYPE_VARIABLE => int, date, nvarchar(), etc...
@@ -25,11 +25,13 @@ VAL_DEFAUT => valeur par défaut qui sera aussi utilisé dans Pytre
 Les infos supplémentaire de la variable sont récupérées dans le commentaire  de la ligne. Attention utiliser "--" pour le commentaire
 => le commentaire sera splitté en utilisant des pipes ("|") en tant que séparateur :
 LIBELLE : libellé du paramètre
-OPTIONNEL : 0 ou 1 pour indiquer si paramètre optionnel (1) ou non => si pas d'info alors pas optionnel
-CALC_VAL_DEFAUT : valeur calculée à utiliser plutot que la VALEUR_DEFAUT (cf.fonctions possible ci-dessous)
+OBLIGATOIRE : 0 pour indiquer que le paramètre n'est pas obligatoire => sinon obligatoire quand 1 ou pas d'info
+VAL_FORMULE : valeur calculée à utiliser plutot que la VALEUR_DEFAUT (cf.fonctions possible ci-dessous)
+UI_CTRL(LISTE_VAL_AUTORISEES) : UI_CTRL pour le type de contrôle à afficher et LISTE_VAL_AUTORISEES pour val possibles (cf.explications ci-dessous)
 
-Fonctions possibles pour valeur défaut calculée d'un paramètre :
 
+VAL_FORMULE : fonctions possibles pour valeur calculée d'un paramètre
+---------------------------------------------------------------------
 - month_end(months_offset, days_offset) : décalage mois en fonction de la valeur months_offset
 		positionnement en fin de mois
 		puis déclage optionnel mois en fonction de months_offset
@@ -39,6 +41,22 @@ Fonctions possibles pour valeur défaut calculée d'un paramètre :
 		positionnement à la fin de l'exercice fiscal en cours (en fonction du mois de clôture)
 		puis décalage optionnel mois
 		puis déclage optionnel jour
+
+UI_CTRL(LISTE_VAL_AUTORISEES) : précisions sur le fonctionnement
+----------------------------------------------------------------
+- UI_CTRL : si non précisé alors zone classique d'entrée ; pour l'instant aucun autre type n'est possible !
+
+- LISTE_VAL_AUTORISEES : 
+		les valeurs autorisées doivent être spécifiées sous la forme suivante : CMD_VAL_: DISPLAY_VAL
+		CMD_VAL : est la valeur attendue par la commande SQL
+		DISPLAY_VAL : est le texte à afficher, si pas préciser alors idem que CMD_VAL
+		plusieurs valeurs peuvent être précisé en les séparant d'une virgule
+
+- Exemples :
+		(1: Social, 4: Situation)
+		(FRA, SITU)
+		(1: oui, 0: non)
+		(2: oui, 1: non)
 
 ========================================================================================================================================
 Pour faciliter conversion d'une requête dans X3 en requête permettant d'interroger en direct la base SQL

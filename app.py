@@ -8,7 +8,7 @@ from pathlib import Path
 import settings, utils, sql_user, sql_query
 
 APP_PATH = Path(utils.get_app_path())  # dossier ou les fichiers de l'executable sont extraits
-PYTRE_VERSION = "0.850"
+PYTRE_VERSION = "0.900"
 
 
 class App(tk.Tk):

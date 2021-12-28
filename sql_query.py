@@ -108,7 +108,7 @@ class Query:
     def execute_cmd(self) -> bool:
         self.last_extracted_file = ""
 
-        if self._update_cmd():
+        if self.update_cmd():
             self.query_execute.command = self.command
             extract_file = CWD / (
                 f"{self.name}_Extract_{USER.x3_login.upper()}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
@@ -126,7 +126,7 @@ class Query:
             self._broadcast(err_msg)
             return False
 
-    def _update_cmd(self) -> bool:
+    def update_cmd(self) -> bool:
         self.update_values()
 
         if self.values_ok():
@@ -631,5 +631,5 @@ if __name__ == "__main__":
     sql_script = APP_PATH / settings.QUERY_FOLDER / "test.sql"
 
     my_query = Query(sql_script)
-    my_query._update_cmd()
+    my_query.update_cmd()
     # print(my_query.command)

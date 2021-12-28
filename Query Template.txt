@@ -55,20 +55,24 @@ UI_CTRL(LISTE_VAL_AUTORISEES) : précisions sur le fonctionnement
 		si non précisé alors zone classique d'entrée (ENTRY) ; les types possibles sont :
 			ENTRY : champs d'entrée standard (valeur défaut)
 			LIST : liste déroulante ne permettant que la sélection d'une valeur dans LISTE_VAL_AUTORISEES
-			CHECK : case à cocher ; LISTE_VAL_AUTORISEES doit préciser la valeur associé quand coché (true) et décoché (false)
+			CHECK : case à cocher ; attention cf.précision sur LISTE_VAL_AUTORISEES plus bas
 
 - LISTE_VAL_AUTORISEES : 
-		les valeurs autorisées doivent être spécifiées sous la forme suivante : CMD_VAL_: DISPLAY_VAL
+		les valeurs autorisées doivent être spécifiées sous la forme suivante : "CMD_VAL: DISPLAY_VAL"
 			CMD_VAL : est la valeur attendue par la commande SQL
 			DISPLAY_VAL : est le texte à afficher, si pas préciser alors idem que CMD_VAL
 		plusieurs valeurs peuvent être précisé en les séparant d'une virgule
-		attention si le paramètre peut ne pas être renseigné alors il faut ajouter une valeur nulle pour qu'elle puisse être sélectionnée
+
+		attention :
+			si le paramètre est optionnel alors il faut ajouter une valeur nulle pour qu'elle puisse être sélectionnée
+			CHECK doit indiquer en 1er la valeur associée si coché et en 2ième si décoché => DISPLAY_VAL est tjrs ignoré pour ce ctrl
 
 - Exemples :
 		ENTRY(FRA, SITU)
+		ENTRY(FRA: Social, SITU: Situation)
 		LIST(1: Social, 4: Situation)
-		CHECK(1: true, 0: false)
-		CHECK(2: true, 1: false)
+		CHECK(1, 0)    => pour ce ctrl arg 1 est la valeur quand coché (ici 1), arg 2 quand décoché (ici 0)
+		CHECK(2, 1)    => pour ce ctrl arg 1 est la valeur quand coché (ici 2), arg 2 quand décoché (ici 1)
 
 ========================================================================================================================================
 Pour faciliter conversion d'une requête dans X3 en requête permettant d'interroger en direct la base SQL

@@ -202,7 +202,7 @@ class _Param:
                     self.display_value = self._calc_func(info_func, info_args)
                 elif info_func in ui_funcs or info_func == "":
                     self.ui_control = info_func
-                    self._authorized_values(info_args.split(","))
+                    self._authorized_values(info_func, info_args)
 
     def _calc_func(self, func: str, func_args: str) -> str:
         def fiscal_year(last_month: int, month_offset: int = 0, days_offset: int = 0) -> str:
@@ -236,11 +236,18 @@ class _Param:
 
         return my_str
 
-    def _authorized_values(self, values: typing.List[str]):
-        for item in values:
-            key_val = item.split(":")
+    def _authorized_values(self, ctrl: str, args: str) -> None:
+        my_args = args.split(",")
+
+        for i, arg in enumerate(my_args):
+            key_val = arg.split(":")
             key = key_val[0].strip()
-            val = key_val[1].strip() if len(key_val) > 1 else key
+
+            if not ctrl == "check":
+                val = key_val[1].strip() if len(key_val) > 1 else key
+            else:
+                val = "on" if i == 0 else "off"
+
             self.authorized_values[key] = val
 
     def update_value_cmd(self) -> None:

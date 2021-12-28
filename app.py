@@ -240,8 +240,8 @@ class App(tk.Tk):
 
             if params[key].ui_control == "check":
                 my_widgets["entry"] = ttk.Checkbutton(self.params_frame, variable=my_widgets["entry_var"])
-                my_widgets["entry"]["onvalue"] = "true"
-                my_widgets["entry"]["offvalue"] = "false"
+                my_widgets["entry"]["onvalue"] = "on"
+                my_widgets["entry"]["offvalue"] = "off"
                 my_widgets["entry_var"].trace_add("write", self.param_input_trace)
 
             elif params[key].ui_control == "list":

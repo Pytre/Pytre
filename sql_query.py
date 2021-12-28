@@ -180,27 +180,31 @@ class _Param:
         return [arg.strip() for arg in str_type_args]
 
     def _infos_from_comment(self) -> None:
-        comment_infos = re.search(r"--\s*(.*$)", self.sql_declare)
-        if comment_infos:
-            infos = comment_infos[1].split("|")
+        comment = re.search(r"--\s*(.*?)(?=\||$)\|?(.*$)", self.sql_declare)
+        if comment[1]:
+            self.description = comment[1]
 
-            try:
-                self.description = infos[0]
+        if comment[2]:
+            infos = re.sub(r"(\(.*?\))|(,)", r"\1^^^", comment[2])
+            infos = [m.strip() for m in re.split(r"\^{3,6}", infos) if m.strip()]
 
-                self.is_optional = True if infos[1] == "0" else False
+            ui_funcs = ("entry", "list", "check")
+            calc_funcs = ("fiscal_year", "month_end")
 
-                if not infos[2].strip() == "":
-                    self.display_value = self._calc_func(infos[2])
+            for info in infos:
+                info_lst = re.search(r"^(.*?)(?=\(|$)\(?(.*?)\)?$", info)
+                info_func = info_lst[1].lower()
+                info_args = info_lst[2]
 
-                if not infos[3].strip() == "":
-                    my_list = re.search(r"(^[^(]*)\((.+)\)", infos[3])
-                    self.ui_control = my_list.group(1).lower()
-                    self._authorized_values(my_list.group(2).split(","))
+                if info_func == "optional":
+                    self.is_optional = True
+                elif info_func in calc_funcs:  # self.func_dict:
+                    self.display_value = self._calc_func(info_func, info_args)
+                elif info_func in ui_funcs or info_func == "":
+                    self.ui_control = info_func
+                    self._authorized_values(info_args.split(","))
 
-            except IndexError:
-                pass
-
-    def _calc_func(self, str_value: str) -> str:
+    def _calc_func(self, func: str, func_args: str) -> str:
         def fiscal_year(last_month: int, month_offset: int = 0, days_offset: int = 0) -> str:
             last_month = int(last_month)
             month_offset = int(month_offset)
@@ -225,15 +229,12 @@ class _Param:
 
             return datetime.strftime(my_date, self.converter.date_val_format)
 
-        func_dict = {"fiscal_year": fiscal_year, "month_end": month_end}
+        self.func_dict = {"fiscal_year": fiscal_year, "month_end": month_end}
 
-        match_func = re.search(r"^[^\(]*", str_value)
-        func = match_func.group(0).lower() if match_func else None
+        my_args = func_args.lower().split(",") if func_args else None
+        my_str = self.func_dict.get(func)(*my_args) if func in self.func_dict else self.display_value
 
-        args_func = re.search(r"(?<=\()[^\)]*", str_value)
-        my_args = args_func.group(0).lower().split(",") if args_func else None
-
-        return func_dict.get(func)(*my_args) if func in func_dict else self.display_value
+        return my_str
 
     def _authorized_values(self, values: typing.List[str]):
         for item in values:
@@ -624,4 +625,4 @@ if __name__ == "__main__":
 
     my_query = Query(sql_script)
     my_query._update_cmd()
-    print(my_query.command)
+    # print(my_query.command)

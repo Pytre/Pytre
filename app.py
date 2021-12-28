@@ -217,7 +217,8 @@ class App(tk.Tk):
     def params_frame_reset(self):
         for param_key in self.params_widgets:
             for widget_key in self.params_widgets[param_key]:
-                self.params_widgets[param_key][widget_key].destroy()
+                if not widget_key == "entry_var":
+                    self.params_widgets[param_key][widget_key].destroy()
 
         self.params_widgets = {}
 
@@ -233,27 +234,33 @@ class App(tk.Tk):
         for i, key in enumerate(params):
             my_widgets = {}
 
-            my_widgets["label"] = ttk.Label(
-                self.params_frame,
-                text=params[key].description + " : ",
-                justify=tk.LEFT,
-            )
-            my_widgets["entry"] = ttk.Entry(self.params_frame)
-            my_widgets["entry"].insert("end", params[key].display_value)
+            my_widgets["label"] = ttk.Label(self.params_frame, text=params[key].description + " : ", justify=tk.LEFT)
+
+            my_widgets["entry_var"] = tk.StringVar(name=key, value=params[key].display_value)
+
+            if params[key].ui_control == "check":
+                my_widgets["entry"] = ttk.Checkbutton(self.params_frame, variable=my_widgets["entry_var"])
+                my_widgets["entry"]["onvalue"] = "true"
+                my_widgets["entry"]["offvalue"] = "false"
+                my_widgets["entry_var"].trace_add("write", self.param_input_trace)
+
+            elif params[key].ui_control == "list":
+                my_widgets["entry"] = ttk.Combobox(self.params_frame, textvariable=my_widgets["entry_var"])
+                my_widgets["entry"]["state"] = "readonly"
+                my_widgets["entry"]["values"] = tuple(params[key].authorized_values.values())
+                my_widgets["entry_var"].trace_add("write", self.param_input_trace)
+
+            else:
+                my_widgets["entry"] = ttk.Entry(self.params_frame, textvariable=my_widgets["entry_var"])
+                my_widgets["entry"].bind("<FocusOut>", self.param_input_event)
+
             my_widgets["check"] = ttk.Label(
-                self.params_frame,
-                text="",
-                width=3,
-                relief="groove",
-                justify=tk.LEFT,
-                background="red",
+                self.params_frame, text="", width=3, relief="groove", justify=tk.LEFT, background="red"
             )
 
             my_widgets["label"].grid(row=i, column=0, padx=2, pady=2, sticky="nswe")
             my_widgets["entry"].grid(row=i, column=1, padx=2, pady=2, sticky="nswe")
             my_widgets["check"].grid(row=i, column=2, padx=2, pady=2, sticky="nswe")
-
-            my_widgets["entry"].bind("<FocusOut>", self.param_input)
 
             self.params_widgets[key] = my_widgets
 
@@ -262,12 +269,14 @@ class App(tk.Tk):
         # paramètrage des poids des lignes et colonnes
         for row in range(self.params_frame.grid_size()[1]):
             self.params_frame.rowconfigure(row, weight=0)
+
         self.params_frame.columnconfigure(0, weight=0)
         self.params_frame.columnconfigure(1, weight=1)
         self.params_frame.columnconfigure(2, weight=0)
 
     def _no_param_frame_update(self):
         my_widgets = {}
+
         my_widgets["label"] = ttk.Label(
             self.params_frame,
             text="Pas de paramètres à renseigner pour cette requête",
@@ -368,7 +377,7 @@ class App(tk.Tk):
 
     def params_get_user_input(self):
         for key in self.params_widgets:
-            w_entry_var = self.params_widgets[key].get("entry", None)
+            w_entry_var = self.params_widgets[key].get("entry_var", None)
             w_check = self.params_widgets[key].get("check", None)
 
             if not w_entry_var is None:
@@ -385,6 +394,15 @@ class App(tk.Tk):
 
     def app_exit(self, event: Event = None):
         self.quit()
+
+    def output_message(self, txt_message: str, start_pos: str = "1.0", end_pos: str = "end"):
+        try:  # erreur à l'initialisation quand le ctrl n'existe pas encore
+            self.output_textbox["state"] = "normal"
+            self.output_textbox.replace(start_pos, end_pos, str(txt_message))
+            self.output_textbox.see(tk.END)
+            self.output_textbox["state"] = "disabled"
+        except AttributeError:
+            pass
 
     # ------------------------------------------------------------------------------------------
     # Mise à jour de l'interface et des variables d'instances quand évènement
@@ -423,10 +441,10 @@ class App(tk.Tk):
                     self.params_frame_update(self.query.params)
                     break
 
-    def param_input(self, event: Event):
+    def param_input_event(self, event: Event):
         widget = event.widget
-        key = ""
 
+        key = ""
         for param_key in self.params_widgets:
             for widget_key in self.params_widgets[param_key]:
                 if widget is self.params_widgets[param_key][widget_key]:
@@ -437,7 +455,7 @@ class App(tk.Tk):
 
         self._param_input(key)
 
-    def param_input_tracevar(self, name, *_):
+    def param_input_trace(self, name, *_):
         self._param_input(name)
 
     def _param_input(self, key: str):
@@ -450,15 +468,6 @@ class App(tk.Tk):
             self.output_message(e)
 
         self.params_widgets[key]["check"]["background"] = color
-
-    def output_message(self, txt_message: str, start_pos: str = "1.0", end_pos: str = "end"):
-        try:  # erreur à l'initialisation quand le ctrl n'existe pas encore
-            self.output_textbox["state"] = "normal"
-            self.output_textbox.replace(start_pos, end_pos, str(txt_message))
-            self.output_textbox.see(tk.END)
-            self.output_textbox["state"] = "disabled"
-        except AttributeError:
-            pass
 
 
 if __name__ == "__main__":

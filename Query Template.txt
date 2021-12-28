@@ -44,7 +44,11 @@ VAL_FORMULE : fonctions possibles pour valeur calculée d'un paramètre
 
 UI_CTRL(LISTE_VAL_AUTORISEES) : précisions sur le fonctionnement
 ----------------------------------------------------------------
-- UI_CTRL : si non précisé alors zone classique d'entrée ; pour l'instant aucun autre type n'est possible !
+- UI_CTRL :
+		si non précisé alors zone classique d'entrée (ENTRY) ; les types possibles sont :
+			ENTRY : champs d'entrée standard (valeur défaut)
+			LIST : liste déroulante ne permettant que la sélection d'une valeur dans LISTE_VAL_AUTORISEES
+			CHECK : case à cocher ; LISTE_VAL_AUTORISEES doit préciser la valeur associé quand coché (true) et décoché (false)
 
 - LISTE_VAL_AUTORISEES : 
 		les valeurs autorisées doivent être spécifiées sous la forme suivante : CMD_VAL_: DISPLAY_VAL
@@ -53,10 +57,10 @@ UI_CTRL(LISTE_VAL_AUTORISEES) : précisions sur le fonctionnement
 		plusieurs valeurs peuvent être précisé en les séparant d'une virgule
 
 - Exemples :
-		(1: Social, 4: Situation)
-		(FRA, SITU)
-		(1: oui, 0: non)
-		(2: oui, 1: non)
+		ENTRY(FRA, SITU)
+		LIST(1: Social, 4: Situation)
+		CHECK(1: true, 0: false)
+		CHECK(2: true, 1: false)
 
 ========================================================================================================================================
 Pour faciliter conversion d'une requête dans X3 en requête permettant d'interroger en direct la base SQL

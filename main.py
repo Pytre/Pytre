@@ -56,9 +56,10 @@ def sql_cmd_from_file(query: sql_query.Query):
 def _sql_cmd_get_user_input(query: sql_query.Query):
     params = query.params
     for key in params:
+        default_value = params[key].display_value
         while True:
-            if not params[key].display_value == "":  # texte saisie si paramètre par défaut existe ou pas
-                input_txt = f"{params[key].description} (param.par défaut est {params[key].display_value}) : "
+            if not default_value == "":  # texte saisie si paramètre par défaut existe ou pas
+                input_txt = f"{params[key].description} (param.par défaut est {default_value}) : "
             else:
                 input_txt = f"{params[key].description} : "
 

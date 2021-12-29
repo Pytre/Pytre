@@ -440,7 +440,7 @@ class App(tk.Tk):
         else:
             self.btn_execute["state"] = "enable"
             self.btn_debug["state"] = "enable"
-            self.params_frame_label["text"] = "Saisie des paramètres " + selected_values[0]
+            self.params_frame_label["text"] = "Saisie des paramètres pour " + selected_values[0]
             for query in self.queries:
                 if selected_iid == str(id(query)):
                     self.query = query
@@ -495,17 +495,18 @@ class _DebugWindow:
         else:
             text_to_display = "Erreur commande vide !\nnb : des valeurs sont probablements invalides"
 
-        self_textbox = tk.Text(self.root, width=120, height=40, wrap="none")
-        self_textbox.insert("end", text_to_display)
+        self.textbox = tk.Text(self.root, width=160, height=50, wrap="none")
+        self.textbox.insert("end", text_to_display)
+        self.textbox["state"] = "disabled"
 
-        self_scroll_x = ttk.Scrollbar(self.root, orient="horizontal", command=self_textbox.xview)
-        self_scroll_y = ttk.Scrollbar(self.root, orient="vertical", command=self_textbox.yview)
-        self_textbox["xscrollcommand"] = self_scroll_x.set
-        self_textbox["yscrollcommand"] = self_scroll_y.set
+        self.scroll_x = ttk.Scrollbar(self.root, orient="horizontal", command=self.textbox.xview)
+        self.scroll_y = ttk.Scrollbar(self.root, orient="vertical", command=self.textbox.yview)
+        self.textbox["xscrollcommand"] = self.scroll_x.set
+        self.textbox["yscrollcommand"] = self.scroll_y.set
 
-        self_textbox.grid(column=0, row=0, sticky="nswe")
-        self_scroll_x.grid(column=0, row=1, sticky="we")
-        self_scroll_y.grid(column=1, row=0, sticky="ns")
+        self.textbox.grid(column=0, row=0, sticky="nswe")
+        self.scroll_x.grid(column=0, row=1, sticky="we")
+        self.scroll_y.grid(column=1, row=0, sticky="ns")
 
         self.root.grid_columnconfigure(0, weight=1)
         self.root.grid_rowconfigure(0, weight=1)

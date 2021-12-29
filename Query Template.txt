@@ -65,7 +65,7 @@ UI_CTRL(LISTE_VAL_AUTORISEES) : précisions sur le fonctionnement
 
 		attention :
 			si le paramètre est optionnel alors il faut ajouter une valeur nulle pour qu'elle puisse être sélectionnée
-			CHECK doit indiquer en 1er la valeur associée si coché et en 2ième si décoché => DISPLAY_VAL est tjrs ignoré pour ce ctrl
+			CHECK doit indiquer en 1er la valeur si coché et en 2ième si décoché => DISPLAY_VAL est tjrs ignoré pour ce ctrl
 
 - Exemples :
 		ENTRY(FRA, SITU)

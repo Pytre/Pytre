@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pymssql
 
-import settings, utils, sql_user
+import settings, sql_user
 
 CWD = Path.cwd()  # dossier du script ou de l'executable
 PRINT_DATE_FORMAT = "%d/%m/%Y à %H:%M:%S"  # pour le format de la date pour les logs / output
@@ -118,7 +118,8 @@ class Query:
                 self.last_extracted_file = extract_file
                 return result
             except pymssql._pymssql.OperationalError as err:
-                err_msg = str("=") * 50 + "\n" + str(err)
+                err_msg = str("=") * 50 + "\n"
+                err_msg += err.args[0][1].decode("utf-8") + "\n"
                 self._broadcast(err_msg)
                 return False
         else:
@@ -627,7 +628,7 @@ def get_queries(folder) -> typing.List[Query]:
 
 
 if __name__ == "__main__":
-    APP_PATH = Path(utils.get_app_path())
+    APP_PATH = settings.APP_PATH
     sql_script = APP_PATH / settings.QUERY_FOLDER / "test.sql"
 
     my_query = Query(sql_script)

@@ -1,6 +1,5 @@
 import os, getpass
 
-
 from settings import USERS
 
 

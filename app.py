@@ -3,11 +3,10 @@ import typing
 import tkinter as tk
 from tkinter import Event, ttk, messagebox
 from threading import Thread
-from pathlib import Path
 
-import settings, utils, sql_user, sql_query
+import settings, sql_user, sql_query
 
-APP_PATH = Path(utils.get_app_path())  # dossier ou les fichiers de l'executable sont extraits
+APP_PATH = settings.APP_PATH  # dossier ou les fichiers de l'executable sont extraits
 PYTRE_VERSION = "0.901"
 
 
@@ -24,9 +23,9 @@ class App(tk.Tk):
         self.setup_ui()
         self.setup_events_binds()
 
-        self.manage_user_authorization()
+        self.manage_user_access()
 
-    def manage_user_authorization(self):
+    def manage_user_access(self):
         if not self.user.is_authorized:
             messagebox.showerror(
                 "Erreur",
@@ -34,7 +33,7 @@ class App(tk.Tk):
             )
             self.destroy()
         else:
-            self.output_message(str(self.user.msg_login))
+            self.output_msg(str(self.user.msg_login))
 
     # ------------------------------------------------------------------------------------------
     # Création de l'interface
@@ -74,7 +73,7 @@ class App(tk.Tk):
         self.queries_btn_filter = ttk.Button(
             self.left_frame,
             text="Appliquer",
-            command=lambda: self.queries_list_filter(self.queries_entry_filter.get()),
+            command=lambda: self.queries_filter(self.queries_entry_filter.get()),
         )
 
         self.queries_tree = ttk.Treeview(self.left_frame, columns=(1, 2), show="headings", selectmode="browse")
@@ -82,7 +81,7 @@ class App(tk.Tk):
         self.queries_tree.heading(2, text="Description")
         self.queries_tree.column(1, width=20)
         self.queries_tree.column(2, width=100)
-        self.queries_list_filter()
+        self.queries_filter()
 
         self.queries_tree_scrollbar_y = ttk.Scrollbar(
             self.left_frame, orient="vertical", command=self.queries_tree.yview
@@ -110,8 +109,8 @@ class App(tk.Tk):
         self.right_frame.grid(row=0, column=1, padx=0, pady=0, sticky="nswe")
 
         self.setup_ui_right_panned()
-        self.setup_ui_params_frame()
-        self.setup_ui_output_and_btn_frame()
+        self.setup_ui_params()
+        self.setup_ui_output_and_btn()
 
         self.right_frame.rowconfigure(0, weight=1)
         self.right_frame.columnconfigure(0, weight=1)
@@ -123,7 +122,7 @@ class App(tk.Tk):
         self.right_panned = ttk.PanedWindow(self.right_frame, orient="vertical")
         self.right_panned.grid(row=0, column=0, padx=0, pady=0, sticky="nswe")
 
-    def setup_ui_params_frame(self):
+    def setup_ui_params(self):
         style = ttk.Style()
         self.style_label_txt_name = "Bold.TLabelFrame.Label"
         style.configure(self.style_label_txt_name, font=("TkDefaultFont", 10, "bold"))  # style texte pour label frame
@@ -138,18 +137,18 @@ class App(tk.Tk):
 
         self.params_frame.grid(row=0, column=0, padx=0, pady=0, sticky="nswe")
 
-    def setup_ui_output_and_btn_frame(self):
+    def setup_ui_output_and_btn(self):
         self.output_and_btn_frame = ttk.Frame(self.right_panned, padding=1, borderwidth=2)
         self.output_and_btn_frame.grid(row=1, column=0, padx=0, pady=0, sticky="nswe")
 
-        self.setup_ui_output_frame()
-        self.setup_ui_btn_frame()
+        self.setup_ui_output()
+        self.setup_ui_btn()
 
         self.output_and_btn_frame.rowconfigure(0, weight=1)
         self.output_and_btn_frame.rowconfigure(1, weight=0)
         self.output_and_btn_frame.columnconfigure(0, weight=1)
 
-    def setup_ui_output_frame(self):
+    def setup_ui_output(self):
         self.output_frame_label = ttk.Label(text="Messages / Fenêtre d'execution", style=self.style_label_txt_name)
         self.output_frame = ttk.LabelFrame(
             self.output_and_btn_frame,
@@ -181,7 +180,7 @@ class App(tk.Tk):
         self.output_frame.columnconfigure(0, weight=1)
         self.output_frame.columnconfigure(1, weight=0)
 
-    def setup_ui_btn_frame(self):
+    def setup_ui_btn(self):
         self.btn_frame = ttk.Frame(self.output_and_btn_frame, padding=1, borderwidth=2)
         self.btn_frame.grid(row=1, column=0, padx=0, pady=0, sticky="nswe")
 
@@ -214,7 +213,7 @@ class App(tk.Tk):
     # ------------------------------------------------------------------------------------------
     # Gestion de l'interface pour la frame de saisie des paramètres
     # ------------------------------------------------------------------------------------------
-    def params_frame_reset(self):
+    def ui_params_reset(self):
         for param_key in self.params_widgets:
             for widget_key in self.params_widgets[param_key]:
                 if not widget_key == "entry_var":
@@ -222,15 +221,15 @@ class App(tk.Tk):
 
         self.params_widgets = {}
 
-    def params_frame_update(self, params: typing.Dict[str, sql_query._Param] = None):
-        self.params_frame_reset()
+    def ui_params_update(self, params: typing.Dict[str, sql_query._Param] = None):
+        self.ui_params_reset()
 
         if params is None or params == {}:
-            self._no_param_frame_update()
+            self._ui_no_param_update()
         else:
-            self._with_param_frame_update(params)
+            self._ui_with_params_update(params)
 
-    def _with_param_frame_update(self, params: typing.Dict[str, sql_query._Param] = None):
+    def _ui_with_params_update(self, params: typing.Dict[str, sql_query._Param] = None):
         for i, key in enumerate(params):
             my_widgets = {}
 
@@ -264,7 +263,7 @@ class App(tk.Tk):
 
             self.params_widgets[key] = my_widgets
 
-        self.params_get_user_input()  # pour mise à jour aussi des widgets pour les checks
+        self.params_get_input()  # pour mise à jour aussi des widgets pour les checks
 
         # paramètrage des poids des lignes et colonnes
         for row in range(self.params_frame.grid_size()[1]):
@@ -274,7 +273,7 @@ class App(tk.Tk):
         self.params_frame.columnconfigure(1, weight=1)
         self.params_frame.columnconfigure(2, weight=0)
 
-    def _no_param_frame_update(self):
+    def _ui_no_param_update(self):
         my_widgets = {}
 
         my_widgets["label"] = ttk.Label(
@@ -297,7 +296,7 @@ class App(tk.Tk):
     def setup_events_binds(self):
         self.queries_entry_filter.bind(
             "<Return>",
-            lambda e: self.queries_list_filter(self.queries_entry_filter.get()),
+            lambda e: self.queries_filter(self.queries_entry_filter.get()),
         )
         self.queries_tree.bind("<<TreeviewSelect>>", self.tree_selection_change)
         self.protocol("WM_DELETE_WINDOW", self.app_exit)  # arrêter le programme quand fermeture de la fenêtre
@@ -354,7 +353,7 @@ class App(tk.Tk):
                 msg_to_print = "\n" + "\n".join(my_msg_list[my_counter:])
                 if my_counter == 0:
                     msg_to_print = msg_to_print[1:]
-                self.output_message(msg_to_print, "end")
+                self.output_msg(msg_to_print, "end")
                 my_counter = len(my_msg_list)
 
         self.logging_thread_running = False
@@ -367,15 +366,15 @@ class App(tk.Tk):
             messagebox.showwarning("Warning", "Aucune requête de sélectionnée !")
             return False
 
-        self.output_message("")
-        if self.params_get_user_input():
-            self.output_message("")
+        self.output_msg("")
+        if self.params_get_input():
+            self.output_msg("")
             self.execute_thread = Thread(target=self.start_execute_thread, daemon=True)  # thread execution requete
             self.execute_thread.start()
         else:
-            self.output_message("Impossible d'executer, tant que des paramètres ne sont pas valides :\n", "1.0", "1.0")
+            self.output_msg("Impossible d'executer, tant que des paramètres ne sont pas valides :\n", "1.0", "1.0")
 
-    def params_get_user_input(self):
+    def params_get_input(self):
         for key in self.params_widgets:
             w_entry_var = self.params_widgets[key].get("entry_var", None)
             w_check = self.params_widgets[key].get("check", None)
@@ -388,14 +387,14 @@ class App(tk.Tk):
                 except ValueError as err:
                     w_check["background"] = "red"
                     msg = "    - " + self.query.params[key].description + " : " + str(err) + "\n"
-                    self.output_message(msg, "end")
+                    self.output_msg(msg, "end")
 
         return self.query.values_ok()
 
     def app_exit(self, event: Event = None):
         self.quit()
 
-    def output_message(self, txt_message: str, start_pos: str = "1.0", end_pos: str = "end"):
+    def output_msg(self, txt_message: str, start_pos: str = "1.0", end_pos: str = "end"):
         try:  # erreur à l'initialisation quand le ctrl n'existe pas encore
             self.output_textbox["state"] = "normal"
             self.output_textbox.replace(start_pos, end_pos, str(txt_message))
@@ -407,13 +406,13 @@ class App(tk.Tk):
     # ------------------------------------------------------------------------------------------
     # Mise à jour de l'interface et des variables d'instances quand évènement
     # ------------------------------------------------------------------------------------------
-    def queries_list_filter(self, text_filter: str = ""):
+    def queries_filter(self, text_filter: str = ""):
         for item in self.queries_tree.get_children():
             self.queries_tree.delete(item)
 
-        self.params_frame_reset()
+        self.ui_params_reset()
         self.query = None
-        self.output_message("")
+        self.output_msg("")
 
         for item in self.queries:
             if (
@@ -427,7 +426,7 @@ class App(tk.Tk):
         selected_iid = self.queries_tree.focus()
         selected_values = self.queries_tree.item(selected_iid, "values")
 
-        self.output_message("")
+        self.output_msg("")
 
         if selected_values == "":
             self.btn_execute["state"] = "disable"
@@ -438,7 +437,7 @@ class App(tk.Tk):
             for query in self.queries:
                 if selected_iid == str(id(query)):
                     self.query = query
-                    self.params_frame_update(self.query.params)
+                    self.ui_params_update(self.query.params)
                     break
 
     def param_input_event(self, event: Event):
@@ -465,7 +464,7 @@ class App(tk.Tk):
             color = "green" if self.query.update_values(key) else "red"
         except ValueError as e:
             color = "red"
-            self.output_message(e)
+            self.output_msg(e)
 
         self.params_widgets[key]["check"]["background"] = color
 

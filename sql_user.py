@@ -4,29 +4,39 @@ from settings import USERS
 
 
 class User:
-    def __init__(self):
-        self.name = self._get_user_name()
-        self.domain = self._get_user_domain()
-        self._domain_and_name = str(self.domain) + "\\" + self.name
+    def __init__(self, name="", domain=""):
+        self.name = name if name else self._get_user_name()
+        self.domain = domain if domain else self._get_user_domain()
 
-        self.is_authorized = self._is_user_authorized()
+        if self.domain:
+            self._domain_and_name = f"{self.domain}\\{self.name}"
+        else:
+            self._domain_and_name = self.name
 
-        self.x3_login = self.get_parameter("x3_login")
-        self.msg_login = self.get_parameter("msg_login")
+        self.dict = USERS.get(self._domain_and_name, dict())
+        self.is_authorized = True if self.dict else False
+
+        self.x3_login = self.dict.get("x3_login", "")
+        self.msg_login = self.dict.get("msg_login", "")
+        self.superuser = self.dict.get("superuser", False)
 
     def _get_user_name(self) -> str:
         return getpass.getuser()
 
     def _get_user_domain(self) -> str:
-        return os.environ.get("userdnsdomain")
-
-    def _is_user_authorized(self) -> bool:
-        return True if self._domain_and_name in USERS else False
-
-    def get_parameter(self, parameter: str) -> str:
-        return USERS.get(self._domain_and_name).get(parameter)
+        return os.environ.get("userdnsdomain") or ""
 
 
 if __name__ == "__main__":
-    my_user = User()
-    print(f"{my_user.name} for {my_user.domain}, checking authorization : " + str(my_user.is_authorized))
+    my_users = [User(), User("Inexistant"), User("ebrun", "PROSOL.PRI")]
+
+    for my_user in my_users:
+        print(str("=") * 50)
+
+        if my_user.domain:
+            print(f"{my_user.name} sur domaine {my_user.domain} :")
+        else:
+            print(f"{my_user.name} sur aucun domaine :")
+
+        print(f"- autorisation : {my_user.is_authorized}")
+        print(f"- superuser : {my_user.superuser}")

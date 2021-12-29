@@ -13,15 +13,15 @@
     "QUERY_FOLDER": "Requetes SQL",
 
     "USERS": {
-        "None\\Matth": {"x3_login": "mat", "msg_login": "Salut Matth !"},
-        "PROSOL.PRI\\mferrier": {"x3_login": "mat", "msg_login": "Salut Matth !"},
-        "PROSOL.PRI\\bdelord": {"x3_login": "", "msg_login": "Monkey Island Mode !"},
-        "PROSOL.PRI\\jguerit": {"x3_login": "", "msg_login": "Pouet pouet Mode !"},
-        "PROSOL.PRI\\ddietsch": {"x3_login": "", "msg_login": ""},
-        "PROSOL.PRI\\ccourtois": {"x3_login": "", "msg_login": "Hello Catoche !"},
-        "PROSOL.PRI\\obenjamin": {"x3_login": "", "msg_login": ""},
-        "PROSOL.PRI\\ebrun": {"x3_login": "", "msg_login": ""},
-        "PROSOL.PRI\\evidon": {"x3_login": "", "msg_login": ""},
-        "PROSOL.PRI\\fcottanceau": {"x3_login": "", "msg_login": ""}
+        "Matth": {"x3_login": "mat", "msg_login": "Salut Matth, à la maison !", "superuser": true},
+        "PROSOL.PRI\\mferrier": {"x3_login": "MAT", "msg_login": "Salut Matth !", "superuser": true},
+        "PROSOL.PRI\\bdelord": {"x3_login": "BENJ", "msg_login": "Monkey Island Mode !", "superuser": true},
+        "PROSOL.PRI\\jguerit": {"x3_login": "JORD", "msg_login": "Pouet pouet !", "superuser": true},
+        "PROSOL.PRI\\ddietsch": {"x3_login": "DDIET", "msg_login": ""},
+        "PROSOL.PRI\\ccourtois": {"x3_login": "CCOUR", "msg_login": "Hello Catoche !"},
+        "PROSOL.PRI\\obenjamin": {"x3_login": "ODILE", "msg_login": ""},
+        "PROSOL.PRI\\ebrun": {"x3_login": "EBRUN", "msg_login": ""},
+        "PROSOL.PRI\\evidon": {"x3_login": "EMMA", "msg_login": ""},
+        "PROSOL.PRI\\fcottanceau": {"x3_login": "FLORE", "msg_login": ""}
     }
 }

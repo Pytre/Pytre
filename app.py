@@ -27,13 +27,12 @@ class App(tk.Tk):
 
     def manage_user_access(self):
         if not self.user.is_authorized:
-            messagebox.showerror(
-                "Erreur",
-                "Désolé, vous n'êtes pas dans liste des utilisateurs autorisées !",
-            )
+            messagebox.showerror("Erreur", "Désolé, vous n'êtes pas dans liste des utilisateurs autorisées !")
             self.destroy()
         else:
             self.output_msg(str(self.user.msg_login))
+            if not self.user.superuser:
+                self.btn_debug.grid_forget()
 
     # ------------------------------------------------------------------------------------------
     # Création de l'interface
@@ -41,7 +40,7 @@ class App(tk.Tk):
     def setup_ui(self):
         self.title(f"Pytre X3 - Python Requeteur pour X3 - V.{PYTRE_VERSION}")
         icon_file = APP_PATH / "res" / "app.ico"
-        self.iconbitmap(icon_file)
+        self.iconbitmap(default=icon_file)
 
         self.minsize(width=800, height=650)
         self.resizable(True, True)
@@ -185,30 +184,32 @@ class App(tk.Tk):
         self.btn_frame.grid(row=1, column=0, padx=0, pady=0, sticky="nswe")
 
         self.btn_execute = ttk.Button(self.btn_frame, text="Executer", state="disable", command=self.execute_query)
+        self.btn_debug = ttk.Button(self.btn_frame, text="Debug", state="disable", command=self.debug)
         self.btn_quit = ttk.Button(self.btn_frame, text="Quitter", command=self.app_exit)
 
         self.btn_execute.grid(row=0, column=1, padx=2, pady=0, sticky="nswe")
-        self.btn_quit.grid(row=0, column=2, padx=0, pady=0, sticky="nswe")
+        self.btn_debug.grid(row=0, column=2, padx=2, pady=0, sticky="nswe")
+        self.btn_quit.grid(row=0, column=3, padx=0, pady=0, sticky="nswe")
 
         # paramètrage des poids des lignes et colonnes
         self.btn_frame.rowconfigure(0, weight=1)
         for column in range(self.btn_frame.grid_size()[0]):
-            if column == 0:
-                self.btn_frame.columnconfigure(column, weight=1)
-            else:
-                self.btn_frame.columnconfigure(column, weight=0)
+            my_weight = 1 if column == 0 else 0
+            self.btn_frame.columnconfigure(column, weight=my_weight)
 
-    def center_window(self):
-        self.update_idletasks()
+    def center_window(self, my_window=None):
+        my_window = self if not my_window else my_window
+
+        my_window.update_idletasks()
 
         screen_width = self.winfo_screenwidth()
         screen_height = self.winfo_screenheight()
-        app_size = tuple(int(_) for _ in self.geometry().split("+")[0].split("x"))
+        app_size = tuple(int(_) for _ in my_window.geometry().split("+")[0].split("x"))
 
         x = screen_width / 2 - app_size[0] / 2
         y = screen_height / 2 - app_size[1] / 2
 
-        self.geometry("+%d+%d" % (x, y))
+        my_window.geometry("+%d+%d" % (x, y))
 
     # ------------------------------------------------------------------------------------------
     # Gestion de l'interface pour la frame de saisie des paramètres
@@ -394,6 +395,10 @@ class App(tk.Tk):
     def app_exit(self, event: Event = None):
         self.quit()
 
+    def debug(self):
+        debug_win = _DebugWindow(self)
+        debug_win.focus_set()
+
     def output_msg(self, txt_message: str, start_pos: str = "1.0", end_pos: str = "end"):
         try:  # erreur à l'initialisation quand le ctrl n'existe pas encore
             self.output_textbox["state"] = "normal"
@@ -430,9 +435,11 @@ class App(tk.Tk):
 
         if selected_values == "":
             self.btn_execute["state"] = "disable"
+            self.btn_debug["state"] = "disable"
             self.params_frame_label["text"] = "Saisie des paramètres"
         else:
             self.btn_execute["state"] = "enable"
+            self.btn_debug["state"] = "enable"
             self.params_frame_label["text"] = "Saisie des paramètres " + selected_values[0]
             for query in self.queries:
                 if selected_iid == str(id(query)):
@@ -467,6 +474,50 @@ class App(tk.Tk):
             self.output_msg(e)
 
         self.params_widgets[key]["check"]["background"] = color
+
+
+class _DebugWindow:
+    def __init__(self, parent: App):
+        self.root = tk.Toplevel(parent)
+        self.time = time.localtime()
+
+        self.query = parent.query
+        self._query_update_cmd()
+
+        self._setup_ui()
+
+    def _setup_ui(self):
+        my_time = time.strftime("%H:%M:%S", self.time)
+        self.root.title(f"Debug Window - {self.query.name} - {self.query.description} ({my_time})")
+
+        if self.query.command:
+            text_to_display = self.query.command
+        else:
+            text_to_display = "Erreur commande vide !\nnb : des valeurs sont probablements invalides"
+
+        self_textbox = tk.Text(self.root, width=120, height=40, wrap="none")
+        self_textbox.insert("end", text_to_display)
+
+        self_scroll_x = ttk.Scrollbar(self.root, orient="horizontal", command=self_textbox.xview)
+        self_scroll_y = ttk.Scrollbar(self.root, orient="vertical", command=self_textbox.yview)
+        self_textbox["xscrollcommand"] = self_scroll_x.set
+        self_textbox["yscrollcommand"] = self_scroll_y.set
+
+        self_textbox.grid(column=0, row=0, sticky="nswe")
+        self_scroll_x.grid(column=0, row=1, sticky="we")
+        self_scroll_y.grid(column=1, row=0, sticky="ns")
+
+        self.root.grid_columnconfigure(0, weight=1)
+        self.root.grid_rowconfigure(0, weight=1)
+
+    def _query_update_cmd(self):
+        try:
+            self.query.update_cmd()
+        except ValueError:
+            pass
+
+    def focus_set(self):
+        self.root.focus_set()
 
 
 if __name__ == "__main__":

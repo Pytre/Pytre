@@ -128,8 +128,9 @@ class Query:
             return False
 
     def update_cmd(self) -> bool:
-        self.update_values()
+        self.command = ""
 
+        self.update_values()
         if self.values_ok():
             command = self.raw_command
             for key in self.params:
@@ -139,7 +140,6 @@ class Query:
 
             self.command = command
         else:
-            self.command = ""
             return False
 
         return True
@@ -253,6 +253,7 @@ class _Param:
 
     def update_value_cmd(self) -> None:
         self.value_is_ok = False
+        self.value_cmd = ""
         val_to_test = self.display_value
 
         if not self.authorized_values == {}:

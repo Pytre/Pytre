@@ -7,7 +7,7 @@ from threading import Thread
 import settings, sql_user, sql_query
 
 APP_PATH = settings.APP_PATH  # dossier ou les fichiers de l'executable sont extraits
-PYTRE_VERSION = "0.901"
+PYTRE_VERSION = "0.920"
 
 
 class App(tk.Tk):

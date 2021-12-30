@@ -504,17 +504,17 @@ class _QueryExecute:
         self.cmd_parameters = {}
         self.extract_file = ""
         self.sql_server_params = {
-            "server": "",
+            "server": settings.SQL_SERVER["server"],
             "host": settings.SQL_SERVER["host"],
             "user": settings.SQL_SERVER["user"],
             "password": settings.SQL_SERVER["password"],
             "database": settings.SQL_SERVER["database"],
-            "timeout": 300,
-            "login_timeout": 60,
+            "timeout": settings.SQL_SERVER["timeout"],
+            "login_timeout": settings.SQL_SERVER["login_timeout"],
             "charset": "UTF-8",
             "as_dict": False,
             "appname": None,
-            "port": "1433",
+            "port": settings.SQL_SERVER["port"],
         }
 
         self.field_separator = settings.FIELD_SEPARATOR

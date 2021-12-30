@@ -1,9 +1,13 @@
 {
     "SQL_SERVER": {
+        "server": "",
         "host": "SWTPX3BDD01\\DBX3V12",
         "database": "x3v12prod",
+        "port": "1433",
         "user": "PROSOL\\mferrier_a",
-        "password": "69GjVn!a"
+        "password": "69GjVn!a",
+        "timeout": 300,
+        "login_timeout": 60
     },
 
     "FIELD_SEPARATOR": ";",

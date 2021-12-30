@@ -381,13 +381,13 @@ class App(tk.Tk):
             w_check = self.params_widgets[key].get("check", None)
 
             if not w_entry_var is None:
-                self.query.params[key].display_value = w_entry_var.get()
+                self.query.params_obj[key].display_value = w_entry_var.get()
                 try:
                     self.query.update_values(key)
                     w_check["background"] = "green"
                 except ValueError as err:
                     w_check["background"] = "red"
-                    msg = "    - " + self.query.params[key].description + " : " + str(err) + "\n"
+                    msg = "    - " + self.query.params_obj[key].description + " : " + str(err) + "\n"
                     self.output_msg(msg, "end")
 
         return self.query.values_ok()
@@ -444,7 +444,7 @@ class App(tk.Tk):
             for query in self.queries:
                 if selected_iid == str(id(query)):
                     self.query = query
-                    self.ui_params_update(self.query.params)
+                    self.ui_params_update(self.query.params_obj)
                     break
 
     def param_input_event(self, event: Event):
@@ -465,7 +465,7 @@ class App(tk.Tk):
         self._param_input(name)
 
     def _param_input(self, key: str):
-        self.query.params[key].display_value = self.params_widgets[key]["entry_var"].get()
+        self.query.params_obj[key].display_value = self.params_widgets[key]["entry_var"].get()
 
         try:
             color = "green" if self.query.update_values(key) else "red"
@@ -481,24 +481,17 @@ class _DebugWindow:
         self.root = tk.Toplevel(parent)
         self.time = time.localtime()
 
-        self.query = parent.query
-        self._query_update_cmd()
+        self.query: sql_query.Query = parent.query
+        self._query_update_values()
 
         self._setup_ui()
+        self.txt_to_display()
 
     def _setup_ui(self):
         my_time = time.strftime("%H:%M:%S", self.time)
         self.root.title(f"Debug Window - {self.query.name} - {self.query.description} ({my_time})")
 
-        if self.query.command:
-            text_to_display = self.query.command
-        else:
-            text_to_display = "Erreur commande vide !\nnb : des valeurs sont probablements invalides"
-
-        self.textbox = tk.Text(self.root, width=160, height=50, wrap="none")
-        self.textbox.insert("end", text_to_display)
-        self.textbox["state"] = "disabled"
-
+        self.textbox = tk.Text(self.root, width=120, height=40, wrap="none", state="disabled")
         self.scroll_x = ttk.Scrollbar(self.root, orient="horizontal", command=self.textbox.xview)
         self.scroll_y = ttk.Scrollbar(self.root, orient="vertical", command=self.textbox.yview)
         self.textbox["xscrollcommand"] = self.scroll_x.set
@@ -511,11 +504,19 @@ class _DebugWindow:
         self.root.grid_columnconfigure(0, weight=1)
         self.root.grid_rowconfigure(0, weight=1)
 
-    def _query_update_cmd(self):
+    def _query_update_values(self):
         try:
-            self.query.update_cmd()
+            self.query.update_values()
         except ValueError:
             pass
+
+    def txt_to_display(self, text: str = ""):
+        if not text:
+            text = self.query.get_cmd_for_debug()
+
+        self.textbox["state"] = "normal"
+        self.textbox.replace("1.0", "end", text)
+        self.textbox["state"] = "disabled"
 
     def focus_set(self):
         self.root.focus_set()

@@ -18,18 +18,17 @@ class Query:
         self.query_execute = _QueryExecute(self)
 
         self.last_extracted_file = ""  # info du dernier fichier extrait
-        self.msg_list: typing.List[
-            str
-        ] = []  # liste de messages pour affichage à l'utilisateur (pour interface graphique)
+        self.msg_list: typing.List[str] = []  # liste de msg à l'utilisateur pour interface graphique
 
         self.filename = filename
         self.file_content = self._init_file_content(encoding_format)
 
-        self.raw_command = self._init_raw_command()
+        self.raw_cmd = self._init_raw_cmd()
+        self.cmd_template = self._init_template_cmd()
+        self.cmd_params = {}
 
         self.infos = self._init_infos()
-        self.params: typing.Dict[str, _Param] = self._init_params()
-        self.command = ""
+        self.params_obj: typing.Dict[str, _Param] = self._init_params()
         self.name = self.infos.get("code", self.filename.stem)
         self.description = self.infos.get("description", "")
 
@@ -72,47 +71,55 @@ class Query:
             if line[0:1] == "@":
                 my_param = _Param(line)
                 params[my_param.var_name] = my_param
+                self.cmd_params[my_param.var_name] = my_param.value_cmd
 
         return params
 
-    def _init_raw_command(self) -> str:
+    def _init_raw_cmd(self) -> str:
         regex_match = re.search(r"^DECLARE[^;]*;[\s]*(.*)", self.file_content, re.MULTILINE | re.DOTALL)
-        return regex_match.group(1) if not regex_match is None else self.file_content
+        raw_cmd = regex_match.group(1) if not regex_match is None else self.file_content
+        return raw_cmd
+
+    def _init_template_cmd(self) -> str:
+        cmd_template = re.sub(r"(?<![\d\w#_\$@])(@[\d\w#_\$@]+)", r"%(\1)s", self.raw_cmd)
+        return cmd_template
 
     def reset_values(self):
-        for p in self.params:
-            p.reset_param()
-
-        self.command = ""
+        for k, v in self.params_obj.items():
+            v.reset_param()
+            self.cmd_params[k] = ""
 
     def update_values(self, key: str = None) -> bool:
         """
         If key is none then update all key
         """
-        my_list = [key] if not key is None else self.params.keys()
+        my_list = [key] if not key is None else self.params_obj.keys()
 
         for key in my_list:
-            self.params[key].update_value_cmd()
+            self.cmd_params[key] = self.params_obj[key].update_value_cmd()
 
         return True
 
     def values_ok(self, key: str = None) -> bool:
-        my_list = [key] if not key is None else self.params.keys()
+        my_list = [key] if not key is None else self.params_obj.keys()
 
         for key in my_list:
-            if self.params[key].value_is_ok == False:
+            if self.params_obj[key].value_is_ok == False:
                 return False
 
         return True
 
     def execute_cmd(self) -> bool:
         self.last_extracted_file = ""
+        self.update_values()
 
-        if self.update_cmd():
-            self.query_execute.command = self.command
+        if self.values_ok():
+            self.query_execute.cmd_template = self.cmd_template
+            self.query_execute.cmd_parameters = self.cmd_params
             extract_file = CWD / (
                 f"{self.name}_Extract_{USER.x3_login.upper()}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
             )
+
             try:
                 result = self.query_execute.execute(extract_file)
                 self.last_extracted_file = extract_file
@@ -127,22 +134,17 @@ class Query:
             self._broadcast(err_msg)
             return False
 
-    def update_cmd(self) -> bool:
-        self.command = ""
+    def get_cmd_for_debug(self):
+        cmd_debug = self.cmd_template
+        for k, v in self.cmd_params.items():
+            if isinstance(v, str):
+                value = "'" + v.replace("'", "''") + "'"
+            else:
+                value = str(v)
 
-        self.update_values()
-        if self.values_ok():
-            command = self.raw_command
-            for key in self.params:
-                key_id = key
-                key_value = self.params[key].value_cmd
-                command = re.sub(rf"{key_id}((?=[^\d\w#_\$@])|$)", rf"{key_value}", command)
+            cmd_debug = re.sub(fr"%\({k}\)s", fr"{value}", cmd_debug)
 
-            self.command = command
-        else:
-            return False
-
-        return True
+        return cmd_debug
 
     def _broadcast(self, msg_to_broadcast: str) -> None:
         self.msg_list.append(msg_to_broadcast)
@@ -251,7 +253,7 @@ class _Param:
 
             self.authorized_values[key] = val
 
-    def update_value_cmd(self) -> None:
+    def update_value_cmd(self) -> typing.Union[str, int, float]:
         self.value_is_ok = False
         self.value_cmd = ""
         val_to_test = self.display_value
@@ -271,6 +273,8 @@ class _Param:
             self.value_cmd = self.converter.to_cmd(self.type_name, val_to_test, self.type_args)
 
         self.value_is_ok = True
+
+        return self.value_cmd
 
 
 class _Convert:
@@ -329,24 +333,22 @@ class _Convert:
 
             return my_dict
 
-        def _str_to_bit(self, string_to_convert: str) -> str:
+        def _str_to_bit(self, string_to_convert: str) -> int:
             try:
-                my_int = int(string_to_convert)
-                value = string_to_convert
-                if not my_int == 0 and not my_int == 1:
+                value = int(string_to_convert)
+                if not value == 0 and not value == 1:
                     raise ValueError(f"Erreur valeur, {string_to_convert} ne peut être que 0 ou 1")
             except ValueError:
-                if not my_int == 0 and not my_int == 1:
+                if not value == 0 and not value == 1:
                     raise ValueError(f"{string_to_convert} ne peut être que 0 ou 1")
                 else:
                     raise ValueError(f"{string_to_convert} n'est pas un nombre entier valide")
 
             return value
 
-        def _str_to_int(self, string_to_convert: str) -> str:
+        def _str_to_int(self, string_to_convert: str) -> int:
             try:
-                _ = int(string_to_convert)
-                value = string_to_convert
+                value = int(string_to_convert)
             except ValueError:
                 raise ValueError(f"{string_to_convert} n'est pas un nombre entier valide")
 
@@ -355,7 +357,7 @@ class _Convert:
         def _str_to_date(self, string_to_convert: str) -> str:
             try:
                 my_date = datetime.strptime(string_to_convert, self.parent.date_txt_format)
-                value = "'" + my_date.strftime(self.parent.date_val_format) + "'"
+                value = my_date.strftime(self.parent.date_val_format)
             except ValueError:
                 raise ValueError(f"{string_to_convert} n'est pas une date valide (jj/mm/aaaa)")
 
@@ -364,7 +366,7 @@ class _Convert:
         def _str_to_datetime(self, string_to_convert: str) -> str:
             try:
                 my_date = datetime.strptime(string_to_convert, self.parent.datetime_txt_format)
-                value = "'" + my_date.strftime(self.parent.datetime_val_format) + "'"
+                value = my_date.strftime(self.parent.datetime_val_format)
             except ValueError:
                 raise ValueError(f"{string_to_convert} n'est pas une date valide (jj/mm/aaaa hh:mm:ss)")
 
@@ -373,26 +375,22 @@ class _Convert:
         def _str_to_nvarchar(self, string_to_convert: str, type_args: typing.List[str] = []) -> str:
             max_size = 255 if type_args[0] == "max" or type_args == [] else int(type_args[0])
 
-            if len(string_to_convert) <= max_size:
-                value = "'" + string_to_convert + "'"
-            else:
+            if not len(string_to_convert) <= max_size:
                 raise ValueError(f"{string_to_convert} a plus de charactères qu'autorisés (max : {max_size})")
 
-            return value
+            return string_to_convert
 
         def _str_tochar(self, string_to_convert: str, params: typing.List[str] = ["0"]) -> str:
             size = int(params[0])
 
-            if len(string_to_convert) == size:
-                value = "'" + string_to_convert + "'"
-            else:
+            if not len(string_to_convert) == size:
                 raise ValueError(f"{string_to_convert} n'est pas de la bonne taille ({size})")
 
-            return value
+            return string_to_convert
 
         def _convert_to_null_value(self, type_name: str) -> str:
             null_value_dict = {"int": 0}
-            default_null_value = "' '"
+            default_null_value = " "
 
             return null_value_dict.get(type_name, default_null_value)
 
@@ -497,7 +495,8 @@ class _QueryExecute:
         self.converter = _Convert()
         self.parent = parent  # pour retourner des messages pour l'interface graphique
 
-        self.command = ""
+        self.cmd_template = ""
+        self.cmd_parameters = {}
         self.extract_file = ""
         self.sql_server_params = {
             "server": "",
@@ -520,7 +519,7 @@ class _QueryExecute:
         self.parent.msg_list = []
         self.extract_file = extract_file
 
-        if self.command == "" or self.extract_file == "":
+        if self.cmd_template == "" or self.extract_file == "":
             return False
 
         starting_date = self._time_log()
@@ -530,7 +529,7 @@ class _QueryExecute:
             with conn.cursor() as cursor:
                 self._broadcast(self._time_log() + " - Requête en cours d'execution...")
                 try:
-                    cursor.execute(self.command, "")
+                    cursor.execute(self.cmd_template, self.cmd_parameters)
                 except pymssql._pymssql.ProgrammingError as err:
                     error_code = err.args[0]
                     error_msg = str(err.args[1])[2:-2]
@@ -633,5 +632,6 @@ if __name__ == "__main__":
     sql_script = APP_PATH / settings.QUERY_FOLDER / "test.sql"
 
     my_query = Query(sql_script)
-    my_query.update_cmd()
-    # print(my_query.command)
+    my_query.update_values()
+    print(my_query.get_cmd_for_debug())
+    print(my_query.cmd_params)

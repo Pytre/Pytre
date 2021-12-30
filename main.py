@@ -66,7 +66,7 @@ def choose_file(folder):
 
 
 def input_param(query: sql_query.Query):
-    params = query.params
+    params = query.params_obj
 
     txt_header = f"{query.name} - {query.description}" if not query.description == "" else query.name
     print(str("=") * 100 + f"\nSaisie des paramètres pour {txt_header} :\n" + str("=") * 100)

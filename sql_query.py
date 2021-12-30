@@ -29,8 +29,13 @@ class Query:
 
         self.infos = self._init_infos()
         self.params_obj: typing.Dict[str, _Param] = self._init_params()
+
         self.name = self.infos.get("code", self.filename.stem)
-        self.description = self.infos.get("description", "")
+        self.for_debug = True if self.infos.get("debug") else False
+        if self.for_debug:
+            self.description = "(*) " + self.infos.get("description", "")
+        else:
+            self.description = self.infos.get("description", "")
 
     def _init_file_content(self, encoding_format: str = "utf-8") -> str:
         file_content = ""
@@ -620,7 +625,9 @@ def get_queries(folder) -> typing.List[Query]:
     for file in Path(folder).iterdir():
         if file.is_file() and file.suffix == ".sql":
             my_query = Query(file)
-            queries.append(my_query)
+
+            if not my_query.for_debug or USER.superuser:
+                queries.append(my_query)
 
     queries.sort(key=lambda k: k.name)
 

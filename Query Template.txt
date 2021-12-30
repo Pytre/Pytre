@@ -5,10 +5,13 @@ Pour info requete rajouter au début :
 /* Infos requête
 Code : xxxx
 Description : xxxxxx
+Debug : xxxxx
 */
 
 Le code est utilisé dans la liste des requetes, si pas renseigné alors le nom du fichier est utilisé
 La description est utlisé dans la liste des requetes
+L'info debug si elle est présente signale que la requête ne doit être montrer qu'aux "super utilisateurs"
+
 D'autres infos peuvent être ajoutée (comme une note de version) mais ne sont pas utilisées par Pytre
 
 -------------------------------------------

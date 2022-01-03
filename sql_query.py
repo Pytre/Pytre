@@ -543,6 +543,9 @@ class _QueryExecute:
                 except ValueError as err:
                     self._broadcast(self._time_log() + f" - Erreur : {err}")
                     return False
+                except Exception as err:
+                    self._broadcast(self._time_log() + f" - Erreur : {err}")
+                    return False
 
                 self._broadcast(self._time_log() + " - Début récupération des lignes...")
                 rows_count = self._extract_to_file(cursor)

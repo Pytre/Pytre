@@ -600,7 +600,7 @@ class _QueryExecute:
             buffer.clear()
 
         self._broadcast(self._time_log() + f" - Ecriture finie")
-        return row_number + 1
+        return row_number
 
     def _sql_record_to_text(self, record):
         line_buffer = ""

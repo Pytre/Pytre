@@ -122,7 +122,7 @@ class Query:
             self.query_execute.cmd_template = self.cmd_template
             self.query_execute.cmd_parameters = self.cmd_params
             extract_file = CWD / (
-                f"{self.name}_Extract_{USER.x3_login.upper()}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+                f"{self.name}_{USER.x3_login.upper()}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
             )
 
             try:

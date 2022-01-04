@@ -642,7 +642,7 @@ def get_queries(folder) -> typing.List[Query]:
 
 if __name__ == "__main__":
     APP_PATH = settings.APP_PATH
-    sql_script = APP_PATH / settings.QUERY_FOLDER / "test.sql"
+    sql_script = settings.QUERY_FOLDER / "test.sql"
 
     my_query = Query(sql_script)
     my_query.update_values()

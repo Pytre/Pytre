@@ -14,7 +14,7 @@
     "DECIMAL_SEPARATOR": ",",
     "DATE_FORMAT": "%d/%m/%Y",
 
-    "QUERY_FOLDER": "Requetes SQL",
+    "QUERY_FOLDER": "V:\\INTERFACES\\PYTRE\\Requetes SQL",
 
     "USERS": {
         "Matth": {"x3_login": "mat", "msg_login": "Salut Matth, à la maison !", "superuser": true},

@@ -17,7 +17,7 @@ class App(tk.Tk):
         self.user = sql_user.User()
 
         self.queries: typing.List[sql_query.Query] = sql_query.get_queries(
-            APP_PATH / settings.QUERY_FOLDER
+            settings.QUERY_FOLDER
         )
         self.query: sql_query.Query = self.queries[0]
         self.params_widgets: typing.Dict[str, ttk.Widget] = {}

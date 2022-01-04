@@ -27,7 +27,7 @@ def main():
 
 
 def menu():
-    sql_file = choose_file(APP_PATH / settings.QUERY_FOLDER)  # selection de la requête à utiliser
+    sql_file = choose_file(settings.QUERY_FOLDER)  # selection de la requête à utiliser
     clear_console()
 
     if sql_file == "":

@@ -14,7 +14,7 @@ USER = sql_user.User()
 
 
 class Query:
-    def __init__(self, filename: Path, encoding_format: str = "utf-8"):
+    def __init__(self, filename: Path = Path("dummy"), encoding_format: str = "utf-8"):
         self.query_execute = _QueryExecute(self)
 
         self.last_extracted_file = ""  # info du dernier fichier extrait
@@ -576,7 +576,7 @@ class _QueryExecute:
         )  # ligne des entêtes de colonnes
         buffer.append(line_header)  # stockage des entêtes de colonne dans le buffer
 
-        row_number = 0
+        row_number = None
         for row_number, record in enumerate(cursor):  # parcours résultats
             line_buffer = self._sql_record_to_text(record)
             buffer.append(line_buffer)
@@ -627,6 +627,9 @@ class _QueryExecute:
 
 
 def get_queries(folder) -> typing.List[Query]:
+    if not Path(folder).is_dir():
+        raise ValueError(f"Erreur : le répertoire {folder} n'a pas été trouvé ou n'est pas accessible !")
+
     queries: typing.List[Query] = []
     for file in Path(folder).iterdir():
         if file.is_file() and file.suffix == ".sql":

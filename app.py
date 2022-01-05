@@ -15,17 +15,18 @@ class App(tk.Tk):
         super().__init__()
 
         self.user = sql_user.User()
-
-        self.queries: typing.List[sql_query.Query] = sql_query.get_queries(
-            settings.QUERY_FOLDER
-        )
-        self.query: sql_query.Query = self.queries[0]
+        self.queries: typing.List[sql_query.Query] = []
+        self.query: sql_query.Query = sql_query.Query()
         self.params_widgets: typing.Dict[str, ttk.Widget] = {}
 
         self.setup_ui()
         self.setup_events_binds()
 
         self.manage_user_access()
+        self.refresh_queries()
+
+        if self.user.msg_login:
+            self.output_msg(str(self.user.msg_login) + "\n", "1.0", "1.0")
 
     def manage_user_access(self):
         if not self.user.is_authorized:
@@ -35,7 +36,6 @@ class App(tk.Tk):
             )
             self.destroy()
         else:
-            self.output_msg(str(self.user.msg_login))
             if not self.user.superuser:
                 self.btn_debug.grid_forget()
 
@@ -76,12 +76,17 @@ class App(tk.Tk):
             self.left_frame, text="Filtre :", justify=tk.LEFT
         )
         self.queries_entry_filter = ttk.Entry(
-            self.left_frame, textvariable=self.queries_filter_text, width=30
+            self.left_frame, textvariable=self.queries_filter_text, width=20
         )
         self.queries_btn_filter = ttk.Button(
             self.left_frame,
             text="Appliquer",
             command=lambda: self.queries_filter(self.queries_entry_filter.get()),
+        )
+        self.queries_btn_refresh = ttk.Button(
+            self.left_frame,
+            text="Réinitialiser",
+            command=lambda: self.refresh_queries(),
         )
 
         self.queries_tree = ttk.Treeview(
@@ -104,12 +109,15 @@ class App(tk.Tk):
             row=0, column=1, columnspan=3, padx=2, pady=2, sticky="nswe"
         )
         self.queries_btn_filter.grid(
-            row=0, column=4, columnspan=2, padx=2, pady=2, sticky="nswe"
+            row=0, column=4, columnspan=1, padx=2, pady=2, sticky="nswe"
+        )
+        self.queries_btn_refresh.grid(
+            row=0, column=5, columnspan=2, padx=2, pady=2, sticky="nswe"
         )
         self.queries_tree.grid(
-            row=1, column=0, columnspan=6, padx=2, pady=2, sticky="nswe"
+            row=1, column=0, columnspan=7, padx=2, pady=2, sticky="nswe"
         )
-        self.queries_tree_scrollbar_y.grid(row=1, column=5, sticky="nse")
+        self.queries_tree_scrollbar_y.grid(row=1, column=6, sticky="nse")
 
         # paramètrage des poids des lignes et colonnes
         self.left_frame.rowconfigure(0, weight=0)
@@ -401,6 +409,7 @@ class App(tk.Tk):
         self.btn_execute["state"] = "disable"
         self.queries_btn_filter["state"] = "disable"
         self.queries_entry_filter["state"] = "disable"
+        self.queries_btn_refresh["state"] = "disable"
         self.queries_tree["selectmode"] = "none"
         for key in self.params_widgets:
             if (
@@ -413,6 +422,7 @@ class App(tk.Tk):
         self.btn_execute["state"] = "enable"
         self.queries_btn_filter["state"] = "enable"
         self.queries_entry_filter["state"] = "enable"
+        self.queries_btn_refresh["state"] = "enable"
         self.queries_tree["selectmode"] = "browse"
         for key in self.params_widgets:
             if (
@@ -445,6 +455,19 @@ class App(tk.Tk):
     # ------------------------------------------------------------------------------------------
     # Traitements
     # ------------------------------------------------------------------------------------------
+    def refresh_queries(self):
+        self.ui_params_reset()
+        self.query = sql_query.Query()
+        self.output_msg("")
+        self.queries_filter_text = ""
+
+        try:
+            self.queries = sql_query.get_queries(settings.QUERY_FOLDER)
+            self.queries_filter()  # rénitialiser l'UI en simulant un filtre sur aucun élément
+        except ValueError as err:
+            self.queries = {}
+            self.queries_filter(msg_filter=err)
+
     def execute_query(self):
         if self.query is None:
             messagebox.showwarning("Warning", "Aucune requête de sélectionnée !")
@@ -508,13 +531,13 @@ class App(tk.Tk):
     # ------------------------------------------------------------------------------------------
     # Mise à jour de l'interface et des variables d'instances quand évènement
     # ------------------------------------------------------------------------------------------
-    def queries_filter(self, text_filter: str = ""):
+    def queries_filter(self, text_filter: str = "", msg_filter: str = ""):
         for item in self.queries_tree.get_children():
             self.queries_tree.delete(item)
 
         self.ui_params_reset()
         self.query = None
-        self.output_msg("")
+        self.output_msg(msg_filter)
 
         for item in self.queries:
             if (
@@ -526,7 +549,7 @@ class App(tk.Tk):
                     "", tk.END, values=(item.name, item.description), iid=id(item)
                 )
 
-    def tree_selection_change(self, event: Event):
+    def tree_selection_change(self, _: Event):
         selected_iid = self.queries_tree.focus()
         selected_values = self.queries_tree.item(selected_iid, "values")
 

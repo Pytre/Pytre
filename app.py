@@ -1,5 +1,6 @@
 import time
 import typing
+import subprocess
 import tkinter as tk
 from tkinter import Event, ttk, messagebox
 from threading import Thread
@@ -19,6 +20,7 @@ class App(tk.Tk):
         self.query: sql_query.Query = sql_query.Query()
         self.params_widgets: typing.Dict[str, ttk.Widget] = {}
 
+        self.setup_style()
         self.setup_ui()
         self.setup_events_binds()
 
@@ -37,7 +39,17 @@ class App(tk.Tk):
             self.destroy()
         else:
             if not self.user.superuser:
+                self.btn_queries_folder.grid_forget()
                 self.btn_debug.grid_forget()
+
+    # ------------------------------------------------------------------------------------------
+    # Définition des styles
+    # ------------------------------------------------------------------------------------------
+    def setup_style(self):
+        self.style_frame_label = "Bold.TLabelFrame.Label"
+        ttk.Style().configure(
+            self.style_frame_label, font=("TkDefaultFont", 10, "bold")
+        )
 
     # ------------------------------------------------------------------------------------------
     # Création de l'interface
@@ -136,7 +148,6 @@ class App(tk.Tk):
 
         self.setup_ui_right_panned()
 
-        self.setup_ui_label_frame_style()
         self.setup_ui_params()
         self.setup_ui_output_and_btn()
 
@@ -148,12 +159,6 @@ class App(tk.Tk):
         self.right_panned.grid(row=0, column=0, padx=0, pady=0, sticky="nswe")
         self.right_panned.rowconfigure(0, weight=1)
         self.right_panned.columnconfigure(0, weight=1)
-
-    def setup_ui_label_frame_style(self):
-        self.style_frame_label = "Bold.TLabelFrame.Label"
-        ttk.Style().configure(
-            self.style_frame_label, font=("TkDefaultFont", 10, "bold")
-        )
 
     def setup_ui_params(self):
         self.params_label = ttk.Label(
@@ -232,6 +237,9 @@ class App(tk.Tk):
         self.btn_execute = ttk.Button(
             self.btn_frame, text="Executer", state="disable", command=self.execute_query
         )
+        self.btn_queries_folder = ttk.Button(
+            self.btn_frame, text="Explorateur", command=self.open_queries_folder
+        )
         self.btn_debug = ttk.Button(
             self.btn_frame, text="Debug", state="disable", command=self.debug
         )
@@ -240,8 +248,9 @@ class App(tk.Tk):
         )
 
         self.btn_execute.grid(row=0, column=1, padx=2, pady=0, sticky="nswe")
-        self.btn_debug.grid(row=0, column=2, padx=2, pady=0, sticky="nswe")
-        self.btn_quit.grid(row=0, column=3, padx=0, pady=0, sticky="nswe")
+        self.btn_queries_folder.grid(row=0, column=2, padx=2, pady=0, sticky="nswe")
+        self.btn_debug.grid(row=0, column=3, padx=2, pady=0, sticky="nswe")
+        self.btn_quit.grid(row=0, column=4, padx=0, pady=0, sticky="nswe")
 
         # paramètrage des poids des lignes et colonnes
         self.btn_frame.rowconfigure(0, weight=1)
@@ -527,6 +536,9 @@ class App(tk.Tk):
             self.output_textbox["state"] = "disabled"
         except AttributeError:
             pass
+
+    def open_queries_folder(self):
+        subprocess.Popen(f"explorer {my_settings.queries_folder}")
 
     # ------------------------------------------------------------------------------------------
     # Mise à jour de l'interface et des variables d'instances quand évènement

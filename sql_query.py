@@ -469,7 +469,8 @@ class _Convert:
             if str(value)[0:3] == "0E-":
                 value_txt = ""
             else:
-                value_txt = str(value).replace(".", self.parent.decimal_separator)
+                value_txt = re.sub(r"(?<=\.\d{2})(0+$)", "", str(value))  # enleve trailing 0 après 2ième décimale
+                value_txt = value_txt.replace(".", self.parent.decimal_separator)
 
             return value_txt
 

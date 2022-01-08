@@ -92,7 +92,7 @@ class App(tk.Tk):
             self.left_frame, text="Filtre :", justify=tk.LEFT
         )
         self.queries_entry_filter = ttk.Entry(
-            self.left_frame, textvariable=self.queries_filter_text, width=20
+            self.left_frame, textvariable=self.queries_filter_text, width=30
         )
         self.queries_btn_folder = ttk.Button(
             self.left_frame,
@@ -110,8 +110,8 @@ class App(tk.Tk):
         )
         self.queries_tree.heading(1, text="Code")
         self.queries_tree.heading(2, text="Description")
-        self.queries_tree.column(1, width=20)
-        self.queries_tree.column(2, width=100)
+        self.queries_tree.column(1, width=100, stretch=False)
+        self.queries_tree.column(2, width=250, stretch=True)
         self.queries_filter()
 
         self.queries_tree_scrollbar_y = ttk.Scrollbar(

@@ -23,14 +23,19 @@ class Settings:
     def __init__(self, json_file: Path = JSON_FILE):
         self.json_file: Path = json_file
 
+        self.app_path: Path = get_app_path()
+
         self.sql_server = {}
         self.users = {}
         self.field_separator: str = ""
         self.decimal_separator: str = ""
         self.date_format: str = ""
-        self.queries_folder: Path() = Path("")
+        self.queries_folder: Path = Path("")
+
+        self.extract_folder: Path = Path("")
 
         self._init_values()
+        self._init_extract_folder()
 
     def _init_values(self):
         with open(self.json_file, mode="r", encoding="utf-8") as f:
@@ -43,6 +48,14 @@ class Settings:
         self.decimal_separator: str = obj["DECIMAL_SEPARATOR"]  # séparateur décimal pour exports
         self.date_format: str = obj["DATE_FORMAT"]  # format date pour les exports
         self.queries_folder: Path() = Path(obj["QUERY_FOLDER"])  # répertoire des requêtes SQL
+
+    def _init_extract_folder(self):
+        self.extract_folder = Path.home() / "Pytre"
+        if not self.extract_folder.exists() or not self.extract_folder.is_dir():
+            try:
+                self.extract_folder.mkdir(parents=True, exist_ok=True)
+            except FileExistsError:
+                self.extract_folder = Path.home()
 
 
 if __name__ == "__main__":

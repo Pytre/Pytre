@@ -9,7 +9,7 @@ import sql_user, sql_query
 import settings_with_json as settings
 
 
-my_settings = settings.Settings()
+SETTINGS = settings.Settings()
 
 APP_PATH = settings.APP_PATH  # dossier ou les fichiers de l'executable sont extraits
 PYTRE_VERSION = "0.962"
@@ -43,7 +43,7 @@ class App(tk.Tk):
             self.destroy()
         else:
             if not self.user.superuser:
-                self.btn_queries_folder.grid_forget()
+                self.queries_btn_folder.grid_forget()
                 self.btn_debug.grid_forget()
 
     # ------------------------------------------------------------------------------------------
@@ -60,7 +60,7 @@ class App(tk.Tk):
     # ------------------------------------------------------------------------------------------
     def setup_ui(self):
         self.title(f"Pytre X3 - Python Requeteur pour X3 - V.{PYTRE_VERSION}")
-        icon_file = APP_PATH / "res" / "app.ico"
+        icon_file = SETTINGS.app_path / "res" / "app.ico"
         self.iconbitmap(default=icon_file)
 
         self.minsize(width=800, height=650)
@@ -94,10 +94,10 @@ class App(tk.Tk):
         self.queries_entry_filter = ttk.Entry(
             self.left_frame, textvariable=self.queries_filter_text, width=20
         )
-        self.queries_btn_filter = ttk.Button(
+        self.queries_btn_folder = ttk.Button(
             self.left_frame,
-            text="Appliquer",
-            command=lambda: self.queries_filter(self.queries_entry_filter.get()),
+            text="Dossier",
+            command=lambda: self.open_folder(SETTINGS.queries_folder),
         )
         self.queries_btn_refresh = ttk.Button(
             self.left_frame,
@@ -124,7 +124,7 @@ class App(tk.Tk):
         self.queries_entry_filter.grid(
             row=0, column=1, columnspan=3, padx=2, pady=2, sticky="nswe"
         )
-        self.queries_btn_filter.grid(
+        self.queries_btn_folder.grid(
             row=0, column=4, columnspan=1, padx=2, pady=2, sticky="nswe"
         )
         self.queries_btn_refresh.grid(
@@ -135,14 +135,9 @@ class App(tk.Tk):
         )
         self.queries_tree_scrollbar_y.grid(row=1, column=6, sticky="nse")
 
-        # paramètrage des poids des lignes et colonnes
-        self.left_frame.rowconfigure(0, weight=0)
+        # paramètrage poids lignes et colonnes
         self.left_frame.rowconfigure(1, weight=1)
-        for column in range(self.left_frame.grid_size()[0]):
-            if column == 0 or column >= self.left_frame.grid_size()[0] - 2:
-                self.left_frame.columnconfigure(column, weight=0)
-            else:
-                self.left_frame.columnconfigure(column, weight=1)
+        self.left_frame.columnconfigure(1, weight=1)
 
     def setup_ui_right_frame(self):
         self.right_frame = ttk.Frame(self.paned_window, padding=0, borderwidth=2)
@@ -242,7 +237,9 @@ class App(tk.Tk):
             self.btn_frame, text="Executer", state="disable", command=self.execute_query
         )
         self.btn_queries_folder = ttk.Button(
-            self.btn_frame, text="Explorateur", command=self.open_queries_folder
+            self.btn_frame,
+            text="Dossier",
+            command=lambda: self.open_folder(SETTINGS.extract_folder),
         )
         self.btn_debug = ttk.Button(
             self.btn_frame, text="Debug", state="disable", command=self.debug
@@ -378,7 +375,8 @@ class App(tk.Tk):
     # ------------------------------------------------------------------------------------------
     def setup_events_binds(self):
         self.queries_entry_filter.bind(
-            "<Return>", lambda e: self.queries_filter(self.queries_entry_filter.get())
+            "<KeyRelease>",
+            lambda e: self.queries_filter(self.queries_entry_filter.get()),
         )
 
         self.queries_tree.bind("<<TreeviewSelect>>", self.tree_selection_change)
@@ -420,7 +418,7 @@ class App(tk.Tk):
 
     def lock_ui(self):
         self.btn_execute["state"] = "disable"
-        self.queries_btn_filter["state"] = "disable"
+        self.queries_btn_folder["state"] = "disable"
         self.queries_entry_filter["state"] = "disable"
         self.queries_btn_refresh["state"] = "disable"
         self.queries_tree["selectmode"] = "none"
@@ -433,7 +431,7 @@ class App(tk.Tk):
 
     def unlock_ui(self):
         self.btn_execute["state"] = "enable"
-        self.queries_btn_filter["state"] = "enable"
+        self.queries_btn_folder["state"] = "enable"
         self.queries_entry_filter["state"] = "enable"
         self.queries_btn_refresh["state"] = "enable"
         self.queries_tree["selectmode"] = "browse"
@@ -475,7 +473,7 @@ class App(tk.Tk):
         self.queries_filter_text = ""
 
         try:
-            self.queries = sql_query.get_queries(my_settings.queries_folder)
+            self.queries = sql_query.get_queries(SETTINGS.queries_folder)
             self.queries_filter()  # rénitialiser l'UI en simulant un filtre sur aucun élément
         except ValueError as err:
             self.queries = {}
@@ -541,8 +539,8 @@ class App(tk.Tk):
         except AttributeError:
             pass
 
-    def open_queries_folder(self):
-        subprocess.Popen(f"explorer {my_settings.queries_folder}")
+    def open_folder(self, folder: str):
+        subprocess.Popen(f"explorer {folder}")
 
     # ------------------------------------------------------------------------------------------
     # Mise à jour de l'interface et des variables d'instances quand évènement

@@ -5,7 +5,11 @@ import tkinter as tk
 from tkinter import Event, ttk, messagebox
 from threading import Thread
 
-import settings, sql_user, sql_query
+import sql_user, sql_query
+import settings_with_json as settings
+
+
+my_settings = settings.Settings()
 
 APP_PATH = settings.APP_PATH  # dossier ou les fichiers de l'executable sont extraits
 PYTRE_VERSION = "0.962"
@@ -471,7 +475,7 @@ class App(tk.Tk):
         self.queries_filter_text = ""
 
         try:
-            self.queries = sql_query.get_queries(settings.QUERY_FOLDER)
+            self.queries = sql_query.get_queries(my_settings.queries_folder)
             self.queries_filter()  # rénitialiser l'UI en simulant un filtre sur aucun élément
         except ValueError as err:
             self.queries = {}

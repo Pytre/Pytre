@@ -1,6 +1,9 @@
 import os, getpass
 
-from settings import USERS
+import settings_with_json as settings
+
+
+USERS = settings.Settings().users
 
 
 class User:

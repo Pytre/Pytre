@@ -1,7 +1,10 @@
 import os
 from pathlib import Path
 
-import settings, sql_user, sql_query
+import sql_user, sql_query
+import settings_with_json as settings
+
+my_settings = settings.Settings()
 
 CWD = Path.cwd()  # dossier du script ou de l'executable
 APP_PATH = settings.APP_PATH  # dossier ou les fichiers de l'executable sont extraits
@@ -27,7 +30,7 @@ def main():
 
 
 def menu():
-    sql_file = choose_file(settings.QUERY_FOLDER)  # selection de la requête à utiliser
+    sql_file = choose_file(my_settings.queries_folder)  # selection de la requête à utiliser
     clear_console()
 
     if sql_file == "":

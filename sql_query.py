@@ -6,7 +6,10 @@ from pathlib import Path
 
 import pymssql
 
-import settings, sql_user
+import sql_user
+import settings_with_json as settings
+
+my_settings = settings.Settings()
 
 CWD = Path.cwd()  # dossier du script ou de l'executable
 PRINT_DATE_FORMAT = "%d/%m/%Y à %H:%M:%S"  # pour le format de la date pour les logs / output
@@ -284,14 +287,14 @@ class _Param:
 
 class _Convert:
     def __init__(self):
-        self.date_txt_format = settings.DATE_FORMAT  # pour affichage utilisateurs ou extraction
+        self.date_txt_format = my_settings.date_format  # pour affichage utilisateurs ou extraction
         self.date_val_format = "%Y-%m-%d"  # pour commande SQL
 
         self.datetime_txt_format = "%d/%m/%Y %H:%M:%S"  # pour affichage utilisateurs ou extraction
         self.datetime_val_format = "%Y-%m-%d %H:%M:%S"  # pour commande SQL
 
-        self.field_separator = settings.FIELD_SEPARATOR
-        self.decimal_separator = settings.DECIMAL_SEPARATOR
+        self.field_separator = my_settings.field_separator
+        self.decimal_separator = my_settings.decimal_separator
 
         self.cls_to_cmd = self._ToCmd(self)
         self.cls_to_display = self._ToDisplay(self)
@@ -505,20 +508,20 @@ class _QueryExecute:
         self.cmd_parameters = {}
         self.extract_file = ""
         self.sql_server_params = {
-            "server": settings.SQL_SERVER["server"],
-            "host": settings.SQL_SERVER["host"],
-            "user": settings.SQL_SERVER["user"],
-            "password": settings.SQL_SERVER["password"],
-            "database": settings.SQL_SERVER["database"],
-            "timeout": settings.SQL_SERVER["timeout"],
-            "login_timeout": settings.SQL_SERVER["login_timeout"],
+            "server": my_settings.sql_server["server"],
+            "host": my_settings.sql_server["host"],
+            "user": my_settings.sql_server["user"],
+            "password": my_settings.sql_server["password"],
+            "database": my_settings.sql_server["database"],
+            "timeout": my_settings.sql_server["timeout"],
+            "login_timeout": my_settings.sql_server["login_timeout"],
             "charset": "UTF-8",
             "as_dict": False,
             "appname": None,
-            "port": settings.SQL_SERVER["port"],
+            "port": my_settings.sql_server["port"],
         }
 
-        self.field_separator = settings.FIELD_SEPARATOR
+        self.field_separator = my_settings.field_separator
         self.print_date_format = PRINT_DATE_FORMAT
 
     def execute(self, extract_file):
@@ -646,7 +649,7 @@ def get_queries(folder) -> typing.List[Query]:
 
 if __name__ == "__main__":
     APP_PATH = settings.APP_PATH
-    sql_script = settings.QUERY_FOLDER / "test.sql"
+    sql_script = my_settings.queries_folder / "zintercos.sql"
 
     my_query = Query(sql_script)
     my_query.update_values()

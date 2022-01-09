@@ -10,7 +10,7 @@ import settings_with_json as settings
 
 
 SETTINGS = settings.Settings()
-PYTRE_VERSION = "0.962"
+PYTRE_VERSION = "0.980"
 
 
 class App(tk.Tk):

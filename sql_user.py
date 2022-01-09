@@ -1,6 +1,6 @@
 import os, getpass
 
-import settings_with_json as settings
+import settings_with_keepass as settings
 
 
 USERS = settings.Settings().users

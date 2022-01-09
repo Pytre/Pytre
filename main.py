@@ -2,7 +2,7 @@ import os
 from pathlib import Path
 
 import sql_user, sql_query
-import settings_with_json as settings
+import settings_with_keepass as settings
 
 SETTINGS = settings.Settings()
 PRINT_DATE_FORMAT = "%d/%m/%Y at %H:%M:%S"  # pour le format de la date à écrire dans la console

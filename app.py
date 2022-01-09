@@ -6,7 +6,7 @@ from tkinter import Event, ttk, messagebox
 from threading import Thread
 
 import sql_user, sql_query
-import settings_with_json as settings
+import settings_with_keepass as settings
 
 
 SETTINGS = settings.Settings()

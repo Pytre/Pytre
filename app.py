@@ -28,13 +28,15 @@ class App(tk.Tk):
         self.setup_ui()
         self.setup_events_binds()
 
-        self.manage_user_access()
+        self.check_user_access()
+        self.check_min_version()
+
         self.refresh_queries()
 
         if self.user.msg_login:
             self.output_msg(str(self.user.msg_login) + "\n", "1.0", "1.0")
 
-    def manage_user_access(self):
+    def check_user_access(self):
         if not self.user.is_authorized:
             messagebox.showerror(
                 "Erreur",
@@ -45,6 +47,17 @@ class App(tk.Tk):
             if not self.user.superuser:
                 self.queries_btn_folder.grid_forget()
                 self.btn_debug.grid_forget()
+
+    def check_min_version(self):
+        if SETTINGS.min_version > PYTRE_VERSION:
+            messagebox.showerror(
+                "Version obsolète",
+                "Votre version de Pytre X3 n'est pas à jour."
+                f"\n\n- Version utilisée : {PYTRE_VERSION}"
+                f"\n- Version mini : {SETTINGS.min_version}"
+                "\n\nMerci d'utiliser une version à jour",
+            )
+            self.destroy()
 
     # ------------------------------------------------------------------------------------------
     # Définition des styles

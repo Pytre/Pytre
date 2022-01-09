@@ -10,8 +10,6 @@ import settings_with_json as settings
 
 
 SETTINGS = settings.Settings()
-
-APP_PATH = settings.APP_PATH  # dossier ou les fichiers de l'executable sont extraits
 PYTRE_VERSION = "0.962"
 
 

@@ -646,7 +646,7 @@ def get_queries(folder) -> typing.List[Query]:
 
 
 if __name__ == "__main__":
-    APP_PATH = settings.APP_PATH
+    APP_PATH = SETTINGS.app_path
     sql_script = SETTINGS.queries_folder / "zintercos.sql"
 
     my_query = Query(sql_script)

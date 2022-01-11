@@ -450,9 +450,9 @@ class _Convert:
         def func_dict(self) -> dict:
             my_dict = {
                 "<class 'str'>": self._from_string,
-                "<class 'decimal.Decimal'>": self._from_decimal,
-                "<class 'float'>": self._from_decimal,
-                "<class 'int'>": self._from_decimal,
+                "<class 'decimal.Decimal'>": self._from_number,
+                "<class 'float'>": self._from_number,
+                "<class 'int'>": self._from_number,
                 "<class 'bool'>": self._from_bool,
                 "<class 'datetime.datetime'>": self._from_datetime,
                 "<class 'NoneType'>": self._from_none,
@@ -468,12 +468,15 @@ class _Convert:
 
             return value_txt
 
-        def _from_decimal(self, value) -> str:
+        def _from_number(self, value) -> str:
             if str(value)[0:3] == "0E-":
                 value_txt = ""
             else:
-                value_txt = re.sub(r"(?<=\.\d{2})(0+$)", "", str(value))  # enleve trailing 0 après 2ième décimale
-                value_txt = value_txt.replace(".", self.parent.decimal_separator)
+                value_txt = re.sub(r"(\.\d*?)(0*$)", r"\1", str(value))  # enleve trailing 0 des décimales
+                if value_txt[-1] == ".":  # si dernier caractère séparateur décimal alors l'enlever
+                    value_txt = value_txt[:-1]
+                else:  # sinon on le remplace par le séparateur décimal voulu
+                    value_txt = value_txt.replace(".", self.parent.decimal_separator)
 
             return value_txt
 

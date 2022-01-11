@@ -451,6 +451,8 @@ class _Convert:
             my_dict = {
                 "<class 'str'>": self._from_string,
                 "<class 'decimal.Decimal'>": self._from_decimal,
+                "<class 'float'>": self._from_decimal,
+                "<class 'int'>": self._from_decimal,
                 "<class 'bool'>": self._from_bool,
                 "<class 'datetime.datetime'>": self._from_datetime,
                 "<class 'NoneType'>": self._from_none,

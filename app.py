@@ -10,7 +10,7 @@ import settings_with_keepass as settings
 
 
 SETTINGS = settings.Settings()
-PYTRE_VERSION = "0.990"
+PYTRE_VERSION = "0.991"
 
 
 class App(tk.Tk):

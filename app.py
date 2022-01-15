@@ -338,6 +338,7 @@ class App(tk.Tk):
                     self.params_inner, textvariable=my_widgets["entry_var"]
                 )
                 my_widgets["entry"].bind("<FocusOut>", self.param_input_event)
+                my_widgets["entry"].bind("<Return>", self.param_input_event)
 
             my_widgets["check"] = ttk.Label(
                 self.params_inner,

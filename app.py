@@ -427,6 +427,7 @@ class App(tk.Tk):
             time.sleep(0.100)
 
         self.unlock_ui()
+        self.focus_force()  # faire clignoter le boutton dans barre des taches
 
     def lock_ui(self):
         self.btn_execute["state"] = "disable"

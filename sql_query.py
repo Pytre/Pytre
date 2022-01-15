@@ -102,7 +102,8 @@ class Query:
         my_list = [key] if not key is None else self.params_obj.keys()
 
         for key in my_list:
-            self.cmd_params[key] = self.params_obj[key].update_value_cmd()
+            param = self.params_obj[key]
+            self.cmd_params[key] = param.update_value_cmd()
 
         return True
 
@@ -278,6 +279,10 @@ class _Param:
         else:
             self.value_cmd = self.converter.to_cmd(self.type_name, val_to_test, self.type_args)
 
+            # modif valeur affichage pour dates qui peuvent être saisie sur un format different que voulue
+            if self.type_name in ("date", "datetime") and not self.display_value == "":
+                self.display_value = self.converter.to_display(self.type_name, self.value_cmd)
+
         self.value_is_ok = True
 
         return self.value_cmd
@@ -361,20 +366,34 @@ class _Convert:
             return value
 
         def _str_to_date(self, string_to_convert: str) -> str:
-            try:
-                my_date = datetime.strptime(string_to_convert, self.parent.date_txt_format)
-                value = my_date.strftime(self.parent.date_val_format)
-            except ValueError:
-                raise ValueError(f"{string_to_convert} n'est pas une date valide (jj/mm/aaaa)")
+            valid_format = ["%d%m%y", "%d%m%Y", "%d/%m/%y", "%d/%m/%Y"]
+            if not self.parent.date_txt_format in valid_format:
+                valid_format.append(self.parent.date_txt_format)
+
+            for i, my_format in enumerate(valid_format):
+                try:
+                    my_date = datetime.strptime(string_to_convert, my_format)
+                    value = my_date.strftime(self.parent.date_val_format)
+                    break
+                except ValueError:
+                    if i + 1 == len(valid_format):
+                        raise ValueError(f"{string_to_convert} n'est pas une date valide (jj/mm/aaaa)")
 
             return value
 
         def _str_to_datetime(self, string_to_convert: str) -> str:
-            try:
-                my_date = datetime.strptime(string_to_convert, self.parent.datetime_txt_format)
-                value = my_date.strftime(self.parent.datetime_val_format)
-            except ValueError:
-                raise ValueError(f"{string_to_convert} n'est pas une date valide (jj/mm/aaaa hh:mm:ss)")
+            valid_format = ["%d%m%y %H:%M:%S", "%d%m%Y %H:%M:%S", "%d/%m/%y %H:%M:%S", "%d/%m/%Y %H:%M:%S"]
+            if not self.parent.date_txt_format in valid_format:
+                valid_format.append(self.parent.datetime_txt_format)
+
+            for i, my_format in enumerate(valid_format):
+                try:
+                    my_date = datetime.strptime(string_to_convert, my_format)
+                    value = my_date.strftime(self.parent.date_val_format)
+                    break
+                except ValueError:
+                    if i + 1 == len(valid_format):
+                        raise ValueError(f"{string_to_convert} n'est pas une date valide (jj/mm/aaaa hh:mm:ss)")
 
             return value
 
@@ -652,7 +671,7 @@ def get_queries(folder) -> typing.List[Query]:
 
 if __name__ == "__main__":
     APP_PATH = SETTINGS.app_path
-    sql_script = SETTINGS.queries_folder / "zintercos.sql"
+    sql_script = SETTINGS.queries_folder / "ZGL.sql"
 
     my_query = Query(sql_script)
     my_query.update_values()

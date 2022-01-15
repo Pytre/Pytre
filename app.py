@@ -627,7 +627,15 @@ class App(tk.Tk):
         ].get()
 
         try:
-            color = "green" if self.query.update_values(key) else "red"
+            self.query.update_values(key)
+            color = "green"
+
+            # verif si affichage correcte, sinon MAJ (cas des saisies dates notamment)
+            if self.params_widgets[key]["entry"].widgetName == "ttk::entry":
+                correct_display = self.query.params_obj[key].display_value
+                if not self.params_widgets[key]["entry_var"].get() == correct_display:
+                    self.params_widgets[key]["entry_var"].set(correct_display)
+
         except ValueError as e:
             color = "red"
             self.output_msg(e)

@@ -337,6 +337,7 @@ class App(tk.Tk):
                 my_widgets["entry"] = ttk.Entry(
                     self.params_inner, textvariable=my_widgets["entry_var"]
                 )
+                my_widgets["entry"].bind("<FocusIn>", self.param_focus_event)
                 my_widgets["entry"].bind("<FocusOut>", self.param_input_event)
                 my_widgets["entry"].bind("<Return>", self.param_input_event)
 
@@ -605,6 +606,14 @@ class App(tk.Tk):
         self.params_canvas.yview_moveto(0)
         self.params_resize()
 
+    def param_focus_event(self, event: Event):
+        widget = event.widget
+
+        if widget.widgetName == "ttk::entry":
+            widget: ttk.Entry
+            widget.icursor("end")
+            widget.select_range("0", "end")
+
     def param_input_event(self, event: Event):
         widget = event.widget
 
@@ -618,6 +627,9 @@ class App(tk.Tk):
                 break
 
         self._param_input(key)
+
+        if event.keysym == "Return":
+            self.param_focus_event(event)
 
     def param_input_trace(self, name, *_):
         self._param_input(name)

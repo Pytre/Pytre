@@ -7,9 +7,9 @@ from pathlib import Path
 import pymssql
 
 import sql_user
-import settings_with_keepass as settings
 
-SETTINGS = settings.Settings()
+
+SETTINGS = sql_user.SETTINGS
 PRINT_DATE_FORMAT = "%d/%m/%Y à %H:%M:%S"  # pour le format de la date pour les logs / output
 USER = sql_user.User()
 

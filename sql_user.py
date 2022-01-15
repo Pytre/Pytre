@@ -3,7 +3,8 @@ import os, getpass
 import settings_with_keepass as settings
 
 
-USERS = settings.Settings().users
+SETTINGS = settings.Settings()
+USERS = SETTINGS.users
 
 
 class User:

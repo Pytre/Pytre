@@ -6,10 +6,9 @@ from tkinter import Event, ttk, messagebox
 from threading import Thread
 
 import sql_user, sql_query
-import settings_with_keepass as settings
 
 
-SETTINGS = settings.Settings()
+SETTINGS = sql_query.SETTINGS
 PYTRE_VERSION = "0.991"
 
 

@@ -451,7 +451,11 @@ class App(tk.Tk):
                 not (widget_entry := self.params_widgets[key].get("entry", None))
                 is None
             ):
-                widget_entry["state"] = "enable"
+                widget_entry["state"] = (
+                    "enable"
+                    if not isinstance(widget_entry, ttk.Combobox)
+                    else "readonly"
+                )
 
     # ------------------------------------------------------------------------------------------
     # Gestion thread pour log pendant l'execution de la requête

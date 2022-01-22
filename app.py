@@ -34,6 +34,11 @@ class App(tk.Tk):
             self.output_msg(str(self.user.msg_login) + "\n", "1.0", "1.0")
 
     def check_user_access(self):
+        if not self.user.exist_in_settings and self.user.domain == "PROSOL.PRI":
+            sql_query.create_user_in_settings()
+            self.user = sql_user.User()  # reinit de l'utilisateur après création
+            sql_query.USER = self.user  # reinit aussi dans sql_query
+
         if not self.user.is_authorized:
             messagebox.showerror(
                 "Erreur",

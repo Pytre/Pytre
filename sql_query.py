@@ -696,6 +696,7 @@ def get_queries(folder) -> typing.List[Query]:
 def create_user_in_settings():
     sql_script = SETTINGS.queries_folder / "_add_user.sql"
 
+    global USER
     if not USER.exist_in_settings:
         my_query = Query(sql_script)
         my_query.update_values()
@@ -712,7 +713,6 @@ def create_user_in_settings():
                 superuser="false",
             )
 
-            global USER
             USER.exist_in_settings = True
 
 

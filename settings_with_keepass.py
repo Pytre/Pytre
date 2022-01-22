@@ -65,6 +65,8 @@ class Settings:
             user = {}
             user_key = u_entry.username
 
+            user["title"] = u_entry.title
+
             for cust_str in ("x3_id", "msg_login", "superuser"):
                 user[cust_str] = val if not (val := u_entry.get_custom_property(cust_str)) is None else ""
 
@@ -108,10 +110,9 @@ class Settings:
         u_entry.set_custom_property("superuser", superuser)
 
         self.keepass_db.save()
-        
+
         # reinitialisation de la liste des utilisateurs pour la mettre à jour
         self._init_users()
-        
 
 
 if __name__ == "__main__":

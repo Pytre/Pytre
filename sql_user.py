@@ -21,9 +21,13 @@ class User:
         self.exist_in_settings = True if self.dict else False
         self.is_authorized = True if self.dict else False
 
+        self.title = self.dict.get("title", "")
         self.x3_id = self.dict.get("x3_id", "")
         self.msg_login = self.dict.get("msg_login", "")
         self.superuser = self.dict.get("superuser", False)
+
+        if self.msg_login == "":
+            self.msg_login = f"Bonjour {self.title.split(' ')[0]} !"
 
     def _get_user_name(self) -> str:
         return getpass.getuser()

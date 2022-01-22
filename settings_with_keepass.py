@@ -51,14 +51,15 @@ class Settings:
 
         self.sql_server["user"] = val if not (val := s_entry.username) is None else ""
         self.sql_server["password"] = val if not (val := s_entry.password) is None else ""
-        for cust_str in ("server", "host", "database", "port", "timeout", "login_timeout", "charset"):
-            self.sql_server[cust_str] = val if not (val := s_entry.get_custom_property(cust_str)) is None else ""
+
+        for property in s_entry.custom_properties:
+            self.sql_server[property] = val if not (val := s_entry.get_custom_property(property)) is None else ""
 
         self.sql_server["charset"] = (
             self.sql_server["charset"].upper() if not self.sql_server.get("charset", "") == "" else "UTF-8"
         )
-        self.sql_server["timeout"] = int(self.sql_server["timeout"])
-        self.sql_server["login_timeout"] = int(self.sql_server["login_timeout"])
+        self.sql_server["timeout"] = int(self.sql_server.get("timeout", "300"))
+        self.sql_server["login_timeout"] = int(self.sql_server.get("login_timeout", "60"))
 
     def _init_users(self):
         u_group: Group = self.keepass_db.find_groups(name="Utilisateurs", first=True)
@@ -70,10 +71,10 @@ class Settings:
 
             user["title"] = u_entry.title
 
-            for cust_str in ("x3_id", "msg_login", "superuser"):
-                user[cust_str] = val if not (val := u_entry.get_custom_property(cust_str)) is None else ""
+            for property in u_entry.custom_properties:
+                user[property] = val if not (val := u_entry.get_custom_property(property)) is None else ""
 
-            user["superuser"] = True if str(user["superuser"]).lower() == "true" else False
+            user["superuser"] = True if user.get("superuser", "").lower() == "true" else False
 
             self.users[user_key] = user
 

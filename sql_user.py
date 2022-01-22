@@ -26,6 +26,10 @@ class User:
         self.msg_login = self.dict.get("msg_login", "")
         self.superuser = self.dict.get("superuser", False)
 
+        self.other_attributes = [attr for attr in self.dict if not hasattr(self, attr)]
+        for attr in self.other_attributes:
+            setattr(self, attr, self.dict.get(attr, ""))
+
         if self.msg_login == "":
             self.msg_login = f"Bonjour {self.title.split(' ')[0]} !"
 

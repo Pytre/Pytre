@@ -1,4 +1,5 @@
 import os
+import typing
 from pathlib import Path
 
 import sql_user, sql_query
@@ -11,10 +12,11 @@ def main():
     my_user = sql_user.User()
     if my_user.is_authorized:
         print(my_user.msg_login)
+        queries = sql_query.get_queries(SETTINGS.queries_folder)
 
         continue_loop = True
         while continue_loop:
-            continue_loop = menu()
+            continue_loop = menu(queries)
             clear_console()
     else:
         print(
@@ -25,43 +27,39 @@ def main():
         )
 
 
-def menu():
-    sql_file = choose_file(SETTINGS.queries_folder)  # selection de la requête à utiliser
+def menu(queries: typing.List[sql_query.Query]):
+    query = choose_file(queries)  # selection de la requête à utiliser
     clear_console()
 
-    if sql_file == "":
+    if query == "":
         return False  # stopper si aucun fichier sélectionné
 
-    my_query = sql_query.Query(sql_file)
-
-    if input_param(my_query):
-        my_query.execute_cmd()
+    if input_param(query):
+        query.execute_cmd()
 
     input("Appuyer sur n'importe quelle touche pour continuer")
 
     return True
 
 
-def choose_file(folder):
-    files = [files for files in Path(folder).iterdir() if files.is_file() and files.suffix == ".sql"]
-
+def choose_file(queries: typing.List[sql_query.Query]):
     print(str("=") * 100 + f"\nListe des requêtes disponibles\n" + str("=") * 100 + "\n")
 
-    for i, file in enumerate(files, start=1):
-        print(f"{i} : {file.stem}")
+    for i, query in enumerate(queries, start=1):
+        print(f"{i} : {query.name} - {query.description}")
     print("\n0 : Quitter")
 
     while True:
         choice = input("\n" + str("=") * 100 + "\nMerci d'indiquer le numéro de la requête à executer : ")
         choice = int(choice)
-        if choice >= 0 and choice <= len(files):
+        if choice >= 0 and choice <= len(queries):
             if choice > 0:
-                file = files[choice - 1]
+                query = queries[choice - 1]
             else:
-                file = ""
+                query = ""
             break
 
-    return file
+    return query
 
 
 def input_param(query: sql_query.Query):
@@ -72,13 +70,13 @@ def input_param(query: sql_query.Query):
 
     params_number_not_hidden = 0
     if not params is None:
-        for p in params:
-            params_number_not_hidden += 1 if not params[p].is_hidden else 0
+        keys = [p for p in params if not params[p].is_hidden]
+        params_number_not_hidden = len(keys)
 
     if params_number_not_hidden == 0:
         print("pas de paramètre pour cette requête !")
 
-    for key in params:  # si pas de paramètres jamais executé
+    for key in keys:  # si pas de paramètres jamais executé
         if params[key].is_hidden:
             continue
 

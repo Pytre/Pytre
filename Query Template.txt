@@ -5,12 +5,16 @@ Pour info requete rajouter au début :
 /* Infos requête
 Code : xxxx
 Description : xxxxxx
+Hide : 0 / 1 / 2
 Debug : xxxxx
 */
 
 Le code est utilisé dans la liste des requetes, si pas renseigné alors le nom du fichier est utilisé
 La description est utlisé dans la liste des requetes
-L'info debug si elle est présente signale que la requête ne doit être montrer qu'aux "super utilisateurs"
+La valeur de hide défini qui peut voir la requête :
+	0 tout le monde (valeur par défaut),
+	1 les superusers,
+	2 personne (requête à usage interne pour Pytre)
 
 D'autres infos peuvent être ajoutée (comme une note de version) mais ne sont pas utilisées par Pytre
 

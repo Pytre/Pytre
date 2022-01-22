@@ -32,9 +32,12 @@ class Query:
         self.params_obj: typing.Dict[str, _Param] = self._init_params()
 
         self.name = self.infos.get("code", self.filename.stem)
-        self.for_debug = True if self.infos.get("debug") else False
-        if self.for_debug:
-            self.description = "(*) " + self.infos.get("description", "")
+
+        hide: str = self.infos.get("hide", "0")
+        self.hide: int = int(hide) if hide.isdigit() else 0
+
+        if self.hide:
+            self.description = "(" + "*" * self.hide + ") " + self.infos.get("description", "")
         else:
             self.description = self.infos.get("description", "")
 
@@ -673,7 +676,7 @@ def get_queries(folder) -> typing.List[Query]:
         if file.is_file() and file.suffix == ".sql":
             my_query = Query(file)
 
-            if not my_query.for_debug or USER.superuser:
+            if my_query.hide == 0 or (USER.superuser and my_query.hide == 1):
                 queries.append(my_query)
 
     queries.sort(key=lambda k: k.name)

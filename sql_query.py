@@ -1,3 +1,4 @@
+from enum import auto
 import re
 import typing
 from datetime import datetime
@@ -119,21 +120,24 @@ class Query:
 
         return True
 
-    def execute_cmd(self) -> bool:
+    def execute_cmd(self, file_output: bool = True) -> typing.Union[bool, str]:
         self.last_extracted_file = ""
         self.update_values()
 
         if self.values_ok():
             self.query_execute.cmd_template = self.cmd_template
             self.query_execute.cmd_parameters = self.cmd_params
-            extract_file = SETTINGS.extract_folder / (
-                f"{self.name}_{USER.x3_id.upper()}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-            )
+            if file_output:
+                extract_file = SETTINGS.extract_folder / (
+                    f"{self.name}_{USER.x3_id.upper()}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+                )
+            else:
+                extract_file = ""
 
             try:
                 result = self.query_execute.execute(extract_file)
-                self.last_extracted_file = extract_file
-                return result
+                self.last_extracted_file = extract_file if file_output else ""
+                return result[0] if file_output else result
             except pymssql._pymssql.OperationalError as err:
                 err_msg = str("=") * 50 + "\n"
                 err_msg += err.args[0][1].decode("utf-8") + "\n"
@@ -565,7 +569,7 @@ class _QueryExecute:
         self.parent.msg_list = []
         self.extract_file = extract_file
 
-        if self.cmd_template == "" or self.extract_file == "":
+        if self.cmd_template == "":
             return False
 
         starting_date = self._time_log()
@@ -589,7 +593,7 @@ class _QueryExecute:
                     return False
 
                 self._broadcast(self._time_log() + " - Début récupération des lignes...")
-                rows_count = self._extract_to_file(cursor)
+                rows_count, execute_output = self._extract_to_file(cursor)
 
                 ending_date = self._time_log()
                 self._broadcast(
@@ -603,11 +607,11 @@ class _QueryExecute:
                 else:
                     self._broadcast(f"Fichier extrait : aucune ligne de récupérée, pas de fichier\n" + str("=") * 50)
 
-        return rows_count
+        return rows_count, execute_output
 
     def _extract_to_file(self, cursor):
         if cursor is None:
-            return False
+            return 0, ""
 
         buffer_block_size = 50000  # nombre de lignes pour déclencher écriture dans fichier
         buffer = []
@@ -621,7 +625,9 @@ class _QueryExecute:
         for row_number, record in enumerate(cursor):  # parcours résultats
             line_buffer = self._sql_record_to_text(record)
             buffer.append(line_buffer)
-            if not row_number == 0 and (row_number + 1) % buffer_block_size == 0:  # écriture dans le fichier par blocs
+            if (
+                not self.extract_file == "" and not row_number == 0 and (row_number + 1) % buffer_block_size == 0
+            ):  # écriture dans le fichier par blocs
                 block_start = row_number + 1 - buffer_block_size + 1
                 block_end = row_number + 1
                 self._broadcast(
@@ -635,13 +641,16 @@ class _QueryExecute:
                 self._file_write(buffer)
                 buffer.clear()
 
-        if len(buffer) > 1:  # si buffer pas vide (et pas que entête) alors écrire ce qui reste
+        if (
+            not self.extract_file == "" and len(buffer) > 1
+        ):  # si buffer pas vide (et pas que entête) alors écrire ce qui reste
             self._broadcast(self._time_log() + f" - Ecriture des dernières lignes...")
             self._file_write(buffer)
             buffer.clear()
 
         self._broadcast(self._time_log() + f" - Ecriture finie")
-        return row_number + 1 if not row_number is None else 0
+        row_number = row_number + 1 if not row_number is None else 0
+        return row_number, buffer
 
     def _sql_record_to_text(self, record):
         line_buffer = ""
@@ -682,6 +691,29 @@ def get_queries(folder) -> typing.List[Query]:
     queries.sort(key=lambda k: k.name)
 
     return queries
+
+
+def create_user_in_settings():
+    sql_script = SETTINGS.queries_folder / "_add_user.sql"
+
+    if not USER.exist_in_settings:
+        my_query = Query(sql_script)
+        my_query.update_values()
+
+        _, sql_output = my_query.execute_cmd(False)
+        if len(sql_output) == 2:
+            user_infos = sql_output[1].split(SETTINGS.field_separator)
+
+            SETTINGS.create_user(
+                title=user_infos[0].title(),
+                username=USER._domain_and_name,
+                x3_id=user_infos[1],
+                msg_login="",
+                superuser="false",
+            )
+
+            global USER
+            USER.exist_in_settings = True
 
 
 if __name__ == "__main__":

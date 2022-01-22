@@ -99,6 +99,20 @@ class Settings:
             except FileExistsError:
                 self.extract_folder = Path.home()
 
+    def create_user(self, title: str, username: str, x3_id: str, msg_login: str = "", superuser: str = "false"):
+        group: Group = self.keepass_db.find_groups(name="Utilisateurs", first=True)
+
+        u_entry: Entry = self.keepass_db.add_entry(group, title, username, password="")
+        u_entry.set_custom_property("x3_id", x3_id)
+        u_entry.set_custom_property("msg_login", msg_login)
+        u_entry.set_custom_property("superuser", superuser)
+
+        self.keepass_db.save()
+        
+        # reinitialisation de la liste des utilisateurs pour la mettre à jour
+        self._init_users()
+        
+
 
 if __name__ == "__main__":
     my_settings = Settings()

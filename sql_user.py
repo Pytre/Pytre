@@ -18,6 +18,7 @@ class User:
             self._domain_and_name = self.name
 
         self.dict = USERS.get(self._domain_and_name, dict())
+        self.exist_in_settings = True if self.dict else False
         self.is_authorized = True if self.dict else False
 
         self.x3_id = self.dict.get("x3_id", "")

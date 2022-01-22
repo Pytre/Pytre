@@ -9,7 +9,7 @@ import sql_user, sql_query
 
 
 SETTINGS = sql_query.SETTINGS
-PYTRE_VERSION = "0.995"
+PYTRE_VERSION = "0.999"
 
 
 class App(tk.Tk):

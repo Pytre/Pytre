@@ -200,7 +200,7 @@ class _Param:
             infos = [m.strip() for m in re.split(r"\^{3,6}", infos) if m.strip()]
 
             ui_funcs = ("entry", "list", "check")
-            calc_funcs = ("fiscal_year", "month_end")
+            calc_funcs = ("user_info", "fiscal_year", "month_end")
 
             for info in infos:
                 info_lst = re.search(r"^(.*?)(?=\(|$)\(?(.*?)\)?$", info)
@@ -218,6 +218,9 @@ class _Param:
                     self._authorized_values(info_func, info_args)
 
     def _calc_func(self, func: str, func_args: str) -> str:
+        def user_info(attr: str) -> str:
+            return getattr(USER, attr)
+
         def fiscal_year(last_month: int, month_offset: int = 0, days_offset: int = 0) -> str:
             last_month = int(last_month)
             month_offset = int(month_offset)
@@ -242,7 +245,7 @@ class _Param:
 
             return datetime.strftime(my_date, self.converter.date_val_format)
 
-        self.func_dict = {"fiscal_year": fiscal_year, "month_end": month_end}
+        self.func_dict = {"user_info": user_info, "fiscal_year": fiscal_year, "month_end": month_end}
 
         my_args = func_args.lower().split(",") if func_args else None
         my_str = self.func_dict.get(func)(*my_args) if func in self.func_dict else self.display_value
@@ -680,7 +683,7 @@ def get_queries(folder) -> typing.List[Query]:
 
 if __name__ == "__main__":
     APP_PATH = SETTINGS.app_path
-    sql_script = SETTINGS.queries_folder / "ZGL.sql"
+    sql_script = SETTINGS.queries_folder / "_add_user.sql"
 
     my_query = Query(sql_script)
     my_query.update_values()

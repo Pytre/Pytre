@@ -43,6 +43,9 @@ Les types possibles sont :
 
 VAL_FORMULE : fonctions possibles pour valeur calculée d'un paramètre
 ---------------------------------------------------------------------
+- user_info(attribute) : récupération de l'attribut utilisateur définit par les settings
+		par exemple pour l'id de l'utilisateur dans X3 : "x3_id"
+
 - month_end(months_offset, days_offset) : décalage mois en fonction de la valeur months_offset
 		positionnement en fin de mois
 		puis déclage optionnel mois en fonction de months_offset

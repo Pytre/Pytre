@@ -297,7 +297,12 @@ class App(tk.Tk):
     def ui_params_update(self, params: typing.Dict[str, sql_query._Param] = None):
         self.ui_params_reset()
 
-        if params is None or params == {}:
+        params_number_not_hidden = 0
+        if not params is None:
+            for p in params:
+                params_number_not_hidden += 1 if not params[p].is_hidden else 0
+
+        if params_number_not_hidden == 0:
             self._ui_no_param_update()
         else:
             self._ui_with_params_update(params)
@@ -305,6 +310,10 @@ class App(tk.Tk):
     def _ui_with_params_update(self, params: typing.Dict[str, sql_query._Param] = None):
         for i, key in enumerate(params):
             my_widgets = {}
+
+            # ne pas afficher le paramètre si il doit être caché
+            if params[key].is_hidden:
+                continue
 
             my_widgets["label"] = ttk.Label(
                 self.params_inner, text=params[key].description + " : ", justify=tk.LEFT

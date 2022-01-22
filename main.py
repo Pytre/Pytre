@@ -70,10 +70,18 @@ def input_param(query: sql_query.Query):
     txt_header = f"{query.name} - {query.description}" if not query.description == "" else query.name
     print(str("=") * 100 + f"\nSaisie des paramètres pour {txt_header} :\n" + str("=") * 100)
 
-    if params == {}:
+    params_number_not_hidden = 0
+    if not params is None:
+        for p in params:
+            params_number_not_hidden += 1 if not params[p].is_hidden else 0
+
+    if params_number_not_hidden == 0:
         print("pas de paramètre pour cette requête !")
 
     for key in params:  # si pas de paramètres jamais executé
+        if params[key].is_hidden:
+            continue
+
         input_txt = params[key].description
         if not params[key].display_value == "":
             input_txt += f" (param.par défaut est {params[key].display_value})"

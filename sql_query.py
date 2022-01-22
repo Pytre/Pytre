@@ -173,6 +173,7 @@ class _Param:
         # infos additionnelles
         self.description = ""
         self.is_optional = False
+        self.is_hidden = False
         self.value_cmd = ""
         self.value_is_ok = False
         self.ui_control = ""
@@ -208,6 +209,8 @@ class _Param:
 
                 if info_func == "optional":
                     self.is_optional = True
+                elif info_func == "hide":
+                    self.is_hidden = True
                 elif info_func in calc_funcs:  # self.func_dict:
                     self.display_value = self._calc_func(info_func, info_args)
                 elif info_func in ui_funcs or info_func == "":

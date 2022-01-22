@@ -36,6 +36,7 @@ Les paramètres ne sont pas obligatoire et il peut n'y en avoir aucun.
 Les types de paramètres possibles sont au nombre de 3. Pour en indiquer plusieurs il convient d'utiliser la virgule entre chaque paramètre.
 Les types possibles sont :
 		OPTIONAL : si la variable n'est pas obligatoire alors indiquer "optional"
+		HIDE : si la variable ne doit pas être montrée / modifiée par l'utilisateur
 		VAL_FORMULE : valeur calculée à utiliser plutot que la VALEUR_DEFAUT (cf.ci-dessous)
 		UI_CTRL(LISTE_VAL_AUTORISEES) : UI_CTRL pour le type de contrôle à afficher et LISTE_VAL_AUTORISEES pour valeurs possibles (cf.ci-dessous)
 => nb : si pas de types mais juste des valeurs entre parentheses alors il est considéré qu'il s'agit d'une liste des valeures autorisées.

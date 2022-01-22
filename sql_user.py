@@ -20,7 +20,7 @@ class User:
         self.dict = USERS.get(self._domain_and_name, dict())
         self.is_authorized = True if self.dict else False
 
-        self.x3_login = self.dict.get("x3_login", "")
+        self.x3_id = self.dict.get("x3_id", "")
         self.msg_login = self.dict.get("msg_login", "")
         self.superuser = self.dict.get("superuser", False)
 

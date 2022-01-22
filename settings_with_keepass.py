@@ -65,7 +65,7 @@ class Settings:
             user = {}
             user_key = u_entry.username
 
-            for cust_str in ("x3_login", "msg_login", "superuser"):
+            for cust_str in ("x3_id", "msg_login", "superuser"):
                 user[cust_str] = val if not (val := u_entry.get_custom_property(cust_str)) is None else ""
 
             user["superuser"] = True if str(user["superuser"]).lower() == "true" else False

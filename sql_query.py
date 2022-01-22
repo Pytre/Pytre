@@ -124,7 +124,7 @@ class Query:
             self.query_execute.cmd_template = self.cmd_template
             self.query_execute.cmd_parameters = self.cmd_params
             extract_file = SETTINGS.extract_folder / (
-                f"{self.name}_{USER.x3_login.upper()}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+                f"{self.name}_{USER.x3_id.upper()}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
             )
 
             try:

@@ -367,8 +367,11 @@ class _Convert:
 
         def _str_to_date(self, string_to_convert: str) -> str:
             valid_format = ["%d%m%y", "%d%m%Y", "%d/%m/%y", "%d/%m/%Y"]
-            if not self.parent.date_txt_format in valid_format:
-                valid_format.append(self.parent.date_txt_format)
+
+            # mettre en premier format spécifié par les settings
+            if self.parent.date_txt_format in valid_format:
+                valid_format.remove(self.parent.date_txt_format)
+            valid_format.insert(0, self.parent.date_txt_format)
 
             for i, my_format in enumerate(valid_format):
                 try:
@@ -383,8 +386,11 @@ class _Convert:
 
         def _str_to_datetime(self, string_to_convert: str) -> str:
             valid_format = ["%d%m%y %H:%M:%S", "%d%m%Y %H:%M:%S", "%d/%m/%y %H:%M:%S", "%d/%m/%Y %H:%M:%S"]
-            if not self.parent.date_txt_format in valid_format:
-                valid_format.append(self.parent.datetime_txt_format)
+
+            # mettre en premier format spécifié par les settings
+            if self.parent.date_txt_format in valid_format:
+                valid_format.remove(self.parent.datetime_txt_format)
+            valid_format.insert(0, self.parent.datetime_txt_format)
 
             for i, my_format in enumerate(valid_format):
                 try:

@@ -556,7 +556,7 @@ class _QueryExecute:
             "database": SETTINGS.sql_server["database"],
             "timeout": SETTINGS.sql_server["timeout"],
             "login_timeout": SETTINGS.sql_server["login_timeout"],
-            "charset": "UTF-8",
+            "charset": SETTINGS.sql_server["charset"],
             "as_dict": False,
             "appname": None,
             "port": SETTINGS.sql_server["port"],
@@ -718,9 +718,10 @@ def create_user_in_settings():
 
 if __name__ == "__main__":
     APP_PATH = SETTINGS.app_path
-    sql_script = SETTINGS.queries_folder / "_add_user.sql"
+    sql_script = SETTINGS.queries_folder / "Z_TEST.sql"
 
     my_query = Query(sql_script)
     my_query.update_values()
     print(my_query.get_cmd_for_debug())
     print(my_query.cmd_params)
+    my_query.execute_cmd()

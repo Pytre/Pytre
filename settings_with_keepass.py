@@ -51,9 +51,12 @@ class Settings:
 
         self.sql_server["user"] = val if not (val := s_entry.username) is None else ""
         self.sql_server["password"] = val if not (val := s_entry.password) is None else ""
-        for cust_str in ("server", "host", "database", "port", "timeout", "login_timeout"):
+        for cust_str in ("server", "host", "database", "port", "timeout", "login_timeout", "charset"):
             self.sql_server[cust_str] = val if not (val := s_entry.get_custom_property(cust_str)) is None else ""
 
+        self.sql_server["charset"] = (
+            self.sql_server["charset"].upper() if not self.sql_server.get("charset", "") == "" else "UTF-8"
+        )
         self.sql_server["timeout"] = int(self.sql_server["timeout"])
         self.sql_server["login_timeout"] = int(self.sql_server["login_timeout"])
 

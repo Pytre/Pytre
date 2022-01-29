@@ -7,12 +7,12 @@ from pathlib import Path
 
 import pymssql
 
-import sql_user
+import settings
 
 
-SETTINGS = sql_user.SETTINGS
+SETTINGS = settings.Settings()
 PRINT_DATE_FORMAT = "%d/%m/%Y à %H:%M:%S"  # pour le format de la date pour les logs / output
-USER = sql_user.User()
+USER: settings.User = SETTINGS.user
 
 
 class Query:
@@ -707,13 +707,14 @@ def create_user_in_settings():
 
             SETTINGS.create_user(
                 title=user_infos[0].title(),
-                username=USER._domain_and_name,
+                username=USER.domain_and_name,
                 x3_id=user_infos[1],
                 msg_login="",
                 superuser="false",
             )
 
             USER.exist_in_settings = True
+            SETTINGS.update_user_infos()
 
 
 if __name__ == "__main__":

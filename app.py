@@ -5,7 +5,7 @@ import tkinter as tk
 from tkinter import Event, ttk, messagebox
 from threading import Thread
 
-import sql_user, sql_query
+import sql_query
 
 
 SETTINGS = sql_query.SETTINGS
@@ -16,7 +16,7 @@ class App(tk.Tk):
     def __init__(self):
         super().__init__()
 
-        self.user = sql_user.User()
+        self.user: sql_query.settings.User = SETTINGS.user
         self.queries: typing.List[sql_query.Query] = []
         self.query: sql_query.Query = sql_query.Query()
         self.params_widgets: typing.Dict[str, ttk.Widget] = {}
@@ -34,10 +34,8 @@ class App(tk.Tk):
             self.output_msg(str(self.user.msg_login) + "\n", "1.0", "1.0")
 
     def check_user_access(self):
-        if not self.user.exist_in_settings and self.user.domain == "PROSOL.PRI":
+        if not self.user.exist_in_settings and self.user.domain == SETTINGS.domain_user_auto_add:
             sql_query.create_user_in_settings()
-            self.user = sql_user.User()  # reinit de l'utilisateur après création
-            sql_query.USER = self.user  # reinit aussi dans sql_query
 
         if not self.user.is_authorized:
             messagebox.showerror(

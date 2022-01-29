@@ -1,15 +1,18 @@
 import os
 import typing
-from pathlib import Path
 
-import sql_user, sql_query
+import sql_query
 
 SETTINGS = sql_query.SETTINGS
 PRINT_DATE_FORMAT = "%d/%m/%Y at %H:%M:%S"  # pour le format de la date à écrire dans la console
 
 
 def main():
-    my_user = sql_user.User()
+    my_user: sql_query.settings.User = SETTINGS.user
+
+    if not my_user.exist_in_settings and my_user.domain == SETTINGS.domain_user_auto_add:
+        sql_query.create_user_in_settings()
+
     if my_user.is_authorized:
         print(my_user.msg_login)
         queries = sql_query.get_queries(SETTINGS.queries_folder)

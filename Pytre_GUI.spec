@@ -1,14 +1,19 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_all
 
-# datas = [('Requetes SQL\\*.sql', 'Requetes SQL'), ('res\\app.ico', 'res'), ('Pytre_X3_Settings.json', '.')]
-datas = [('res\\app.ico', 'res'), ('Pytre_X3_Settings.json', '.')]
+datas = [('res\\app.ico', 'res')]
 binaries = []
 hiddenimports = ['pymssql', 'uuid']
 
 tmp_ret = collect_all('pymssql')
-# datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 binaries += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+
+tmp_ret = collect_all('lxml')
+binaries += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+
+tmp_ret = collect_all('Cryptodome')
+binaries += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+
 
 block_cipher = None
 

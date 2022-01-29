@@ -137,7 +137,7 @@ class Query:
             try:
                 result = self.query_execute.execute(extract_file)
                 self.last_extracted_file = extract_file if file_output else ""
-                return result[0] if file_output else result
+                return result[0] if file_output and isinstance(result, tuple) else result
             except pymssql._pymssql.OperationalError as err:
                 err_msg = str("=") * 50 + "\n"
                 err_msg += err.args[0][1].decode("utf-8") + "\n"

@@ -3,6 +3,7 @@ import typing
 import subprocess
 import tkinter as tk
 from tkinter import Event, ttk, messagebox
+from os import startfile
 from threading import Thread
 
 import sql_query
@@ -432,14 +433,21 @@ class App(tk.Tk):
         self.logging_thread.start()
 
         self.lock_ui()
-        self.query.execute_cmd()
+        result = self.query.execute_cmd(file_output=True)
+        rows_number, output_file = result if isinstance(result, tuple) else (0, "")
         self.execute_thread_running = False
 
         while self.logging_thread_running:  # attendre l'écriture de tous les messages
             time.sleep(0.100)
 
         self.unlock_ui()
-        self.focus_force()  # faire clignoter le boutton dans barre des taches
+
+        if rows_number > 0:
+            answer = messagebox.askyesno("Fin execution", "Voulez vous ouvrir le fichier extrait ?")
+            if answer == True:
+                startfile(output_file)  # ouvrir le fichier
+        else:
+            messagebox.showinfo("Fin execution", "Aucune donnée extraite !")
 
     def lock_ui(self):
         self.btn_execute["state"] = "disable"

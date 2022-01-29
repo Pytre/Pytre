@@ -120,7 +120,7 @@ class Query:
 
         return True
 
-    def execute_cmd(self, file_output: bool = True) -> typing.Union[bool, str]:
+    def execute_cmd(self, file_output: bool = True) -> typing.Union[bool, tuple]:
         self.last_extracted_file = ""
         self.update_values()
 
@@ -137,7 +137,7 @@ class Query:
             try:
                 result = self.query_execute.execute(extract_file)
                 self.last_extracted_file = extract_file if file_output else ""
-                return result[0] if file_output and isinstance(result, tuple) else result
+                return result
             except pymssql._pymssql.OperationalError as err:
                 err_msg = str("=") * 50 + "\n"
                 err_msg += err.args[0][1].decode("utf-8") + "\n"
@@ -423,7 +423,11 @@ class _QueryExecute:
 
         self._broadcast(self._time_log() + f" - Ecriture finie")
         row_number = row_number + 1 if not row_number is None else 0
-        return row_number, buffer
+
+        if not self.extract_file == "":
+            return row_number, self.extract_file
+        else:
+            return row_number, buffer
 
     def _sql_record_to_text(self, record):
         line_buffer = ""

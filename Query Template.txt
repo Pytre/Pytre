@@ -60,6 +60,10 @@ VAL_FORMULE : fonctions possibles pour valeur calculée d'un paramètre
 		puis décalage optionnel mois
 		puis déclage optionnel jour
 
+- today(days_offset) : date du jour
+		date du jour
+		puis décalage optionnel en fonction de la valeur days_offset
+
 UI_CTRL(LISTE_VAL_AUTORISEES) : précisions sur le fonctionnement
 ----------------------------------------------------------------
 - UI_CTRL :

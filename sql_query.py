@@ -1,4 +1,3 @@
-from enum import auto
 import re
 import typing
 from datetime import datetime
@@ -207,7 +206,7 @@ class _Param:
             infos = [m.strip() for m in re.split(r"\^{3,6}", infos) if m.strip()]
 
             ui_funcs = ("entry", "list", "check")
-            calc_funcs = ("user_info", "fiscal_year", "month_end")
+            calc_funcs = ("user_info", "fiscal_year", "month_end", "today")
 
             for info in infos:
                 info_lst = re.search(r"^(.*?)(?=\(|$)\(?(.*?)\)?$", info)
@@ -252,7 +251,15 @@ class _Param:
 
             return datetime.strftime(my_date, self.converter.date_val_format)
 
-        self.func_dict = {"user_info": user_info, "fiscal_year": fiscal_year, "month_end": month_end}
+        def today(days_offset: int = 0) -> str:
+            days_offset = int(days_offset)
+
+            my_date = datetime.today()
+            my_date += relativedelta(days=days_offset)
+
+            return datetime.strftime(my_date, self.converter.date_val_format)
+
+        self.func_dict = {"user_info": user_info, "fiscal_year": fiscal_year, "month_end": month_end, "today": today}
 
         my_args = func_args.lower().split(",") if func_args else None
         my_str = self.func_dict.get(func)(*my_args) if func in self.func_dict else self.display_value

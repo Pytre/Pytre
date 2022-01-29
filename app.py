@@ -10,7 +10,7 @@ import sql_query
 
 
 SETTINGS = sql_query.SETTINGS
-PYTRE_VERSION = "0.999"
+PYTRE_VERSION = "1.000"
 
 
 class App(tk.Tk):

@@ -7,6 +7,7 @@ from os import startfile
 from threading import Thread
 
 import sql_query
+from sql_keywords import sql_keywords
 
 
 SETTINGS = sql_query.SETTINGS
@@ -778,6 +779,31 @@ class _DebugWindow:
             self.tabs["template"]["textbox"], self.query.cmd_template
         )
         self.output_to_textbox(self.tabs["params"]["textbox"], "\n".join(params_lst))
+
+        # coloration syntaxique
+        self.textbox_syntax_coloration(self.tabs["debug"]["textbox"])
+        self.textbox_syntax_coloration(self.tabs["template"]["textbox"])
+
+    def textbox_syntax_coloration(self, tbox: tk.Text):
+        tbox.tag_configure("keyword", foreground="blue")
+        words = sql_keywords
+
+        pos_len = tk.StringVar()
+        for word in words:
+            pos_start = "1.0"
+            while True:
+                # identification des mots clés par regex avec word boundaries
+                # nb : regex de la méthode textbox.search utilise TCL (et du coup pas \w mais \y)
+                pos_start = tbox.search(
+                    rf"\y{word}\y", index=pos_start, stopindex="end", nocase=1, regexp=True, count=pos_len
+                )
+
+                if not pos_start:
+                    break
+
+                pos_end = f"{pos_start} + {pos_len.get()} chars"
+                tbox.tag_add("keyword", pos_start, pos_end)
+                pos_start = f"{pos_start} + {int(pos_len.get()) + 1} chars"
 
     def output_to_textbox(self, ctrl: tk.Text, text: str = ""):
         ctrl["state"] = "normal"

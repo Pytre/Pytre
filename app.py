@@ -35,7 +35,10 @@ class App(tk.Tk):
             self.output_msg(str(self.user.msg_login) + "\n", "1.0", "1.0")
 
     def check_user_access(self):
-        if not self.user.exist_in_settings and self.user.domain == SETTINGS.domain_user_auto_add:
+        if (
+            not self.user.exist_in_settings
+            and self.user.domain == SETTINGS.domain_user_auto_add
+        ):
             sql_query.create_user_in_settings()
 
         if not self.user.is_authorized:
@@ -443,7 +446,9 @@ class App(tk.Tk):
         self.unlock_ui()
 
         if rows_number > 0:
-            answer = messagebox.askyesno("Fin execution", "Voulez vous ouvrir le fichier extrait ?")
+            answer = messagebox.askyesno(
+                "Fin execution", "Voulez vous ouvrir le fichier extrait ?"
+            )
             if answer == True:
                 startfile(output_file)  # ouvrir le fichier
         else:
@@ -590,14 +595,21 @@ class App(tk.Tk):
         self.query = None
         self.output_msg(msg_filter)
 
+        self.queries_tree.tag_configure("hidden", foreground="gray")
+
         for item in self.queries:
             if (
                 text_filter == ""
                 or not item.name.lower().find(text_filter.lower()) == -1
                 or not item.description.lower().find(text_filter.lower()) == -1
             ):
+                color = "none" if item.description[0:3] != "(*)" else "hidden"
                 self.queries_tree.insert(
-                    "", tk.END, values=(item.name, item.description), iid=id(item)
+                    "",
+                    tk.END,
+                    values=(item.name, item.description),
+                    iid=id(item),
+                    tags=color,
                 )
 
     def tree_selection_change(self, _: Event):

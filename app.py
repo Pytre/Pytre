@@ -11,7 +11,7 @@ from sql_keywords import sql_keywords
 
 
 SETTINGS = sql_query.SETTINGS
-PYTRE_VERSION = "1.002"
+PYTRE_VERSION = "1.003"
 
 
 class App(tk.Tk):

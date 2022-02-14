@@ -54,12 +54,22 @@ class App(tk.Tk):
                 self.btn_debug.grid_forget()
 
     def check_min_version(self):
-        if SETTINGS.min_version > PYTRE_VERSION:
+        if SETTINGS.min_version_settings > SETTINGS.settings_version:
             messagebox.showerror(
-                "Version obsolète",
+                "Version settings.db",
+                "Le fichier settings.db utilisé n'est pas à jour."
+                f"\n\n- Version utilisée : {SETTINGS.settings_version}"
+                f"\n- Version mini : {SETTINGS.min_version_settings}"
+                "\n\nMerci d'utiliser le fichier des settings à jour",
+            )
+            self.destroy()
+
+        if SETTINGS.min_version_pytre > PYTRE_VERSION:
+            messagebox.showerror(
+                "Version Pytre",
                 "Votre version de Pytre X3 n'est pas à jour."
                 f"\n\n- Version utilisée : {PYTRE_VERSION}"
-                f"\n- Version mini : {SETTINGS.min_version}"
+                f"\n- Version mini : {SETTINGS.min_version_pytre}"
                 "\n\nMerci d'utiliser une version à jour",
             )
             self.destroy()

@@ -1,5 +1,6 @@
 import sys, os, getpass
 import typing
+import json
 from pathlib import Path
 
 from pykeepass import PyKeePass
@@ -30,7 +31,9 @@ class Settings:
         self.keepass_db: PyKeePass = PyKeePass(keepass_file, password=keepass_pwd)
         self.app_path: Path = get_app_path()
 
-        self.min_version: str = ""  # version minimum requises
+        self.min_version_settings: str = "9999"  # version minimum requises pour les settings
+        self.min_version_pytre: str = "9.999"  # version minimum requises pour Pytre
+        self.settings_version: str = ""  # version actuelle des settings
         self.sql_server: dict = {}  # paramètres de connection au serveur
         self.user: User = User(name=user_name, domain=user_domain)  # objet utilisateur
         self.field_separator: str = ""  # délimitateur de champs pour exports
@@ -90,6 +93,7 @@ class Settings:
             "DATE_FORMAT",
             "QUERIES_FOLDER",
             "DOMAIN_USER_AUTO_ADD",
+            "SETTINGS_VERSION",
         ):
             info: Entry = self.keepass_db.find_entries(title=cust_str, group=p_group, first=True)
             infos[cust_str] = info.username
@@ -99,12 +103,15 @@ class Settings:
         self.date_format = infos["DATE_FORMAT"]
         self.queries_folder = Path(infos["QUERIES_FOLDER"])
         self.domain_user_auto_add = infos["DOMAIN_USER_AUTO_ADD"]
+        self.settings_version = infos["SETTINGS_VERSION"]
 
     def _init_min_version(self) -> None:
-        file = self.queries_folder / "_version_min.txt"
+        file = self.queries_folder / "_version_min.json"
         if file.exists():
             with open(file, mode="r", encoding="utf-8") as f:
-                self.min_version = f.readlines()[0]
+                json_dict = json.load(f)
+                self.min_version_pytre = json_dict["pytre_x3"]
+                self.min_version_settings = json_dict["settings"]
 
     def _init_extract_folder(self) -> None:
         self.extract_folder = Path.home() / "Pytre X3 - Extract"
@@ -177,7 +184,10 @@ if __name__ == "__main__":
     my_settings = Settings(user_name="ebrun", user_domain="PROSOL.PRI")
 
     print(my_settings.sql_server)
-    print(my_settings.min_version)
+
+    print(f"Version mini Pytre : {my_settings.min_version_pytre}")
+    print(f"Version mini Settings : {my_settings.min_version_settings}")
+    print(f"Version utilisée Settings : {my_settings.settings_version}")
 
     if my_settings.user.domain:
         print(f"{my_settings.user.name} sur domaine {my_settings.user.domain} :")

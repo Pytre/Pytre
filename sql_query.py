@@ -444,7 +444,7 @@ class _QueryExecute:
     def _broadcast(self, msg_to_display: str) -> None:
         self.parent._broadcast(msg_to_display)
 
-    def _file_write(self, list_to_write: typing.List[str], encoding_format: str = "utf-8") -> None:  # Ecrire texte
+    def _file_write(self, list_to_write: typing.List[str], encoding_format: str = "latin_1") -> None:  # Ecrire texte
         filename = self.extract_file
         with open(filename, mode="a", encoding=encoding_format) as f:
             f.write("\n".join(list_to_write) + "\n")  # écriture du buffer
@@ -496,10 +496,10 @@ def create_user_in_settings():
 
 if __name__ == "__main__":
     APP_PATH = SETTINGS.app_path
-    sql_script = SETTINGS.queries_folder / "Z_TEST.sql"
+    sql_script = SETTINGS.queries_folder / "ZGENDOC.sql"  # ZGL_BUG_Encodage   ZGENDOC
 
     my_query = Query(sql_script)
     my_query.update_values()
     print(my_query.get_cmd_for_debug())
     print(my_query.cmd_params)
-    my_query.execute_cmd()
+    my_query.execute_cmd(file_output=True)

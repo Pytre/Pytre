@@ -330,12 +330,16 @@ class App(tk.Tk):
             my_widgets = {}
 
             # ne pas afficher le paramètre si il doit être caché
-            if params[key].is_hidden:
+            # et que l'utilisateur n'est pas un super utilisateur
+            if params[key].is_hidden and not self.user.superuser:
                 continue
 
             my_widgets["label"] = ttk.Label(
                 self.params_inner, text=params[key].description + " : ", justify=tk.LEFT
             )
+            if params[key].is_hidden:
+                my_widgets["label"]["text"] = "(*) " + params[key].description + " : "
+                my_widgets["label"]["foreground"] = "red"
 
             my_widgets["entry_var"] = tk.StringVar(
                 name=key, value=params[key].display_value
@@ -805,7 +809,12 @@ class _DebugWindow:
                 # identification des mots clés par regex avec word boundaries
                 # nb : regex de la méthode textbox.search utilise TCL (et du coup pas \w mais \y)
                 pos_start = tbox.search(
-                    rf"\y{word}\y", index=pos_start, stopindex="end", nocase=1, regexp=True, count=pos_len
+                    rf"\y{word}\y",
+                    index=pos_start,
+                    stopindex="end",
+                    nocase=1,
+                    regexp=True,
+                    count=pos_len,
                 )
 
                 if not pos_start:

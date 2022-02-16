@@ -67,20 +67,21 @@ def choose_file(queries: typing.List[sql_query.Query]):
 
 def input_param(query: sql_query.Query):
     params = query.params_obj
+    my_user: sql_query.settings.User = SETTINGS.user
 
     txt_header = f"{query.name} - {query.description}" if not query.description == "" else query.name
     print(str("=") * 100 + f"\nSaisie des paramètres pour {txt_header} :\n" + str("=") * 100)
 
     params_number_not_hidden = 0
     if not params is None:
-        keys = [p for p in params if not params[p].is_hidden]
+        keys = [p for p in params if not params[p].is_hidden or my_user.superuser]
         params_number_not_hidden = len(keys)
 
     if params_number_not_hidden == 0:
         print("pas de paramètre pour cette requête !")
 
     for key in keys:  # si pas de paramètres jamais executé
-        if params[key].is_hidden:
+        if params[key].is_hidden and not my_user.superuser:
             continue
 
         input_txt = params[key].description

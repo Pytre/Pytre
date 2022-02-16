@@ -444,10 +444,14 @@ class _QueryExecute:
     def _broadcast(self, msg_to_display: str) -> None:
         self.parent._broadcast(msg_to_display)
 
-    def _file_write(self, list_to_write: typing.List[str], encoding_format: str = "latin_1") -> None:  # Ecrire texte
+    def _file_write(self, list_to_write: typing.List[str], encoding_format: str = "latin-1") -> None:  # Ecrire texte
         filename = self.extract_file
-        with open(filename, mode="a", encoding=encoding_format) as f:
-            f.write("\n".join(list_to_write) + "\n")  # écriture du buffer
+        try:
+            with open(filename, mode="a", encoding=encoding_format) as f:
+                f.write("\n".join(list_to_write) + "\n")  # écriture du buffer
+        except UnicodeEncodeError:
+            with open(filename, mode="a", encoding="utf-8") as f:
+                f.write("\n".join(list_to_write) + "\n")  # écriture du buffer
 
     def _time_log(self):
         return datetime.now().strftime(self.print_date_format)
@@ -496,7 +500,7 @@ def create_user_in_settings():
 
 if __name__ == "__main__":
     APP_PATH = SETTINGS.app_path
-    sql_script = SETTINGS.queries_folder / "ZGENDOC.sql"  # ZGL_BUG_Encodage   ZGENDOC
+    sql_script = SETTINGS.queries_folder / "ZGL_BUG_Encodage.sql"  # ZGL_BUG_Encodage   ZGENDOC
 
     my_query = Query(sql_script)
     my_query.update_values()

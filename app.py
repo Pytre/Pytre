@@ -90,8 +90,9 @@ class App(tk.Tk):
         icon_file = SETTINGS.app_path / "res" / "app.ico"
         self.iconbitmap(default=icon_file)
 
-        self.minsize(width=800, height=650)
+        self.minsize(width=800, height=600)
         self.resizable(True, True)
+        self.geometry("975x675")
 
         self.setup_ui_paned_window()
         self.setup_ui_left_frame()

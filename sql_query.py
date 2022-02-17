@@ -196,6 +196,9 @@ class _Param:
         self.display_value = self.authorized_values.get(self.display_value, self.display_value)
         self.display_value = self.converter.to_display(self.type_name, self.display_value)
 
+        # mettre à jour la val pour cmd => sinon risque que value_is_ok ne soit jamais mis à jour
+        self.update_value_cmd()
+
     def _get_type_args(self) -> list:
         str_type_args = re.search(r"^[^(=]+\(([^)]+)\)", self.sql_declare)
         str_type_args = str_type_args[1].lower().split(",") if str_type_args else []

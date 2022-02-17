@@ -1,0 +1,11 @@
+__pycache__/
+.env/
+build/
+dist/
+Requetes SQL/
+app.build/
+app.dist/
+app.onefile-build/
+
+Pytre_X3_Settings.db
+app.exe

@@ -51,7 +51,6 @@ class App(tk.Tk):
         else:
             if not self.user.superuser:
                 self.queries_btn_folder.grid_forget()
-                self.btn_debug.grid_forget()
 
     def check_min_version(self):
         if SETTINGS.min_version_settings > SETTINGS.settings_version:

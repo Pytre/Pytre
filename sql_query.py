@@ -235,13 +235,18 @@ class _Param:
         def user_info(attr: str) -> str:
             return getattr(USER, attr)
 
-        def fiscal_year(last_month: int, month_offset: int = 0, days_offset: int = 0) -> str:
+        def fiscal_year(
+            last_month: int, month_offset: int = 0, days_offset: int = 0, today_mth_offset: int = 0
+        ) -> str:
             last_month = int(last_month)
             month_offset = int(month_offset)
             days_offset = int(days_offset)
+            today_mth_offset = int(today_mth_offset)
 
-            my_year = datetime.today().year
-            my_year += 1 if datetime.today().month > last_month else 0
+            date_ref = datetime.today() + relativedelta(month=-today_mth_offset)
+            my_year = date_ref.year
+            my_year += 1 if date_ref.month > last_month else 0
+
             my_date = (
                 datetime(my_year, last_month, 1)
                 + relativedelta(months=month_offset + 1)

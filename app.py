@@ -307,7 +307,7 @@ class App(tk.Tk):
     def ui_params_reset(self):
         for param_key in self.params_widgets:
             for widget_key in self.params_widgets[param_key]:
-                if not widget_key == "entry_var":
+                if widget_key != "entry_var":
                     self.params_widgets[param_key][widget_key].destroy()
 
         self.params_widgets = {}
@@ -316,7 +316,7 @@ class App(tk.Tk):
         self.ui_params_reset()
 
         params_number_not_hidden = 0
-        if not params is None:
+        if params is not None:
             for p in params:
                 params_number_not_hidden += 1 if not params[p].is_hidden else 0
 
@@ -477,9 +477,8 @@ class App(tk.Tk):
         self.queries_tree["selectmode"] = "none"
         for key in self.params_widgets:
             if (
-                not (widget_entry := self.params_widgets[key].get("entry", None))
-                is None
-            ):
+                widget_entry := self.params_widgets[key].get("entry", None)
+            ) is not None:
                 widget_entry["state"] = "disable"
 
     def unlock_ui(self):
@@ -490,9 +489,8 @@ class App(tk.Tk):
         self.queries_tree["selectmode"] = "browse"
         for key in self.params_widgets:
             if (
-                not (widget_entry := self.params_widgets[key].get("entry", None))
-                is None
-            ):
+                widget_entry := self.params_widgets[key].get("entry", None)
+            ) is not None:
                 widget_entry["state"] = (
                     "enable"
                     if not isinstance(widget_entry, ttk.Combobox)
@@ -560,7 +558,7 @@ class App(tk.Tk):
             w_entry_var = self.params_widgets[key].get("entry_var", None)
             w_check = self.params_widgets[key].get("check", None)
 
-            if not w_entry_var is None:
+            if w_entry_var is not None:
                 self.query.params_obj[key].display_value = w_entry_var.get()
                 try:
                     self.query.update_values(key)
@@ -615,8 +613,8 @@ class App(tk.Tk):
         for item in self.queries:
             if (
                 text_filter == ""
-                or not item.name.lower().find(text_filter.lower()) == -1
-                or not item.description.lower().find(text_filter.lower()) == -1
+                or item.name.lower().find(text_filter.lower()) != -1
+                or item.description.lower().find(text_filter.lower()) != -1
             ):
                 color = "none" if item.description[0:3] != "(*)" else "hidden"
                 self.queries_tree.insert(
@@ -669,7 +667,7 @@ class App(tk.Tk):
                 if widget is self.params_widgets[param_key][widget_key]:
                     key = param_key
                     break
-            if not key == "":
+            if key != "":
                 break
 
         self._param_input(key)
@@ -692,7 +690,7 @@ class App(tk.Tk):
             # verif si affichage correcte, sinon MAJ (cas des saisies dates notamment)
             if self.params_widgets[key]["entry"].widgetName == "ttk::entry":
                 correct_display = self.query.params_obj[key].display_value
-                if not self.params_widgets[key]["entry_var"].get() == correct_display:
+                if self.params_widgets[key]["entry_var"].get() != correct_display:
                     self.params_widgets[key]["entry_var"].set(correct_display)
 
         except ValueError as e:

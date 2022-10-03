@@ -54,14 +54,14 @@ class Settings:
         s_group = self.keepass_db.find_groups(name="Serveurs", first=True)
         s_entry: Entry = self.keepass_db.find_entries(title="Default", group=s_group, first=True)
 
-        self.sql_server["user"] = val if not (val := s_entry.username) is None else ""
-        self.sql_server["password"] = val if not (val := s_entry.password) is None else ""
+        self.sql_server["user"] = val if (val := s_entry.username) is not None else ""
+        self.sql_server["password"] = val if (val := s_entry.password) is not None else ""
 
         for property in s_entry.custom_properties:
-            self.sql_server[property] = val if not (val := s_entry.get_custom_property(property)) is None else ""
+            self.sql_server[property] = val if (val := s_entry.get_custom_property(property)) is not None else ""
 
         self.sql_server["charset"] = (
-            self.sql_server["charset"].upper() if not self.sql_server.get("charset", "") == "" else "UTF-8"
+            self.sql_server["charset"].upper() if self.sql_server.get("charset", "") != "" else "UTF-8"
         )
         self.sql_server["timeout"] = int(self.sql_server.get("timeout", "300"))
         self.sql_server["login_timeout"] = int(self.sql_server.get("login_timeout", "60"))
@@ -71,12 +71,12 @@ class Settings:
         u_entry: Entry = self.keepass_db.find_entries(username=self.user.domain_and_name, group=u_group, first=True)
         user_infos_dict = {}
 
-        if not u_entry is None:
+        if u_entry is not None:
             user_infos_dict["username"] = u_entry.username
             user_infos_dict["title"] = u_entry.title
 
             for property in u_entry.custom_properties:
-                user_infos_dict[property] = val if not (val := u_entry.get_custom_property(property)) is None else ""
+                user_infos_dict[property] = val if (val := u_entry.get_custom_property(property)) is not None else ""
 
             # pour l'info superuser, conversion string en bool
             user_infos_dict["superuser"] = True if user_infos_dict.get("superuser", "").lower() == "true" else False
@@ -106,9 +106,9 @@ class Settings:
         self.settings_version = infos["SETTINGS_VERSION"]
 
     def _init_min_version(self) -> None:
-        file = self.queries_folder / "_version_min.json"
-        if file.exists():
-            with open(file, mode="r", encoding="utf-8") as f:
+        file_src = self.queries_folder / "_version_min.json"
+        if file_src.exists():
+            with open(file_src, mode="r", encoding="utf-8") as f:
                 json_dict = json.load(f)
                 self.min_version_pytre = json_dict["pytre_x3"]
                 self.min_version_settings = json_dict["settings"]

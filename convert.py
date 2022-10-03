@@ -63,10 +63,10 @@ class _ToCmd:
     def _str_to_bit(self, string_to_convert: str) -> int:
         try:
             value = int(string_to_convert)
-            if not value == 0 and not value == 1:
+            if value != 0 and value != 1:
                 raise ValueError(f"Erreur valeur, {string_to_convert} ne peut être que 0 ou 1")
         except ValueError:
-            if not value == 0 and not value == 1:
+            if value != 0 and value != 1:
                 raise ValueError(f"{string_to_convert} ne peut être que 0 ou 1")
             else:
                 raise ValueError(f"{string_to_convert} n'est pas un nombre entier valide")
@@ -122,7 +122,7 @@ class _ToCmd:
     def _str_to_nvarchar(self, string_to_convert: str, type_args: typing.List[str] = []) -> str:
         max_size = 255 if type_args[0] == "max" or type_args == [] else int(type_args[0])
 
-        if not len(string_to_convert) <= max_size:
+        if len(string_to_convert) > max_size:
             raise ValueError(f"{string_to_convert} a plus de charactères qu'autorisés (max : {max_size})")
 
         return string_to_convert
@@ -130,7 +130,7 @@ class _ToCmd:
     def _str_tochar(self, string_to_convert: str, params: typing.List[str] = ["0"]) -> str:
         size = int(params[0])
 
-        if not len(string_to_convert) == size:
+        if len(string_to_convert) != size:
             raise ValueError(f"{string_to_convert} n'est pas de la bonne taille ({size})")
 
         return string_to_convert

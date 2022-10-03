@@ -62,10 +62,10 @@ class Query:
             r"^\/\*[^\n]*?\n(.*?)\n^\*\/", self.file_content, re.MULTILINE | re.DOTALL
         )  # récupération des infos d'entête de la requete (premier bloc de commentaires)
 
-        if not regex_match is None:
+        if regex_match is not None:
             for line in regex_match.group(1).splitlines():
                 regex_infos = re.search(r"^([^:]*?)\s*:\s*(.*$)", line)
-                if not regex_infos is None:
+                if regex_infos is not None:
                     info_key = regex_infos.group(1).lower()
                     info_value = regex_infos.group(2)
                     infos[info_key] = info_value  # rajout dans un dictionnaire de l'info
@@ -76,7 +76,7 @@ class Query:
         regex_match = re.search(r"^(DECLARE[^;]*;)", self.file_content, re.MULTILINE | re.DOTALL)  # section DECLARE
 
         params = {}
-        params_txt = regex_match.group(1) if not regex_match is None else ""
+        params_txt = regex_match.group(1) if regex_match is not None else ""
         for line in params_txt.splitlines():
             if line[0:1] == "@":
                 my_param = _Param(line)
@@ -87,7 +87,7 @@ class Query:
 
     def _init_raw_cmd(self) -> str:
         regex_match = re.search(r"^DECLARE[^;]*;[\s]*(.*)", self.file_content, re.MULTILINE | re.DOTALL)
-        raw_cmd = regex_match.group(1) if not regex_match is None else self.file_content
+        raw_cmd = regex_match.group(1) if regex_match is not None else self.file_content
         return raw_cmd
 
     def _init_template_cmd(self) -> str:
@@ -103,7 +103,7 @@ class Query:
         """
         If key is none then update all key
         """
-        my_list = [key] if not key is None else self.params_obj.keys()
+        my_list = [key] if key is not None else self.params_obj.keys()
 
         for key in my_list:
             param = self.params_obj[key]
@@ -112,7 +112,7 @@ class Query:
         return True
 
     def values_ok(self, key: str = None) -> bool:
-        my_list = [key] if not key is None else self.params_obj.keys()
+        my_list = [key] if key is not None else self.params_obj.keys()
 
         for key in my_list:
             if self.params_obj[key].value_is_ok == False:
@@ -281,7 +281,7 @@ class _Param:
             key_val = arg.split(":")
             key = key_val[0].strip()
 
-            if not ctrl == "check":
+            if ctrl != "check":
                 val = key_val[1].strip() if len(key_val) > 1 else key
             else:
                 val = "on" if i == 0 else "off"
@@ -293,8 +293,8 @@ class _Param:
         self.value_cmd = ""
         val_to_test = self.display_value
 
-        if not self.authorized_values == {}:
-            if not val_to_test in self.authorized_values.values():
+        if self.authorized_values != {}:
+            if val_to_test not in self.authorized_values.values():
                 raise ValueError(
                     f"{val_to_test}, ne fait pas partie des valeurs autorisées : "
                     + ", ".join(self.authorized_values.values())
@@ -308,7 +308,7 @@ class _Param:
             self.value_cmd = self.converter.to_cmd(self.type_name, val_to_test, self.type_args)
 
             # modif valeur affichage pour dates qui peuvent être saisie sur un format different que voulue
-            if self.type_name in ("date", "datetime") and not self.display_value == "":
+            if self.type_name in ("date", "datetime") and self.display_value != "":
                 self.display_value = self.converter.to_display(self.type_name, self.value_cmd)
 
         self.value_is_ok = True
@@ -402,7 +402,7 @@ class _QueryExecute:
             line_buffer = self._sql_record_to_text(record)
             buffer.append(line_buffer)
             if (
-                not self.extract_file == "" and not row_number == 0 and (row_number + 1) % buffer_block_size == 0
+                self.extract_file != "" and row_number != 0 and (row_number + 1) % buffer_block_size == 0
             ):  # écriture dans le fichier par blocs
                 block_start = row_number + 1 - buffer_block_size + 1
                 block_end = row_number + 1
@@ -418,16 +418,16 @@ class _QueryExecute:
                 buffer.clear()
 
         if (
-            not self.extract_file == "" and len(buffer) > 1
+            self.extract_file != "" and len(buffer) > 1
         ):  # si buffer pas vide (et pas que entête) alors écrire ce qui reste
             self._broadcast(self._time_log() + f" - Ecriture des dernières lignes...")
             self._file_write(buffer)
             buffer.clear()
 
         self._broadcast(self._time_log() + f" - Ecriture finie")
-        row_number = row_number + 1 if not row_number is None else 0
+        row_number = row_number + 1 if row_number is not None else 0
 
-        if not self.extract_file == "":
+        if self.extract_file != "":
             return row_number, self.extract_file
         else:
             return row_number, buffer
@@ -439,7 +439,7 @@ class _QueryExecute:
             value = record[j]
             value_txt = self.converter.from_result(value)
             line_buffer += value_txt
-            if not j == len(record) - 1:
+            if j != len(record) - 1:
                 line_buffer += self.field_separator
 
         return line_buffer

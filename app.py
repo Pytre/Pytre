@@ -48,6 +48,7 @@ class App(tk.Tk):
                 "Désolé, vous n'êtes pas dans liste des utilisateurs autorisées !",
             )
             self.destroy()
+            self.quit()
         else:
             if not self.user.superuser:
                 self.queries_btn_folder.grid_forget()
@@ -62,6 +63,7 @@ class App(tk.Tk):
                 "\n\nMerci d'utiliser le fichier des settings à jour",
             )
             self.destroy()
+            self.quit()
 
         if SETTINGS.min_version_pytre > PYTRE_VERSION:
             messagebox.showerror(

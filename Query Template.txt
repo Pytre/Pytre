@@ -55,7 +55,8 @@ VAL_FORMULE : fonctions possibles pour valeur calculée d'un paramètre
 		puis déclage optionnel mois en fonction de months_offset
 		puis décalage optionnel jour
 
-- fiscal_year(last_month, months_offset, days_offset) : fin de l'exercice fiscal avec last_month pour le numéro du mois de cloture
+- fiscal_year(last_month, months_offset, days_offset, today_mth_offset) : fin de l'exercice fiscal avec last_month pour le numéro du mois de cloture
+		à partir de la date du jour retraitée si renseigné décalage en fonction de la valeur de today_mth_offset
 		positionnement à la fin de l'exercice fiscal en cours (en fonction du mois de clôture)
 		puis décalage optionnel mois
 		puis déclage optionnel jour

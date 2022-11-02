@@ -243,7 +243,7 @@ class _Param:
             days_offset = int(days_offset)
             today_mth_offset = int(today_mth_offset)
 
-            date_ref = datetime.today() + relativedelta(month=-today_mth_offset)
+            date_ref = datetime.today() + relativedelta(months=-today_mth_offset)
             my_year = date_ref.year
             my_year += 1 if date_ref.month > last_month else 0
 

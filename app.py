@@ -27,33 +27,41 @@ class App(tk.Tk):
         self.setup_ui()
         self.setup_events_binds()
 
-        self.check_user_access()
-        self.check_min_version()
+        if self.check_user_access() is False:
+            return
+
+        if self.check_min_version() is False:
+            return
 
         self.refresh_queries()
 
         if self.user.msg_login:
             self.output_msg(str(self.user.msg_login) + "\n", "1.0", "1.0")
 
-    def check_user_access(self):
+    def check_user_access(self) -> bool:
         if (
             not self.user.exist_in_settings
             and self.user.domain == SETTINGS.domain_user_auto_add
         ):
-            sql_query.create_user_in_settings()
+            # sql_query.create_user_in_settings()
+            pass
 
         if not self.user.is_authorized:
             messagebox.showerror(
                 "Erreur",
-                "Désolé, vous n'êtes pas dans liste des utilisateurs autorisées !",
+                "Vous n'êtes pas dans liste des utilisateurs autorisées !"
+                + "\nDonnées d'identification :"
+                + f"\n- User : {self.user.name}"
+                + f"\n- Domain : {self.user.domain}",
             )
             self.destroy()
-            self.quit()
+            return False
         else:
             if not self.user.superuser:
                 self.queries_btn_folder.grid_forget()
+            return True
 
-    def check_min_version(self):
+    def check_min_version(self) -> bool:
         if SETTINGS.min_version_settings > SETTINGS.settings_version:
             messagebox.showerror(
                 "Version settings.db",
@@ -63,7 +71,7 @@ class App(tk.Tk):
                 "\n\nMerci d'utiliser le fichier des settings à jour",
             )
             self.destroy()
-            self.quit()
+            return False
 
         if SETTINGS.min_version_pytre > PYTRE_VERSION:
             messagebox.showerror(
@@ -74,6 +82,9 @@ class App(tk.Tk):
                 "\n\nMerci d'utiliser une version à jour",
             )
             self.destroy()
+            return False
+
+        return True
 
     # ------------------------------------------------------------------------------------------
     # Définition des styles

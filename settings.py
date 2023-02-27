@@ -68,7 +68,12 @@ class Settings:
 
     def update_user_infos(self) -> None:
         u_group: Group = self.keepass_db.find_groups(name="Utilisateurs", first=True)
-        u_entry: Entry = self.keepass_db.find_entries(username=self.user.domain_and_name, group=u_group, first=True)
+
+        u_entry: Entry = None
+        for u_entry in self.keepass_db.find_entries(username=r".*", group=u_group, regex=True):
+            if u_entry.username.lower() == self.user.domain_and_name.lower():
+                break
+
         user_infos_dict = {}
 
         if u_entry is not None:

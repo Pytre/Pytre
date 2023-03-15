@@ -73,6 +73,8 @@ class Settings:
         for u_entry in self.keepass_db.find_entries(username=r".*", group=u_group, regex=True):
             if u_entry.username.lower() == self.user.domain_and_name.lower():
                 break
+        else:
+            u_entry = None
 
         user_infos_dict = {}
 

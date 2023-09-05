@@ -6,6 +6,7 @@ from tkinter import Event, ttk, messagebox
 from os import startfile
 from threading import Thread
 
+import utils
 import sql_query
 from sql_keywords import sql_keywords
 
@@ -37,6 +38,8 @@ class App(tk.Tk):
 
         if self.user.msg_login:
             self.output_msg(str(self.user.msg_login) + "\n", "1.0", "1.0")
+
+        self.extract_folder_cleaning()
 
     def check_user_access(self) -> bool:
         if not self.user.exist_in_settings and self.user.domain == SETTINGS.domain_user_auto_add:
@@ -82,6 +85,31 @@ class App(tk.Tk):
             return False
 
         return True
+
+    def extract_folder_cleaning(self):
+        extract_folder = SETTINGS.extract_folder
+
+        files = utils.old_files_list(extract_folder)  # liste des fichiers à supprimer
+        files_nb = len(files)
+        if files_nb:
+            files_size = round(sum([size.stat().st_size for size in files]) / 1024**2, 2)
+            files_date = utils.most_recent_files(files)
+
+            answer = messagebox.askyesno(
+                "Suppression des anciennes extractions",
+                f"Dans le dossier des extractions il existe {files_nb} fichiers "
+                + f"datant d'avant le {files_date.strftime('%d/%m/%Y')}. "
+                + f"Ils vont être supprimés pour libérer {files_size} Mo d'espace disque.\n\n"
+                + "Vous pouvez choisir de ne pas les supprimer mais ce message reviendra à chaque ouverture.\n\n"
+                + "Si des fichiers doivent être conservés cliquer sur non et changer les de répertoire "
+                + "ou déplacer les dans un sous-répertoire.",
+                icon="warning",
+            )
+
+            if answer:
+                utils.old_files_delete(files)
+            else:
+                self.open_folder(extract_folder)
 
     # ------------------------------------------------------------------------------------------
     # Définition des styles

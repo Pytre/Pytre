@@ -115,7 +115,7 @@ class Query:
         my_list = [key] if key is not None else self.params_obj.keys()
 
         for key in my_list:
-            if self.params_obj[key].value_is_ok == False:
+            if not self.params_obj[key].value_is_ok:
                 return False
 
         return True
@@ -144,7 +144,7 @@ class Query:
                 self._broadcast(err_msg)
                 return False
         else:
-            err_msg = f"\nImpossible d'executer des paramètres sont invalides"
+            err_msg = "\nImpossible d'executer des paramètres sont invalides"
             self._broadcast(err_msg)
             return False
 
@@ -156,7 +156,7 @@ class Query:
             else:
                 value = str(v)
 
-            cmd_debug = re.sub(fr"%\({k}\)s", fr"{value}", cmd_debug)
+            cmd_debug = re.sub(rf"%\({k}\)s", rf"{value}", cmd_debug)
 
         return cmd_debug
 
@@ -243,7 +243,7 @@ class _Param:
             days_offset = int(days_offset)
             today_mth_offset = int(today_mth_offset)
 
-            date_ref = datetime.today() + relativedelta(months=-today_mth_offset)
+            date_ref = datetime.today() + relativedelta(months=today_mth_offset)
             my_year = date_ref.year
             my_year += 1 if date_ref.month > last_month else 0
 
@@ -386,7 +386,7 @@ class _QueryExecute:
                 if rows_count > 0:
                     self._broadcast(f"Fichier extrait : {self.extract_file}\n" + str("=") * 50)
                 else:
-                    self._broadcast(f"Fichier extrait : aucune ligne de récupérée, pas de fichier\n" + str("=") * 50)
+                    self._broadcast("Fichier extrait : aucune ligne de récupérée, pas de fichier\n" + str("=") * 50)
 
         return rows_count, execute_output
 
@@ -425,11 +425,11 @@ class _QueryExecute:
         if (
             self.extract_file != "" and len(buffer) > 1
         ):  # si buffer pas vide (et pas que entête) alors écrire ce qui reste
-            self._broadcast(self._time_log() + f" - Ecriture des dernières lignes...")
+            self._broadcast(self._time_log() + " - Ecriture des dernières lignes...")
             self._file_write(buffer)
             buffer.clear()
 
-        self._broadcast(self._time_log() + f" - Ecriture finie")
+        self._broadcast(self._time_log() + " - Ecriture finie")
         row_number = row_number + 1 if row_number is not None else 0
 
         if self.extract_file != "":

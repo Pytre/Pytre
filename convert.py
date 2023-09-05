@@ -224,7 +224,7 @@ class _FromResult:
         return value_txt
 
     def _from_bool(self, value: bool) -> str:
-        if value == True:
+        if value:
             value_txt = "Vrai"
         else:
             value_txt = "Faux"

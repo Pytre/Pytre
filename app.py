@@ -39,10 +39,7 @@ class App(tk.Tk):
             self.output_msg(str(self.user.msg_login) + "\n", "1.0", "1.0")
 
     def check_user_access(self) -> bool:
-        if (
-            not self.user.exist_in_settings
-            and self.user.domain == SETTINGS.domain_user_auto_add
-        ):
+        if not self.user.exist_in_settings and self.user.domain == SETTINGS.domain_user_auto_add:
             # sql_query.create_user_in_settings()
             pass
 
@@ -91,9 +88,7 @@ class App(tk.Tk):
     # ------------------------------------------------------------------------------------------
     def setup_style(self):
         self.style_frame_label = "Bold.TLabelFrame.Label"
-        ttk.Style().configure(
-            self.style_frame_label, font=("TkDefaultFont", 10, "bold")
-        )
+        ttk.Style().configure(self.style_frame_label, font=("TkDefaultFont", 10, "bold"))
 
     # ------------------------------------------------------------------------------------------
     # Création de l'interface
@@ -129,12 +124,8 @@ class App(tk.Tk):
 
         self.queries_filter_text = tk.StringVar()
 
-        self.queries_label_filter = ttk.Label(
-            self.left_frame, text="Filtre :", justify=tk.LEFT
-        )
-        self.queries_entry_filter = ttk.Entry(
-            self.left_frame, textvariable=self.queries_filter_text, width=30
-        )
+        self.queries_label_filter = ttk.Label(self.left_frame, text="Filtre :", justify=tk.LEFT)
+        self.queries_entry_filter = ttk.Entry(self.left_frame, textvariable=self.queries_filter_text, width=30)
         self.queries_btn_folder = ttk.Button(
             self.left_frame,
             text="Dossier",
@@ -146,9 +137,7 @@ class App(tk.Tk):
             command=lambda: self.refresh_queries(),
         )
 
-        self.queries_tree = ttk.Treeview(
-            self.left_frame, columns=(1, 2), show="headings", selectmode="browse"
-        )
+        self.queries_tree = ttk.Treeview(self.left_frame, columns=(1, 2), show="headings", selectmode="browse")
         self.queries_tree.heading(1, text="Code")
         self.queries_tree.heading(2, text="Description")
         self.queries_tree.column(1, width=100, stretch=False)
@@ -162,18 +151,10 @@ class App(tk.Tk):
 
         # placement des éléments dans la frame
         self.queries_label_filter.grid(row=0, column=0, padx=2, pady=2, sticky="nswe")
-        self.queries_entry_filter.grid(
-            row=0, column=1, columnspan=3, padx=2, pady=2, sticky="nswe"
-        )
-        self.queries_btn_folder.grid(
-            row=0, column=4, columnspan=1, padx=2, pady=2, sticky="nswe"
-        )
-        self.queries_btn_refresh.grid(
-            row=0, column=5, columnspan=2, padx=2, pady=2, sticky="nswe"
-        )
-        self.queries_tree.grid(
-            row=1, column=0, columnspan=7, padx=2, pady=2, sticky="nswe"
-        )
+        self.queries_entry_filter.grid(row=0, column=1, columnspan=3, padx=2, pady=2, sticky="nswe")
+        self.queries_btn_folder.grid(row=0, column=4, columnspan=1, padx=2, pady=2, sticky="nswe")
+        self.queries_btn_refresh.grid(row=0, column=5, columnspan=2, padx=2, pady=2, sticky="nswe")
+        self.queries_tree.grid(row=1, column=0, columnspan=7, padx=2, pady=2, sticky="nswe")
         self.queries_tree_scrollbar_y.grid(row=1, column=6, sticky="nse")
 
         # paramètrage poids lignes et colonnes
@@ -201,12 +182,8 @@ class App(tk.Tk):
         self.right_panned.columnconfigure(0, weight=1)
 
     def setup_ui_params(self):
-        self.params_label = ttk.Label(
-            text="Saisie des paramètres", style=self.style_frame_label
-        )
-        self.params_outer = ttk.LabelFrame(
-            self.right_panned, labelwidget=self.params_label, borderwidth=2
-        )
+        self.params_label = ttk.Label(text="Saisie des paramètres", style=self.style_frame_label)
+        self.params_outer = ttk.LabelFrame(self.right_panned, labelwidget=self.params_label, borderwidth=2)
         self.params_outer.rowconfigure(0, weight=1)
         self.params_outer.columnconfigure(0, weight=1)
 
@@ -214,9 +191,7 @@ class App(tk.Tk):
         self.params_canvas.rowconfigure(0, weight=1)
         self.params_canvas.columnconfigure(0, weight=1)
 
-        self.params_scrollbar = ttk.Scrollbar(
-            self.params_outer, orient="vertical", command=self.params_canvas.yview
-        )
+        self.params_scrollbar = ttk.Scrollbar(self.params_outer, orient="vertical", command=self.params_canvas.yview)
         self.params_canvas["yscrollcommand"] = self.params_scrollbar.set
 
         self.params_inner = ttk.Frame(self.params_canvas)
@@ -224,9 +199,7 @@ class App(tk.Tk):
         self.params_outer.grid(row=0, column=0, padx=0, pady=0, sticky="nswe")
         self.params_canvas.grid(row=0, column=0, padx=0, pady=0, sticky="nswe")
         self.params_scrollbar.grid(row=0, column=1, sticky="ns")
-        self._windows = self.params_canvas.create_window(
-            (0, 0), window=self.params_inner, anchor="nw"
-        )
+        self._windows = self.params_canvas.create_window((0, 0), window=self.params_inner, anchor="nw")
 
     def setup_ui_output_and_btn(self):
         self.output_and_btn_frame = ttk.Frame(self.right_panned, borderwidth=0)
@@ -240,12 +213,8 @@ class App(tk.Tk):
         self.output_and_btn_frame.columnconfigure(0, weight=1)
 
     def setup_ui_output(self):
-        self.output_label = ttk.Label(
-            text="Messages / Fenêtre d'execution", style=self.style_frame_label
-        )
-        self.output_frame = ttk.LabelFrame(
-            self.output_and_btn_frame, labelwidget=self.output_label, borderwidth=2
-        )
+        self.output_label = ttk.Label(text="Messages / Fenêtre d'execution", style=self.style_frame_label)
+        self.output_frame = ttk.LabelFrame(self.output_and_btn_frame, labelwidget=self.output_label, borderwidth=2)
         self.output_frame.grid(row=0, column=0, padx=0, pady=0, sticky="nswe")
 
         self.output_textbox = tk.Text(
@@ -274,20 +243,14 @@ class App(tk.Tk):
         self.btn_frame = ttk.Frame(self.output_and_btn_frame, borderwidth=2)
         self.btn_frame.grid(row=1, column=0, padx=0, pady=0, sticky="nswe")
 
-        self.btn_execute = ttk.Button(
-            self.btn_frame, text="Executer", state="disable", command=self.execute_query
-        )
+        self.btn_execute = ttk.Button(self.btn_frame, text="Executer", state="disable", command=self.execute_query)
         self.btn_queries_folder = ttk.Button(
             self.btn_frame,
             text="Dossier",
             command=lambda: self.open_folder(SETTINGS.extract_folder),
         )
-        self.btn_debug = ttk.Button(
-            self.btn_frame, text="Debug", state="disable", command=self.debug
-        )
-        self.btn_quit = ttk.Button(
-            self.btn_frame, text="Quitter", command=self.app_exit
-        )
+        self.btn_debug = ttk.Button(self.btn_frame, text="Debug", state="disable", command=self.debug)
+        self.btn_quit = ttk.Button(self.btn_frame, text="Quitter", command=self.app_exit)
 
         self.btn_execute.grid(row=0, column=1, padx=2, pady=0, sticky="nswe")
         self.btn_queries_folder.grid(row=0, column=2, padx=2, pady=0, sticky="nswe")
@@ -347,39 +310,27 @@ class App(tk.Tk):
             if params[key].is_hidden and not self.user.superuser:
                 continue
 
-            my_widgets["label"] = ttk.Label(
-                self.params_inner, text=params[key].description + " : ", justify=tk.LEFT
-            )
+            my_widgets["label"] = ttk.Label(self.params_inner, text=params[key].description + " : ", justify=tk.LEFT)
             if params[key].is_hidden:
                 my_widgets["label"]["text"] = "(*) " + params[key].description + " : "
                 my_widgets["label"]["foreground"] = "red"
 
-            my_widgets["entry_var"] = tk.StringVar(
-                name=key, value=params[key].display_value
-            )
+            my_widgets["entry_var"] = tk.StringVar(name=key, value=params[key].display_value)
 
             if params[key].ui_control == "check":
-                my_widgets["entry"] = ttk.Checkbutton(
-                    self.params_inner, variable=my_widgets["entry_var"]
-                )
+                my_widgets["entry"] = ttk.Checkbutton(self.params_inner, variable=my_widgets["entry_var"])
                 my_widgets["entry"]["onvalue"] = "on"
                 my_widgets["entry"]["offvalue"] = "off"
                 my_widgets["entry_var"].trace_add("write", self.param_input_trace)
 
             elif params[key].ui_control == "list":
-                my_widgets["entry"] = ttk.Combobox(
-                    self.params_inner, textvariable=my_widgets["entry_var"]
-                )
+                my_widgets["entry"] = ttk.Combobox(self.params_inner, textvariable=my_widgets["entry_var"])
                 my_widgets["entry"]["state"] = "readonly"
-                my_widgets["entry"]["values"] = tuple(
-                    params[key].authorized_values.values()
-                )
+                my_widgets["entry"]["values"] = tuple(params[key].authorized_values.values())
                 my_widgets["entry_var"].trace_add("write", self.param_input_trace)
 
             else:
-                my_widgets["entry"] = ttk.Entry(
-                    self.params_inner, textvariable=my_widgets["entry_var"]
-                )
+                my_widgets["entry"] = ttk.Entry(self.params_inner, textvariable=my_widgets["entry_var"])
                 my_widgets["entry"].bind("<FocusIn>", self.param_focus_event)
                 my_widgets["entry"].bind("<FocusOut>", self.param_input_event)
                 my_widgets["entry"].bind("<Return>", self.param_input_event)
@@ -440,17 +391,11 @@ class App(tk.Tk):
         self.params_canvas.bind("<Configure>", self.params_resize)
         self.params_canvas.bind(
             "<Enter>",
-            lambda _: self.params_canvas.bind_all(
-                "<MouseWheel>", self.params_scrolling
-            ),
+            lambda _: self.params_canvas.bind_all("<MouseWheel>", self.params_scrolling),
         )
-        self.params_canvas.bind(
-            "<Leave>", lambda _: self.params_canvas.unbind_all("<MouseWheel>")
-        )
+        self.params_canvas.bind("<Leave>", lambda _: self.params_canvas.unbind_all("<MouseWheel>"))
 
-        self.protocol(
-            "WM_DELETE_WINDOW", self.app_exit
-        )  # arrêter le programme quand fermeture de la fenêtre
+        self.protocol("WM_DELETE_WINDOW", self.app_exit)  # arrêter le programme quand fermeture de la fenêtre
 
     # ------------------------------------------------------------------------------------------
     # Gestion thread pour execution de la requête
@@ -458,9 +403,7 @@ class App(tk.Tk):
     def start_execute_thread(self):  # démarrer par la méthode execute_query
         self.execute_thread_running = True
 
-        self.logging_thread = Thread(
-            target=self.start_logging_thread, daemon=True
-        )  # thread pour recup msg process
+        self.logging_thread = Thread(target=self.start_logging_thread, daemon=True)  # thread pour recup msg process
         self.logging_thread.start()
 
         self.lock_ui()
@@ -474,10 +417,8 @@ class App(tk.Tk):
         self.unlock_ui()
 
         if rows_number > 0:
-            answer = messagebox.askyesno(
-                "Fin execution", "Voulez vous ouvrir le fichier extrait ?"
-            )
-            if answer == True:
+            answer = messagebox.askyesno("Fin execution", "Voulez vous ouvrir le fichier extrait ?")
+            if answer:
                 startfile(output_file)  # ouvrir le fichier
         else:
             messagebox.showinfo("Fin execution", "Aucune donnée extraite !")
@@ -489,9 +430,7 @@ class App(tk.Tk):
         self.queries_btn_refresh["state"] = "disable"
         self.queries_tree["selectmode"] = "none"
         for key in self.params_widgets:
-            if (
-                widget_entry := self.params_widgets[key].get("entry", None)
-            ) is not None:
+            if (widget_entry := self.params_widgets[key].get("entry", None)) is not None:
                 widget_entry["state"] = "disable"
 
     def unlock_ui(self):
@@ -501,14 +440,8 @@ class App(tk.Tk):
         self.queries_btn_refresh["state"] = "enable"
         self.queries_tree["selectmode"] = "browse"
         for key in self.params_widgets:
-            if (
-                widget_entry := self.params_widgets[key].get("entry", None)
-            ) is not None:
-                widget_entry["state"] = (
-                    "enable"
-                    if not isinstance(widget_entry, ttk.Combobox)
-                    else "readonly"
-                )
+            if (widget_entry := self.params_widgets[key].get("entry", None)) is not None:
+                widget_entry["state"] = "enable" if not isinstance(widget_entry, ttk.Combobox) else "readonly"
 
     # ------------------------------------------------------------------------------------------
     # Gestion thread pour log pendant l'execution de la requête
@@ -555,9 +488,7 @@ class App(tk.Tk):
         self.output_msg("")
         if self.params_get_input():
             self.output_msg("")
-            self.execute_thread = Thread(
-                target=self.start_execute_thread, daemon=True
-            )  # thread execution requete
+            self.execute_thread = Thread(target=self.start_execute_thread, daemon=True)  # thread execution requete
             self.execute_thread.start()
         else:
             self.output_msg(
@@ -578,13 +509,7 @@ class App(tk.Tk):
                     w_check["background"] = "green"
                 except ValueError as err:
                     w_check["background"] = "red"
-                    msg = (
-                        "    - "
-                        + self.query.params_obj[key].description
-                        + " : "
-                        + str(err)
-                        + "\n"
-                    )
+                    msg = "    - " + self.query.params_obj[key].description + " : " + str(err) + "\n"
                     self.output_msg(msg, "end")
 
         return self.query.values_ok()
@@ -596,9 +521,7 @@ class App(tk.Tk):
         debug_win = _DebugWindow(self)
         debug_win.focus_set()
 
-    def output_msg(
-        self, txt_message: str, start_pos: str = "1.0", end_pos: str = "end"
-    ):
+    def output_msg(self, txt_message: str, start_pos: str = "1.0", end_pos: str = "end"):
         try:  # erreur à l'initialisation quand le ctrl n'existe pas encore
             self.output_textbox["state"] = "normal"
             self.output_textbox.replace(start_pos, end_pos, str(txt_message))
@@ -651,9 +574,7 @@ class App(tk.Tk):
         else:
             self.btn_execute["state"] = "enable"
             self.btn_debug["state"] = "enable"
-            self.params_label["text"] = (
-                "Saisie des paramètres pour " + selected_values[0]
-            )
+            self.params_label["text"] = "Saisie des paramètres pour " + selected_values[0]
             for query in self.queries:
                 if selected_iid == str(id(query)):
                     self.query = query
@@ -692,9 +613,7 @@ class App(tk.Tk):
         self._param_input(name)
 
     def _param_input(self, key: str):
-        self.query.params_obj[key].display_value = self.params_widgets[key][
-            "entry_var"
-        ].get()
+        self.query.params_obj[key].display_value = self.params_widgets[key]["entry_var"].get()
 
         try:
             self.query.update_values(key)
@@ -715,15 +634,9 @@ class App(tk.Tk):
     def params_resize(self, _: Event = None):
         self.update_idletasks()
 
-        size_width = max(
-            self.params_canvas.winfo_width(), self.params_inner.winfo_reqwidth()
-        )
-        size_height = max(
-            self.params_canvas.winfo_height(), self.params_inner.winfo_reqheight()
-        )
-        self.params_canvas.itemconfig(
-            self._windows, width=size_width, height=size_height
-        )
+        size_width = max(self.params_canvas.winfo_width(), self.params_inner.winfo_reqwidth())
+        size_height = max(self.params_canvas.winfo_height(), self.params_inner.winfo_reqheight())
+        self.params_canvas.itemconfig(self._windows, width=size_width, height=size_height)
 
         self.params_canvas.configure(scrollregion=self.params_canvas.bbox("all"))
 
@@ -743,9 +656,7 @@ class _DebugWindow:
         my_time = time.strftime("%H:%M:%S", time.localtime())
 
         self.root = tk.Toplevel(self.parent)
-        self.root.title(
-            f"Debug Window - {self.query.name} - {self.query.description} ({my_time})"
-        )
+        self.root.title(f"Debug Window - {self.query.name} - {self.query.description} ({my_time})")
         self.root.grid_columnconfigure(0, weight=1)
         self.root.grid_rowconfigure(0, weight=1)
 
@@ -765,9 +676,7 @@ class _DebugWindow:
         curr_tab["frame"] = ttk.Frame(self.tabs_frame)
         self.tabs_frame.add(curr_tab["frame"], text=tab_title)
 
-        curr_tab["textbox"] = tk.Text(
-            curr_tab["frame"], width=120, height=40, wrap="none", state="disabled"
-        )
+        curr_tab["textbox"] = tk.Text(curr_tab["frame"], width=120, height=40, wrap="none", state="disabled")
         curr_tab["scrollbar_x"] = ttk.Scrollbar(curr_tab["frame"], orient="horizontal")
         curr_tab["scrollbar_y"] = ttk.Scrollbar(curr_tab["frame"], orient="vertical")
 
@@ -797,12 +706,8 @@ class _DebugWindow:
             val = str(v) if not isinstance(v, str) else "'" + v + "'"
             params_lst.append(f"{k} : {val}")
 
-        self.output_to_textbox(
-            self.tabs["debug"]["textbox"], self.query.get_cmd_for_debug()
-        )
-        self.output_to_textbox(
-            self.tabs["template"]["textbox"], self.query.cmd_template
-        )
+        self.output_to_textbox(self.tabs["debug"]["textbox"], self.query.get_cmd_for_debug())
+        self.output_to_textbox(self.tabs["template"]["textbox"], self.query.cmd_template)
         self.output_to_textbox(self.tabs["params"]["textbox"], "\n".join(params_lst))
 
         # coloration syntaxique

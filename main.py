@@ -24,7 +24,7 @@ def main():
     else:
         print(
             str("=") * 100
-            + f"\nDésolé, vous n'êtes pas dans liste des utilisateurs autorisées !\n"
+            + "\nDésolé, vous n'êtes pas dans liste des utilisateurs autorisées !\n"
             + str("=") * 100
             + "\n"
         )
@@ -46,7 +46,7 @@ def menu(queries: typing.List[sql_query.Query]):
 
 
 def choose_file(queries: typing.List[sql_query.Query]):
-    print(str("=") * 100 + f"\nListe des requêtes disponibles\n" + str("=") * 100 + "\n")
+    print(str("=") * 100 + "\nListe des requêtes disponibles\n" + str("=") * 100 + "\n")
 
     for i, query in enumerate(queries, start=1):
         print(f"{i} : {query.name} - {query.description}")

@@ -32,7 +32,7 @@ def old_files_delete(files: list[Path]) -> None:
 
 
 def most_recent_files(files: list[Path]) -> datetime:
-    return min([datetime.fromtimestamp(file.stat().st_ctime) for file in files]) + relativedelta(days=1)
+    return max([datetime.fromtimestamp(file.stat().st_ctime) for file in files]) + relativedelta(days=1)
 
 
 if __name__ == "__main__":

@@ -1,5 +1,4 @@
 import re
-import typing
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
 from pathlib import Path
@@ -20,7 +19,7 @@ class Query:
         self.query_execute = _QueryExecute(self)
 
         self.last_extracted_file = ""  # info du dernier fichier extrait
-        self.msg_list: typing.List[str] = []  # liste de msg à l'utilisateur pour interface graphique
+        self.msg_list: list[str] = []  # liste de msg à l'utilisateur pour interface graphique
 
         self.filename = filename
         self.file_content = self._init_file_content(encoding_format)
@@ -30,7 +29,7 @@ class Query:
         self.cmd_params = {}
 
         self.infos = self._init_infos()
-        self.params_obj: typing.Dict[str, _Param] = self._init_params()
+        self.params_obj: dict[str, _Param] = self._init_params()
 
         self.name = self.infos.get("code", self.filename.stem)
 
@@ -127,7 +126,7 @@ class Query:
 
         return True
 
-    def execute_cmd(self, file_output: bool = True) -> typing.Union[bool, tuple]:
+    def execute_cmd(self, file_output: bool = True) -> bool | tuple:
         self.last_extracted_file = ""
         self.update_values()
 
@@ -300,7 +299,7 @@ class _Param:
 
             self.authorized_values[key] = val
 
-    def update_value_cmd(self) -> typing.Union[str, int, float]:
+    def update_value_cmd(self) -> str | int | float:
         self.value_is_ok = False
         self.value_cmd = ""
         val_to_test = self.display_value
@@ -459,7 +458,7 @@ class _QueryExecute:
     def _broadcast(self, msg_to_display: str) -> None:
         self.parent._broadcast(msg_to_display)
 
-    def _file_write(self, list_to_write: typing.List[str], encoding_format: str = "latin-1") -> None:  # Ecrire texte
+    def _file_write(self, list_to_write: list[str], encoding_format: str = "latin-1") -> None:  # Ecrire texte
         filename = self.extract_file
         try:
             with open(filename, mode="a", encoding=encoding_format) as f:
@@ -472,11 +471,11 @@ class _QueryExecute:
         return datetime.now().strftime(self.print_date_format)
 
 
-def get_queries(folder) -> typing.List[Query]:
+def get_queries(folder) -> list[Query]:
     if not Path(folder).is_dir():
         raise ValueError(f"Erreur : le répertoire {folder} n'a pas été trouvé ou n'est pas accessible !")
 
-    queries: typing.List[Query] = []
+    queries: list[Query] = []
     for file in Path(folder).iterdir():
         if file.is_file() and file.suffix == ".sql":
             my_query = Query(file)

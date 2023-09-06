@@ -1,4 +1,6 @@
-import sys, os, getpass
+import sys
+import os
+import getpass
 import typing
 import json
 from pathlib import Path
@@ -69,7 +71,7 @@ class Settings:
     def update_user_infos(self) -> None:
         u_group: Group = self.keepass_db.find_groups(name="Utilisateurs", first=True)
 
-        u_entry: Entry = None
+        u_entry: Entry | None = None
         for u_entry in self.keepass_db.find_entries(username=r".*", group=u_group, regex=True):
             if u_entry.username.lower() == self.user.domain_and_name.lower():
                 break

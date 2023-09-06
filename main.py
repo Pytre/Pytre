@@ -1,5 +1,4 @@
 import os
-import typing
 
 import sql_query
 
@@ -30,7 +29,7 @@ def main():
         )
 
 
-def menu(queries: typing.List[sql_query.Query]):
+def menu(queries: list[sql_query.Query]):
     query = choose_file(queries)  # selection de la requête à utiliser
     clear_console()
 
@@ -45,7 +44,7 @@ def menu(queries: typing.List[sql_query.Query]):
     return True
 
 
-def choose_file(queries: typing.List[sql_query.Query]):
+def choose_file(queries: list[sql_query.Query]):
     print(str("=") * 100 + "\nListe des requêtes disponibles\n" + str("=") * 100 + "\n")
 
     for i, query in enumerate(queries, start=1):

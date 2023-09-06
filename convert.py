@@ -1,5 +1,4 @@
 import re
-import typing
 from datetime import datetime
 
 
@@ -119,7 +118,7 @@ class _ToCmd:
 
         return value
 
-    def _str_to_nvarchar(self, string_to_convert: str, type_args: typing.List[str] = []) -> str:
+    def _str_to_nvarchar(self, string_to_convert: str, type_args: list[str] = []) -> str:
         max_size = 255 if type_args[0] == "max" or type_args == [] else int(type_args[0])
 
         if len(string_to_convert) > max_size:
@@ -127,7 +126,7 @@ class _ToCmd:
 
         return string_to_convert
 
-    def _str_tochar(self, string_to_convert: str, params: typing.List[str] = ["0"]) -> str:
+    def _str_tochar(self, string_to_convert: str, params: list[str] = ["0"]) -> str:
         size = int(params[0])
 
         if len(string_to_convert) != size:

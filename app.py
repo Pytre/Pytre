@@ -1,5 +1,4 @@
 import time
-import typing
 import subprocess
 import tkinter as tk
 from tkinter import Event, ttk, messagebox
@@ -20,9 +19,9 @@ class App(tk.Tk):
         super().__init__()
 
         self.user: sql_query.settings.User = SETTINGS.user
-        self.queries: typing.List[sql_query.Query] = []
+        self.queries: list[sql_query.Query] = []
         self.query: sql_query.Query = sql_query.Query()
-        self.params_widgets: typing.Dict[str, ttk.Widget] = {}
+        self.params_widgets: dict[str, ttk.Widget] = {}
 
         self.setup_style()
         self.setup_ui()
@@ -316,7 +315,7 @@ class App(tk.Tk):
 
         self.params_widgets = {}
 
-    def ui_params_update(self, params: typing.Dict[str, sql_query._Param] = None):
+    def ui_params_update(self, params: dict[str, sql_query._Param] = None):
         self.ui_params_reset()
 
         params_number_not_hidden = 0
@@ -329,7 +328,7 @@ class App(tk.Tk):
         else:
             self._ui_with_params_update(params)
 
-    def _ui_with_params_update(self, params: typing.Dict[str, sql_query._Param] = None):
+    def _ui_with_params_update(self, params: dict[str, sql_query._Param] = None):
         for i, key in enumerate(params):
             my_widgets = {}
 

@@ -87,6 +87,8 @@ class Settings:
 
             if user_infos_dict.get("superuser", "").lower() == "true":  # valeur str à convertir en bool
                 user_infos_dict["superuser"] = True
+            else:
+                user_infos_dict["superuser"] = False
 
             user_infos_dict["grp_authorized"] = (
                 [item.lower().strip() for item in u_entry.tags] if u_entry.tags is not None else []
@@ -194,7 +196,7 @@ class User:
 
 
 if __name__ == "__main__":
-    my_settings = Settings(user_name="ebrun", user_domain="PROSOL.PRI")
+    my_settings = Settings(user_name="mferrier", user_domain="PROSOL.PRI")
 
     print(my_settings.sql_server)
 

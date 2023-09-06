@@ -85,8 +85,12 @@ class Settings:
             for property in u_entry.custom_properties:
                 user_infos_dict[property] = val if (val := u_entry.get_custom_property(property)) is not None else ""
 
-            # pour l'info superuser, conversion string en bool
-            user_infos_dict["superuser"] = True if user_infos_dict.get("superuser", "").lower() == "true" else False
+            if user_infos_dict.get("superuser", "").lower() == "true":  # valeur str à convertir en bool
+                user_infos_dict["superuser"] = True
+
+            user_infos_dict["grp_authorized"] = (
+                [item.lower().strip() for item in u_entry.tags] if u_entry.tags is not None else []
+            )
 
             self.user.update_infos(user_infos_dict)
 
@@ -160,6 +164,7 @@ class User:
         self.x3_id: str = ""
         self.msg_login: str = ""
         self.superuser: bool = False
+        self.grp_authorized: list[str] = []
 
     def _get_user_name(self) -> str:
         return getpass.getuser()
@@ -176,6 +181,7 @@ class User:
         self.x3_id = infos.get("x3_id", "")
         self.msg_login = infos.get("msg_login", "")
         self.superuser = infos.get("superuser", False)
+        self.grp_authorized = infos.get("grp_authorized", [])
 
         # recup des autres attributs qui existerait
         self.other_attributes = [attr for attr in infos if not hasattr(self, attr)]
@@ -204,3 +210,4 @@ if __name__ == "__main__":
     print(f"- autorisation : {my_settings.user.is_authorized}")
     print(f"- superuser : {my_settings.user.superuser}")
     print(f"- login msg : {my_settings.user.msg_login}")
+    print(f"- grp_authorized : {my_settings.user.grp_authorized}")

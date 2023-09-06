@@ -7,14 +7,20 @@ Code : xxxx
 Description : xxxxxx
 Hide : 0 / 1 / 2
 Debug : xxxxx
+Grp_Authorized : admin, compta, support
 */
 
 Le code est utilisé dans la liste des requetes, si pas renseigné alors le nom du fichier est utilisé
-La description est utlisé dans la liste des requetes
+La description est utilisé dans la liste des requetes
 La valeur de hide défini qui peut voir la requête :
 	0 tout le monde (valeur par défaut),
 	1 les superusers,
 	2 personne (requête à usage interne pour Pytre)
+
+Grp_Authorized permet d'autoriser la requête que pour les utilisateurs appartenant à un des groupes
+On peut autoriser plusieurs groupes en les séparant par des virgules
+Enfin si aucun groupe n'est donné ou si le paramètre n'existe pas dans l'entête la requête est considérée comme utilisable par tout le monde
+Dans la base des settings l'authorisation des groupes est donné par la liste des tags
 
 D'autres infos peuvent être ajoutée (comme une note de version) mais ne sont pas utilisées par Pytre
 
@@ -43,7 +49,7 @@ Les types possibles sont :
 		HIDE : si la variable ne doit pas être montrée / modifiée par l'utilisateur
 		VAL_FORMULE : valeur calculée à utiliser plutot que la VALEUR_DEFAUT (cf.ci-dessous)
 		UI_CTRL(LISTE_VAL_AUTORISEES) : UI_CTRL pour le type de contrôle à afficher et LISTE_VAL_AUTORISEES pour valeurs possibles (cf.ci-dessous)
-=> nb : si pas de types mais juste des valeurs entre parentheses alors il est considéré qu'il s'agit d'une liste des valeures autorisées.
+=> nb : si pas de types mais juste des valeurs entre parentheses alors il est considéré qu'il s'agit d'une liste des valeurs autorisées.
 
 VAL_FORMULE : fonctions possibles pour valeur calculée d'un paramètre
 ---------------------------------------------------------------------

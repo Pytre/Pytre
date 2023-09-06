@@ -42,6 +42,8 @@ class Query:
         else:
             self.description = self.infos.get("description", "")
 
+        self.grp_authorized = self.infos.get("grp_authorized", [])
+
     def _init_file_content(self, encoding_format: str = "utf-8") -> str:
         file_content = ""
         try:
@@ -67,7 +69,12 @@ class Query:
                 regex_infos = re.search(r"^([^:]*?)\s*:\s*(.*$)", line)
                 if regex_infos is not None:
                     info_key = regex_infos.group(1).lower()
-                    info_value = regex_infos.group(2)
+
+                    if info_key == "grp_authorized":
+                        info_value = [item.lower().strip() for item in regex_infos.group(2).split(",")]
+                    else:
+                        info_value = regex_infos.group(2)
+
                     infos[info_key] = info_value  # rajout dans un dictionnaire de l'info
 
         return infos
@@ -474,7 +481,11 @@ def get_queries(folder) -> typing.List[Query]:
         if file.is_file() and file.suffix == ".sql":
             my_query = Query(file)
 
-            if my_query.hide == 0 or (USER.superuser and my_query.hide == 1):
+            user_is_authorized = False
+            if my_query.grp_authorized == [] or set(USER.grp_authorized) & set(my_query.grp_authorized):
+                user_is_authorized = True
+
+            if (USER.superuser and my_query.hide != 2) or (user_is_authorized and my_query.hide == 0):
                 queries.append(my_query)
 
     queries.sort(key=lambda k: k.name)

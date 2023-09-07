@@ -69,7 +69,8 @@ class Query:
                 if regex_infos is not None:
                     info_key = regex_infos.group(1).lower()
 
-                    if info_key == "grp_authorized":
+                    convert_to_list = ["grp_authorized"]
+                    if info_key in convert_to_list:
                         info_value = [item.lower().strip() for item in regex_infos.group(2).split(",")]
                     else:
                         info_value = regex_infos.group(2)

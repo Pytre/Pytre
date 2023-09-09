@@ -92,7 +92,8 @@ class Settings:
             else:
                 user_infos_dict["superuser"] = False
 
-            user_infos_dict["grp_authorized"] = (
+            user_infos_dict["grp_authorized"] = ["all"]  # par défaut un utilisateur appartient au groupe all
+            user_infos_dict["grp_authorized"].extend(
                 [item.lower().strip() for item in u_entry.tags] if u_entry.tags is not None else []
             )
 

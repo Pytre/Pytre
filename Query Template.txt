@@ -20,7 +20,9 @@ La valeur de hide défini qui peut voir la requête :
 Grp_Authorized permet d'autoriser la requête que pour les utilisateurs appartenant à un des groupes
 On peut autoriser plusieurs groupes en les séparant par des virgules
 Enfin si aucun groupe n'est donné ou si le paramètre n'existe pas dans l'entête la requête est considérée comme utilisable par tout le monde
-Dans la base des settings l'authorisation des groupes est donné par la liste des tags
+
+Tous les utilisateurs appartiennent par défaut au groupe "all"
+Pour rattacher à un utilisateur à d'autres groupe il convient de lui ajouter un tag dans la base des settings
 
 D'autres infos peuvent être ajoutée (comme une note de version) mais ne sont pas utilisées par Pytre
 

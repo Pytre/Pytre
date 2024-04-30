@@ -1,3 +1,4 @@
+import re
 import time
 import subprocess
 import tkinter as tk
@@ -738,34 +739,79 @@ class _DebugWindow:
         self.output_to_textbox(self.tabs["params"]["textbox"], "\n".join(params_lst))
 
         # coloration syntaxique
-        self.textbox_syntax_coloration(self.tabs["debug"]["textbox"])
-        self.textbox_syntax_coloration(self.tabs["template"]["textbox"])
+        for tab in ["debug", "template", "params"]:
+            if tab != "params":
+                self.keywords_color(self.tabs[tab]["textbox"])
 
-    def textbox_syntax_coloration(self, tbox: tk.Text):
+            if tab != "debug":
+                self.parameters_color(self.tabs[tab]["textbox"])
+
+            self.num_values_color(self.tabs[tab]["textbox"])
+            self.text_and_comments_color(self.tabs[tab]["textbox"])
+
+    def keywords_color(self, tbox: tk.Text):
         tbox.tag_configure("keyword", foreground="blue")
-        words = sql_keywords
 
-        pos_len = tk.StringVar()
-        for word in words:
-            pos_start = "1.0"
-            while True:
-                # identification des mots clés par regex avec word boundaries
-                # nb : regex de la méthode textbox.search utilise TCL (et du coup pas \w mais \y)
-                pos_start = tbox.search(
-                    rf"\y{word}\y",
-                    index=pos_start,
-                    stopindex="end",
-                    nocase=1,
-                    regexp=True,
-                    count=pos_len,
-                )
+        for sql_keyword in sql_keywords:
+            keywords = re.finditer(rf"(?<!@)\b{sql_keyword}\b", tbox.get("1.0", "end"), re.IGNORECASE)
+            for keyword in keywords:
+                start_pos = f"1.0 + {keyword.span()[0]} chars"
+                end_pos = f"1.0 + {keyword.span()[1]} chars"
+                tbox.tag_add("keyword", start_pos, end_pos)
 
-                if not pos_start:
-                    break
+    def parameters_color(self, tbox: tk.Text):
+        tbox.tag_configure("parameters", foreground="purple")
 
-                pos_end = f"{pos_start} + {pos_len.get()} chars"
-                tbox.tag_add("keyword", pos_start, pos_end)
-                pos_start = f"{pos_start} + {int(pos_len.get()) + 1} chars"
+        params = re.finditer(r"(?<![\d\w#_\$@])(%\()?(@[\d\w#_\$@]+)(\)s)?", tbox.get("1.0", "end"))
+        for param in params:
+            start_pos = f"1.0 + {param.span()[0]} chars"
+            end_pos = f"1.0 + {param.span()[1]} chars"
+            tbox.tag_add("parameters", start_pos, end_pos)
+
+    def num_values_color(self, tbox: tk.Text):
+        tbox.tag_configure("num_value", foreground="red")
+
+        delim_char = r"[\s\(\-+\*\/%,]"
+        num_values = re.finditer(rf"(?<={delim_char})-?\d+(\.\d+)?(?={delim_char})", tbox.get("1.0", "end"))
+        for num_value in num_values:
+            start_pos = f"1.0 + {num_value.span()[0]} chars"
+            end_pos = f"1.0 + {num_value.span()[1]} chars"
+            tbox.tag_add("num_value", start_pos, end_pos)
+
+    def text_and_comments_color(self, tbox: tk.Text):
+        tbox.tag_configure("comments", foreground="green")
+        tbox.tag_configure("text_value", foreground="maroon")
+
+        index = "1.0"
+        while tbox.compare(index, "<=", "end"):
+            ranges = {
+                "text": {"start_str": "'", "end_str": "'", "tag": "text_value"},
+                "comment_1": {"start_str": "--", "end_str": "\n", "tag": "comments"},
+                "comment_2": {"start_str": "/*", "end_str": "*/", "tag": "comments"},
+            }
+
+            to_tag = {"start_pos": "", "distance": 0}
+            for _, item in ranges.items():
+                pos = tbox.search(item["start_str"], index, "end")
+                if pos == "":
+                    continue
+                distance = len(tbox.get(index, pos))
+                if to_tag["distance"] == 0 or distance < to_tag["distance"]:
+                    to_tag = {**item, **{"start_pos": pos, "distance": distance}}
+
+            if to_tag["start_pos"] == "":
+                break
+
+            countVar = tk.IntVar()
+            end_pos = tbox.search(to_tag["end_str"], f"{to_tag['start_pos']} + 1 char", "end", count=countVar)
+            if end_pos:
+                end_pos = f"{end_pos} + {countVar.get()} char"
+            else:
+                end_pos = "end"
+
+            tbox.tag_add(to_tag["tag"], to_tag["start_pos"], f"{end_pos}")
+
+            index = f"{end_pos} + 1 char"
 
     def output_to_textbox(self, ctrl: tk.Text, text: str = ""):
         ctrl["state"] = "normal"

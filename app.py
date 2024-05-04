@@ -15,7 +15,7 @@ PYTRE_VERSION = "1.031"
 
 
 class App(tk.Tk):
-    def __init__(self):
+    def __init__(self, queries_folder="", debug=False):
         super().__init__()
 
         self.user: sql_query.settings.User = SETTINGS.user
@@ -23,15 +23,17 @@ class App(tk.Tk):
         self.query: sql_query.Query = sql_query.Query()
         self.params_widgets: dict[str, ttk.Widget] = {}
 
+        self.queries_folder = SETTINGS.queries_folder if queries_folder == "" else queries_folder
+
         self.setup_style()
         self.setup_ui()
         self.setup_events_binds()
 
-        if self.check_user_access() is False:
-            return
-
-        if self.check_min_version() is False:
-            return
+        if not debug:
+            if self.check_user_access() is False:
+                return
+            if self.check_min_version() is False:
+                return
 
         self.refresh_queries()
 
@@ -501,7 +503,7 @@ class App(tk.Tk):
         self.queries_filter_text = ""
 
         try:
-            self.queries = sql_query.get_queries(SETTINGS.queries_folder)
+            self.queries = sql_query.get_queries(self.queries_folder)
             self.queries_filter()  # rénitialiser l'UI en simulant un filtre sur aucun élément
         except ValueError as err:
             self.queries = {}

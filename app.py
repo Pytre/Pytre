@@ -1,4 +1,3 @@
-import re
 import time
 import subprocess
 import tkinter as tk
@@ -8,7 +7,7 @@ from threading import Thread
 
 import utils
 import sql_query
-from sql_keywords import sql_keywords
+from sql_lexer import SqlLexer, TokenType
 
 
 SETTINGS = sql_query.SETTINGS
@@ -740,78 +739,22 @@ class _DebugWindow:
 
         # coloration syntaxique
         for tab in ["debug", "template", "params"]:
-            if tab != "params":
-                self.keywords_color(self.tabs[tab]["textbox"])
+            self.syntax_color(self.tabs[tab]["textbox"])
 
-            if tab != "debug":
-                self.parameters_color(self.tabs[tab]["textbox"])
+    def syntax_color(self, tbox: tk.Text):
+        tbox.tag_configure(TokenType.KEYWORD.value, foreground="blue")
+        tbox.tag_configure(TokenType.PARAMETER.value, foreground="purple")
+        tbox.tag_configure(TokenType.NUMBER.value, foreground="red")
+        tbox.tag_configure(TokenType.COMMENT.value, foreground="green")
+        tbox.tag_configure(TokenType.TEXT.value, foreground="maroon")
 
-            self.num_values_color(self.tabs[tab]["textbox"])
-            self.text_and_comments_color(self.tabs[tab]["textbox"])
-
-    def keywords_color(self, tbox: tk.Text):
-        tbox.tag_configure("keyword", foreground="blue")
-
-        for sql_keyword in sql_keywords:
-            keywords = re.finditer(rf"(?<!@)\b{sql_keyword}\b", tbox.get("1.0", "end"), re.IGNORECASE)
-            for keyword in keywords:
-                start_pos = f"1.0 + {keyword.span()[0]} chars"
-                end_pos = f"1.0 + {keyword.span()[1]} chars"
-                tbox.tag_add("keyword", start_pos, end_pos)
-
-    def parameters_color(self, tbox: tk.Text):
-        tbox.tag_configure("parameters", foreground="purple")
-
-        params = re.finditer(r"(?<![\d\w#_\$@])(%\()?(@[\d\w#_\$@]+)(\)s)?", tbox.get("1.0", "end"))
-        for param in params:
-            start_pos = f"1.0 + {param.span()[0]} chars"
-            end_pos = f"1.0 + {param.span()[1]} chars"
-            tbox.tag_add("parameters", start_pos, end_pos)
-
-    def num_values_color(self, tbox: tk.Text):
-        tbox.tag_configure("num_value", foreground="red")
-
-        delim_char = r"[\s\(\-+\*\/%,]"
-        num_values = re.finditer(rf"(?<={delim_char})-?\d+(\.\d+)?(?={delim_char})", tbox.get("1.0", "end"))
-        for num_value in num_values:
-            start_pos = f"1.0 + {num_value.span()[0]} chars"
-            end_pos = f"1.0 + {num_value.span()[1]} chars"
-            tbox.tag_add("num_value", start_pos, end_pos)
-
-    def text_and_comments_color(self, tbox: tk.Text):
-        tbox.tag_configure("comments", foreground="green")
-        tbox.tag_configure("text_value", foreground="maroon")
-
-        index = "1.0"
-        while tbox.compare(index, "<=", "end"):
-            ranges = {
-                "text": {"start_str": "'", "end_str": "'", "tag": "text_value"},
-                "comment_1": {"start_str": "--", "end_str": "\n", "tag": "comments"},
-                "comment_2": {"start_str": "/*", "end_str": "*/", "tag": "comments"},
-            }
-
-            to_tag = {"start_pos": "", "distance": 0}
-            for _, item in ranges.items():
-                pos = tbox.search(item["start_str"], index, "end")
-                if pos == "":
-                    continue
-                distance = len(tbox.get(index, pos))
-                if to_tag["distance"] == 0 or distance < to_tag["distance"]:
-                    to_tag = {**item, **{"start_pos": pos, "distance": distance}}
-
-            if to_tag["start_pos"] == "":
-                break
-
-            countVar = tk.IntVar()
-            end_pos = tbox.search(to_tag["end_str"], f"{to_tag['start_pos']} + 1 char", "end", count=countVar)
-            if end_pos:
-                end_pos = f"{end_pos} + {countVar.get()} char"
-            else:
-                end_pos = "end"
-
-            tbox.tag_add(to_tag["tag"], to_tag["start_pos"], f"{end_pos}")
-
-            index = f"{end_pos} + 1 char"
+        lexer = SqlLexer(tbox.get("1.0", "end"))
+        for _, token in lexer.tokens.items():
+            for tag in tbox.tag_names():
+                if token.type.value == tag:
+                    start_pos = f"1.0 + {token.pos} chars"
+                    end_pos = f"1.0 + {token.pos + token.length} chars"
+                    tbox.tag_add(tag, start_pos, end_pos)
 
     def output_to_textbox(self, ctrl: tk.Text, text: str = ""):
         ctrl["state"] = "normal"

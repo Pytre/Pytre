@@ -1,10 +1,6 @@
 {
-    "python.formatting.provider": "black",
-    "python.formatting.blackArgs": [
-        "--line-length",
-        "119"
-    ],
     "[python]": {
-        "editor.formatOnSave": true
+        "editor.formatOnSave": true,
+        "editor.defaultFormatter": "ms-python.black-formatter"
       }
 }

@@ -466,6 +466,7 @@ sql_keywords = (
     "NULLS",
     "NUMBER",
     "NUMERIC",
+    "NVARCHAR",
     "OBJECT",
     "OCTET_LENGTH",
     "OCTETS",

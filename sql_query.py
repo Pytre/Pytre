@@ -11,7 +11,7 @@ from convert import Convert
 
 SETTINGS = settings.Settings()
 PRINT_DATE_FORMAT = "%d/%m/%Y à %H:%M:%S"  # pour le format de la date pour les logs / output
-USER: settings.User = SETTINGS.user
+USER: settings.User = SETTINGS.curr_user
 
 
 class Query:
@@ -240,7 +240,7 @@ class _Param:
 
     def _calc_func(self, func: str, func_args: str) -> str:
         def user_info(attr: str) -> str:
-            return getattr(USER, attr)
+            return getattr(USER, attr, "")
 
         def fiscal_year(
             last_month: int, month_offset: int = 0, days_offset: int = 0, today_mth_offset: int = 0
@@ -479,7 +479,10 @@ def get_queries(folder) -> list[Query]:
     queries: list[Query] = []
     for file in Path(folder).iterdir():
         if file.is_file() and file.suffix == ".sql":
-            my_query = Query(file)
+            try:
+                my_query = Query(file)
+            except Exception:
+                continue  # si erreur, ne pas bloquer et ignorer la requête
 
             user_is_authorized = False
             if my_query.grp_authorized == [] or set(USER.grp_authorized) & set(my_query.grp_authorized):
@@ -493,33 +496,9 @@ def get_queries(folder) -> list[Query]:
     return queries
 
 
-def create_user_in_settings():
-    sql_script = SETTINGS.queries_folder / "_add_user.sql"
-
-    global USER
-    if not USER.exist_in_settings:
-        my_query = Query(sql_script)
-        my_query.update_values()
-
-        _, sql_output = my_query.execute_cmd(False)
-        if len(sql_output) == 2:
-            user_infos = sql_output[1].split(SETTINGS.field_separator)
-
-            SETTINGS.create_user(
-                title=user_infos[0].title(),
-                username=USER.domain_and_name,
-                x3_id=user_infos[1],
-                msg_login="",
-                superuser="false",
-            )
-
-            USER.exist_in_settings = True
-            SETTINGS.update_user_infos()
-
-
 if __name__ == "__main__":
     APP_PATH = SETTINGS.app_path
-    sql_script = SETTINGS.queries_folder / "ZGL_BUG_Encodage.sql"  # ZGL_BUG_Encodage   ZGENDOC
+    sql_script = SETTINGS.queries_folder / "_add_user.sql"  # ZGL_BUG_Encodage   ZGENDOC
 
     my_query = Query(sql_script)
     my_query.update_values()

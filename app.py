@@ -8,6 +8,7 @@ from threading import Thread
 import utils
 import sql_query
 from app_debug import DebugWindow
+from app_users import UserWindow
 
 SETTINGS = sql_query.SETTINGS
 PYTRE_VERSION = "1.031"
@@ -17,7 +18,7 @@ class App(tk.Tk):
     def __init__(self, queries_folder="", debug=False):
         super().__init__()
 
-        self.user: sql_query.settings.User = SETTINGS.user
+        self.user: sql_query.settings.User = SETTINGS.curr_user
         self.queries: list[sql_query.Query] = []
         self.query: sql_query.Query = sql_query.Query()
         self.params_widgets: dict[str, ttk.Widget] = {}
@@ -42,17 +43,12 @@ class App(tk.Tk):
         self.extract_folder_cleaning()
 
     def check_user_access(self) -> bool:
-        if not self.user.exist_in_settings and self.user.domain == SETTINGS.domain_user_auto_add:
-            # sql_query.create_user_in_settings()
-            pass
-
         if not self.user.is_authorized:
             messagebox.showerror(
                 "Erreur",
                 "Vous n'êtes pas dans liste des utilisateurs autorisées !"
                 + "\nDonnées d'identification :"
-                + f"\n- User : {self.user.name}"
-                + f"\n- Domain : {self.user.domain}",
+                + f"\n- User : {self.user.domain_and_name}",
             )
             self.destroy()
             return False
@@ -128,8 +124,9 @@ class App(tk.Tk):
 
         self.minsize(width=800, height=600)
         self.resizable(True, True)
-        self.geometry("975x675")
+        self.geometry("975x700")
 
+        self.setup_ui_menu()
         self.setup_ui_paned_window()
         self.setup_ui_left_frame()
         self.setup_ui_right_frame()
@@ -141,6 +138,27 @@ class App(tk.Tk):
         self.grid_rowconfigure(0, weight=1)
 
         self.center_window()
+
+    def setup_ui_menu(self):
+        menubar = tk.Menu(self)
+        self.config(menu=menubar)
+
+        self.menu_query = tk.Menu(menubar, tearoff=False)
+        self.menu_query.add_command(label="Executer", state="disabled", command=self.execute_query)
+        self.menu_query.add_command(label="Extractions...", command=lambda: self.open_folder(SETTINGS.extract_folder))
+        self.menu_query.add_command(label="Debug...", state="disabled", command=self.debug_query)
+        self.menu_query.add_separator()
+        self.menu_query.add_command(label="Recharger", command=lambda: self.refresh_queries())
+        menubar.add_cascade(label="Requêtes", menu=self.menu_query)
+
+        if self.user.superuser:
+            menu_admin = tk.Menu(menubar, tearoff=False)
+            menu_admin.add_command(label="Utilisateurs...", command=self.manage_users)
+            menubar.add_cascade(label="Administation", menu=menu_admin)
+
+        menu_about = tk.Menu(menubar, tearoff=False)
+        menu_about.add_command(label="À propos de Pytre...", command=self.about_info)
+        menubar.add_cascade(label="?", menu=menu_about)
 
     def setup_ui_paned_window(self):
         self.paned_window = ttk.PanedWindow(self, orient="horizontal")
@@ -277,7 +295,7 @@ class App(tk.Tk):
             text="Dossier",
             command=lambda: self.open_folder(SETTINGS.extract_folder),
         )
-        self.btn_debug = ttk.Button(self.btn_frame, text="Debug", state="disable", command=self.debug)
+        self.btn_debug = ttk.Button(self.btn_frame, text="Debug", state="disable", command=self.debug_query)
         self.btn_quit = ttk.Button(self.btn_frame, text="Quitter", command=self.app_exit)
 
         self.btn_execute.grid(row=0, column=1, padx=2, pady=0, sticky="nswe")
@@ -452,21 +470,27 @@ class App(tk.Tk):
             messagebox.showinfo("Fin execution", "Aucune donnée extraite !")
 
     def lock_ui(self):
+        self.menu_query.entryconfig("Executer", state="disable")
+
         self.btn_execute["state"] = "disable"
         self.queries_btn_folder["state"] = "disable"
         self.queries_entry_filter["state"] = "disable"
         self.queries_btn_refresh["state"] = "disable"
         self.queries_tree["selectmode"] = "none"
+
         for key in self.params_widgets:
             if (widget_entry := self.params_widgets[key].get("entry", None)) is not None:
                 widget_entry["state"] = "disable"
 
     def unlock_ui(self):
+        self.menu_query.entryconfig("Executer", state="normal")
+
         self.btn_execute["state"] = "enable"
         self.queries_btn_folder["state"] = "enable"
         self.queries_entry_filter["state"] = "enable"
         self.queries_btn_refresh["state"] = "enable"
         self.queries_tree["selectmode"] = "browse"
+
         for key in self.params_widgets:
             if (widget_entry := self.params_widgets[key].get("entry", None)) is not None:
                 widget_entry["state"] = "enable" if not isinstance(widget_entry, ttk.Combobox) else "readonly"
@@ -545,9 +569,6 @@ class App(tk.Tk):
     def app_exit(self, event: Event = None):
         self.quit()
 
-    def debug(self):
-        DebugWindow(self.query, self)
-
     def output_msg(self, txt_message: str, start_pos: str = "1.0", end_pos: str = "end"):
         try:  # erreur à l'initialisation quand le ctrl n'existe pas encore
             self.output_textbox["state"] = "normal"
@@ -595,10 +616,14 @@ class App(tk.Tk):
         self.output_msg("")
 
         if selected_values == "":
+            self.menu_query.entryconfig("Executer", state="disable")
+            self.menu_query.entryconfig("Debug...", state="disable")
             self.btn_execute["state"] = "disable"
             self.btn_debug["state"] = "disable"
             self.params_label["text"] = "Saisie des paramètres"
         else:
+            self.menu_query.entryconfig("Executer", state="normal")
+            self.menu_query.entryconfig("Debug...", state="normal")
             self.btn_execute["state"] = "enable"
             self.btn_debug["state"] = "enable"
             self.params_label["text"] = "Saisie des paramètres pour " + selected_values[0]
@@ -669,6 +694,22 @@ class App(tk.Tk):
 
     def params_scrolling(self, event: Event):
         self.params_canvas.yview_scroll(int(-1 * event.delta / 120), "units")
+
+    # ------------------------------------------------------------------------------------------
+    # Sous-fenêtres
+    # ------------------------------------------------------------------------------------------
+    def debug_query(self):
+        if self.query is not None:
+            DebugWindow(self.query, self)
+
+    def manage_users(self):
+        if getattr(self, "user_window", None) is None or not self.user_window.winfo_exists():
+            self.user_window = UserWindow(self)
+        else:
+            self.user_window.focus_set()
+
+    def about_info(self):
+        pass
 
 
 if __name__ == "__main__":

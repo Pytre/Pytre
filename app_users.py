@@ -14,7 +14,7 @@ class UserWindow(tk.Toplevel):
         self.detached_items: list[str] = []
         self.filter_var: tk.StringVar
 
-        self.default_filter_cols = ["domain_and_name", "title"]
+        self.default_filter_cols = ["domain_and_name", "title", "x3_id"]
         self.default_sort = "title"
 
         self._setup_ui()
@@ -91,7 +91,7 @@ class UserWindow(tk.Toplevel):
         cols = self._tree_cols()
         self.tree = ttk.Treeview(self.tree_frame, columns=list(cols.keys()), show="headings", selectmode="extended")
         for col, attr in cols.items():
-            self.tree.heading(col, text=attr["text"])
+            self.tree.heading(col, text=attr["text"], command=lambda c=col: self.tree_header_click(c))
             self.tree.column(col, minwidth=attr["minwidth"], stretch=attr["stretch"])
             if col in ["superuser"]:
                 self.tree.column(col, anchor=tk.CENTER)
@@ -133,6 +133,13 @@ class UserWindow(tk.Toplevel):
     # ------------------------------------------------------------------------------------------
     def tree_filter(self, cols: list[str] = []):
         cols = cols if cols else self.default_filter_cols
+        i = 0
+        while i < len(cols):
+            if cols[i] not in self.tree["columns"]:
+                print(f'Error when filtering : "{cols[i]}" do not exists in tree columns')
+                cols.pop(i)
+            else:
+                i += 1
 
         text_filter = self.filter_var.get()
         if text_filter == "" and self.detached_items == []:
@@ -155,12 +162,23 @@ class UserWindow(tk.Toplevel):
                 self.tree_sort("title")
                 self.detached_items.remove(item)
 
-    def tree_sort(self, sort_col: str = ""):
+    def tree_sort(self, sort_col: str = "", reverse: bool = False):
         sort_col = self.default_sort if sort_col == "" else sort_col
         items = list(self.tree.get_children(""))
-        items.sort(key=lambda k: self.tree.set(k, sort_col))
+        items.sort(reverse=reverse, key=lambda k: self.tree.set(k, sort_col))
         for i, item in enumerate(items):
             self.tree.move(item, "", i)
+
+    def tree_header_click(self, col: str):
+        items = list(self.tree.get_children())
+        items_sorted = list(self.tree.get_children())
+        items_sorted.sort(key=lambda k: self.tree.set(k, col))
+
+        reverse = False
+        if items == items_sorted:
+            reverse = True
+
+        self.tree_sort(col, reverse)
 
     def tree_refresh(self, sort_col: str = ""):
         sort_col = self.default_sort if sort_col == "" else sort_col

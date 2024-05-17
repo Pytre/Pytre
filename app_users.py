@@ -1,40 +1,33 @@
 import tkinter as tk
-from tkinter import ttk, Event, font, messagebox
+from tkinter import ttk, Event, font, messagebox, filedialog
 
-from settings import Settings, User
+from settings import User
 
 
-class UserWindow(tk.Toplevel):
+class UsersWindow(tk.Toplevel):
     def __init__(self, parent=None):
         super().__init__()
         self.parent = parent
         self.focus_set() if self.parent else self.master.withdraw()
 
-        self.settings: Settings = Settings()
         self.detached_items: list[str] = []
         self.filter_var: tk.StringVar
 
-        self.default_filter_cols = ["domain_and_name", "title", "x3_id"]
+        self.default_filter_cols = ["username", "title", "grp_authorized", "x3_id"]
         self.default_sort = "title"
+        self.groups = []
 
         self._setup_ui()
         self._events_binds()
-        self.tree_refresh()
 
-    # ------------------------------------------------------------------------------------------
-    # Définition des styles
-    # ------------------------------------------------------------------------------------------
-    def setup_style(self):
-        self.style_frame_label = "Bold.TLabelFrame.Label"
-        ttk.Style().configure(self.style_frame_label, font=("TkDefaultFont", 10, "bold"))
+        self.tree_refresh()
 
     # ------------------------------------------------------------------------------------------
     # Création de l'interface
     # ------------------------------------------------------------------------------------------
     def _setup_ui(self):
-        self.title("Gestion des utilisateurs")
-        self.minsize(width=1200, height=800)
-        self.maxsize(width=int(self.winfo_screenwidth() * 0.90), height=int(self.winfo_screenheight() * 0.90))
+        self.title("Pytre - Gestion des utilisateurs")
+        self.geometry("1200x800+100+75")
         self.resizable(True, True)
 
         self.ctrl_frame = ttk.Frame(self, padding=1, borderwidth=2)
@@ -51,25 +44,30 @@ class UserWindow(tk.Toplevel):
         self.grid_columnconfigure(0, weight=1)
 
     def _setup_ui_menu(self):
-        menubar = tk.Menu(self)
+        self.menubar = tk.Menu(self, tearoff=False)
 
-        self.config(menu=menubar)
+        self.config(menu=self.menubar)
 
-        menu_file = tk.Menu(menubar, tearoff=False)
-        menu_file.add_command(label="Ajouter...", command=self.add_user)
-        menu_file.add_command(label="Modifier...", command=self.modify_user)
-        menu_file.add_command(label="Supprimer...", command=self.delete_user)
-        menu_file.add_separator()
-        menu_file.add_command(label="Importer...", command=self.import_users)
-        menu_file.add_command(label="Exporter...", command=self.export_users)
-        menu_file.add_separator()
-        menu_file.add_command(label="Recharger", command=self.tree_refresh)
-        menubar.add_cascade(label="Utilisateurs", menu=menu_file)
+        menu_users = tk.Menu(self.menubar, tearoff=False)
+        menu_users.add_command(label="Ajouter...", command=self.user_add)
+        menu_users.add_command(label="Modifier...", command=self.user_modify)
+        menu_users.add_command(label="Supprimer...", command=self.user_delete)
+        menu_users.add_separator()
+        menu_users.add_command(label="Importer...", command=self.import_users)
+        menu_users.add_command(label="Exporter...", command=self.export_users)
+        menu_users.add_separator()
+        menu_users.add_command(label="Recharger", command=self.tree_refresh)
+        self.menubar.add_cascade(label="Utilisateurs", menu=menu_users)
+
+        menu_groups = tk.Menu(self.menubar, tearoff=False)
+        menu_groups.add_command(label="Affecter aux utilisateurs...", command=self.groups_add)
+        menu_groups.add_command(label="Retirer des utilisateurs...", command=self.groups_remove)
+        self.menubar.add_cascade(label="Groupes", menu=menu_groups)
 
     def _setup_ui_ctrl(self):
-        self.btn_add = ttk.Button(self.ctrl_frame, text="Ajouter", command=self.add_user)
-        self.btn_modify = ttk.Button(self.ctrl_frame, text="Modifier", command=self.modify_user)
-        self.btn_delete = ttk.Button(self.ctrl_frame, text="Supprimer", command=self.delete_user)
+        self.btn_add = ttk.Button(self.ctrl_frame, text="Ajouter", command=self.user_add)
+        self.btn_modify = ttk.Button(self.ctrl_frame, text="Modifier", command=self.user_modify)
+        self.btn_delete = ttk.Button(self.ctrl_frame, text="Supprimer", command=self.user_delete)
 
         filter_label = ttk.Label(self.ctrl_frame, text="Filtre :")
         self.filter_var = tk.StringVar()
@@ -93,7 +91,7 @@ class UserWindow(tk.Toplevel):
         for col, attr in cols.items():
             self.tree.heading(col, text=attr["text"], command=lambda c=col: self.tree_header_click(c))
             self.tree.column(col, minwidth=attr["minwidth"], stretch=attr["stretch"])
-            if col in ["superuser"]:
+            if col in ["admin"]:
                 self.tree.column(col, anchor=tk.CENTER)
 
         xbar = ttk.Scrollbar(self.tree_frame, orient=tk.HORIZONTAL, command=self.tree.xview)
@@ -107,9 +105,9 @@ class UserWindow(tk.Toplevel):
 
     def _tree_cols(self) -> dict:
         return {
-            "domain_and_name": {"text": "User", "minwidth": 200, "stretch": False},
+            "username": {"text": "Id", "minwidth": 200, "stretch": False},
             "title": {"text": "Libellé", "minwidth": 200, "stretch": False},
-            "superuser": {"text": "Admin", "minwidth": 75, "stretch": False},
+            "admin": {"text": "Admin", "minwidth": 75, "stretch": False},
             "grp_authorized": {"text": "Groupes", "minwidth": 60, "stretch": True},
             "x3_id": {"text": "Id X3", "minwidth": 60, "stretch": False},
             "msg_login_cust": {"text": "Login Message", "minwidth": 100, "stretch": False},
@@ -121,10 +119,11 @@ class UserWindow(tk.Toplevel):
     def _events_binds(self):
         self.filter.bind("<KeyRelease>", lambda _: self.tree_filter())
 
-        self.bind("<Home>", lambda e: self.tree_select_pos(0, e))
-        self.bind("<End>", lambda e: self.tree_select_pos(-1, e))
-        # self.bind("<Next>", lambda e: self.tree_select_move(10, e))
-        # self.bind("<Prior>", lambda e: self.tree_select_move(-10, e))
+        self.tree.bind("<Home>", lambda e: self.tree_select_pos(0, e))
+        self.tree.bind("<End>", lambda e: self.tree_select_pos(-1, e))
+        self.tree.bind("<Next>", lambda e: self.tree_select_move(10, e))
+        self.tree.bind("<Prior>", lambda e: self.tree_select_move(-10, e))
+        self.tree.bind("<Button-3>", lambda e: self.menubar.post(e.x_root, e.y_root))
 
         self.protocol("WM_DELETE_WINDOW", self.app_exit)  # arrêter le programme quand fermeture de la fenêtre
 
@@ -169,13 +168,20 @@ class UserWindow(tk.Toplevel):
         for i, item in enumerate(items):
             self.tree.move(item, "", i)
 
+        for k, v in self._tree_cols().items():
+            title = v["text"]
+            if k == sort_col:
+                self.sort_symbols = ("\U000025B3", "\U000025BD")  # self pour que self.tree_autosize() en tienne compte
+                title = f"{title} {self.sort_symbols[0]}" if not reverse else f"{title} {self.sort_symbols[1]}"
+            self.tree.heading(k, text=title)
+
     def tree_header_click(self, col: str):
         items = list(self.tree.get_children())
         items_sorted = list(self.tree.get_children())
         items_sorted.sort(key=lambda k: self.tree.set(k, col))
 
         reverse = False
-        if items == items_sorted:
+        if items == items_sorted:  # liste triée de A-Z
             reverse = True
 
         self.tree_sort(col, reverse)
@@ -183,35 +189,48 @@ class UserWindow(tk.Toplevel):
     def tree_refresh(self, sort_col: str = ""):
         sort_col = self.default_sort if sort_col == "" else sort_col
 
-        users: list[User] = self.settings.users_get_all()
+        users: list[User] = User.users_get_all()
         cols = self._tree_cols()
 
         self.tree.delete(*self.tree.get_children())
         self.tree.delete(*self.detached_items)
         self.detached_items = []
+        self.groups = []
 
         for u in users:
             values: list = []
             for col in cols.keys():
                 value = getattr(u, col, "")
-                if col in ["superuser"]:
+                if col == "grp_authorized":
+                    value.remove("all")
+                    value.sort()
+                    self.groups.extend(value)
+                    value = "".join([f"[{item}]" for item in value])
+                if col == "admin":
                     value = "\U0001F5F9" if value is True else "\U000000B7"
                 values.append(value)
 
-            self.tree.insert("", tk.END, iid=u.domain_and_name, values=values)
+            self.tree.insert("", tk.END, iid=u.username, values=values)
+
+        self.groups = list(set(self.groups))  # doublons supprimés
+        self.groups.sort()
 
         self.tree_sort(sort_col)
         self.tree_autosize()
         self.tree_filter()
 
     def tree_autosize(self):
+        sort_max_width = max(
+            font.Font().measure(self.sort_symbols[0]),
+            font.Font().measure(self.sort_symbols[1]),
+        )
+
         for col in self.tree["columns"]:
-            max_width = font.Font().measure(self.tree.heading(col)["text"])
+            max_width = font.Font().measure(self.tree.heading(col)["text"] + "  ") + sort_max_width
             for item in self.tree.get_children(""):
                 item_width = font.Font().measure(self.tree.set(item, col))
                 max_width = max(max_width, item_width)
             self.tree.column(col, width=max_width)
-            # print(max_width)
 
     def tree_select_pos(self, pos: int, e: Event = None):
         if e is not None and e.widget is self.filter:  # désactivation si le filtre est en saisi
@@ -244,15 +263,16 @@ class UserWindow(tk.Toplevel):
     # ------------------------------------------------------------------------------------------
     # Autres traitements
     # ------------------------------------------------------------------------------------------
-    def add_user(self):
-        messagebox.showinfo(title="Fonction", message="ajouter", parent=self)
+    def user_add(self):
+        UserDialog(self)
 
-    def modify_user(self):
+    def user_modify(self):
         items = self.tree.selection()
-        msg = f"{len(items)} utilisateur(s) :\n- " + "\n- ".join(items)
-        messagebox.showinfo(title="Fonction", message=f"Modif de {msg}", parent=self)
+        if items:
+            user: User = User(username=items[0])
+            UserDialog(self, user)
 
-    def delete_user(self):
+    def user_delete(self):
         items = self.tree.selection()
 
         if not self._delete_confirm(items):
@@ -261,7 +281,9 @@ class UserWindow(tk.Toplevel):
         nb_ok, errors = 0, []
         for item in items:
             try:
-                self.settings.user_delete(item)
+                user = User(username=item)
+                if user.exists:
+                    user.delete()
                 self.tree.delete(item)
                 nb_ok += 1
             except LookupError:
@@ -297,13 +319,436 @@ class UserWindow(tk.Toplevel):
 
         messagebox.showinfo(title="Suppression", message=msg, parent=self)
 
+    def groups_add(self):
+        items = self.tree.selection()
+        if not items:
+            msg = "Vous devez sélectionner au moins 1 utilisateur pour utiliser cette fonction"
+            messagebox.showwarning(title="Affectation groupes", message=msg, parent=self, type=messagebox.OK)
+        else:
+            GroupsDialog.add(self, items)
+
+    def groups_remove(self):
+        items = self.tree.selection()
+        if not items:
+            msg = "Vous devez sélectionner au moins 1 utilisateur pour utiliser cette fonction"
+            messagebox.showwarning(title="Retirer groupes", message=msg, parent=self, type=messagebox.OK)
+        else:
+            GroupsDialog.remove(self, items)
+
     def import_users(self):
-        messagebox.showinfo(title="Fonction", message="importer", parent=self)
+        title = "Fichier à importer"
+        types = (("Fichier csv", "*.csv"), ("Tous les fichiers", "*.*"))
+        filename = filedialog.askopenfilename(title=title, filetypes=types, parent=self)
+
+        result = User.csv_import(filename)
+        self.tree_refresh()
+        if result:
+            msg = "Fin de l'import des utilisateurs"
+            messagebox.showinfo(title="Import", message=msg, parent=self, type=messagebox.OK)
+        else:
+            msg = "Quelque chose ne s'est pas bien passé lors de l'import !"
+            messagebox.showerror(title="Import", message=msg, parent=self, type=messagebox.OK)
 
     def export_users(self):
-        messagebox.showinfo(title="Fonction", message="exporter", parent=self)
+        title = "Fichier à exporter"
+        types = (("Fichier csv", "*.csv"),)
+        filename = filedialog.asksaveasfilename(title=title, filetypes=types, defaultextension=".csv", parent=self)
+        if not filename:
+            return
+
+        result = User.csv_export(filename, overwrite=True)
+        if result:
+            msg = "Fin de l'export des utilisateurs"
+            messagebox.showinfo(title="Export", message=msg, parent=self, type=messagebox.OK)
+        else:
+            msg = "Quelque chose ne s'est pas bien passé lors de l'export !"
+            messagebox.showerror(title="Export", message=msg, parent=self, type=messagebox.OK)
+
+
+class UserDialog(tk.Toplevel):
+    def __init__(self, parent, user: User = None):
+        super().__init__(master=parent)
+        self.parent: UsersWindow = parent
+        self.user: User = user
+
+        self.focus_set()
+        self.parent.wm_attributes("-disabled", True)
+        self.transient(self.parent)
+
+        self._setup_ui()
+        self._events_binds()
+
+        if self.user:
+            self.set_entries()
+
+        self.groups_set()
+
+    # ------------------------------------------------------------------------------------------
+    # Création de l'interface
+    # ------------------------------------------------------------------------------------------
+    def _setup_ui(self):
+        if not self.user:
+            self.title("Pytre - Ajout utilisateur")
+        else:
+            self.title("Pytre - Modification utilisateur")
+
+        self.minsize(width=400, height=100)
+        self.geometry(f"+{self.parent.winfo_x() + 200}+{self.parent.winfo_y() + 150}")
+        self.resizable(True, True)
+
+        self.entries_frame = ttk.Frame(self, padding=1, borderwidth=2)
+        self.groups_frame = ttk.Frame(self, padding=2, borderwidth=2)
+        self.buttons_frame = ttk.Frame(self, padding=1, borderwidth=2)
+
+        self.entries_frame.grid(row=0, column=0, padx=4, pady=4, sticky="nswe")
+        self.groups_frame.grid(row=1, column=0, padx=4, pady=4, sticky="nswe")
+        self.buttons_frame.grid(row=2, column=0, padx=4, pady=4, sticky="nswe")
+
+        self.rowconfigure(1, weight=1)
+        self.columnconfigure(0, weight=1)
+
+        self._setup_entries()
+        self._setup_groups()
+        self._setup_buttons()
+
+    def _setup_entries(self):
+        self.entries_frame.columnconfigure(1, weight=1)
+
+        self.entries = {
+            "username": {"text": "Id"},
+            "title": {"text": "Libellé"},
+            "admin": {"text": "Admin"},
+            "x3_id": {"text": "Id X3"},
+            "msg_login_cust": {"text": "Login Message"},
+        }
+
+        num_row = 0
+        for key, item in self.entries.items():
+            my_label = ttk.Label(self.entries_frame, text=item["text"] + " : ")
+
+            if key == "admin":
+                my_tk_var = tk.BooleanVar()
+                my_entry = ttk.Checkbutton(self.entries_frame, variable=my_tk_var)
+                my_entry["onvalue"] = True
+                my_entry["offvalue"] = False
+            else:
+                my_tk_var = tk.StringVar()
+                my_entry = ttk.Entry(self.entries_frame, textvariable=my_tk_var)
+
+            new_key = {"w_label": my_label, "w_entry": my_entry, "var": my_tk_var}
+            item.update(new_key)
+
+            my_label.grid(row=num_row, column=0, padx=2, pady=2, sticky="nswe")
+            my_entry.grid(row=num_row, column=1, padx=2, pady=2, sticky="nswe")
+            num_row += 1
+
+    def _setup_groups(self):
+        self.groups_frame.columnconfigure(0, weight=1)
+        self.groups_frame.rowconfigure(1, weight=1)
+
+        title_label = ttk.Label(self.groups_frame, text="Groupes :")
+        self.new_grp = ttk.Button(self.groups_frame, text="+", width=3, command=self.group_add)
+
+        self.listbox = tk.Listbox(self.groups_frame, selectmode=tk.MULTIPLE, activestyle="none", relief="groove")
+        ybar = ttk.Scrollbar(self.groups_frame, orient="vertical", command=self.listbox.yview)
+        self.listbox.configure(yscroll=ybar.set)
+
+        title_label.grid(row=0, column=0, padx=2, pady=2, sticky="nswe")
+        self.new_grp.grid(row=0, column=1, padx=2, pady=2, sticky="nswe")
+        self.listbox.grid(row=1, column=0, columnspan=2, padx=2, pady=2, sticky="nswe")
+        ybar.grid(row=1, column=1, sticky="nse")
+
+    def _setup_buttons(self):
+        self.buttons_frame.columnconfigure(0, weight=1)
+
+        self.btn_save = ttk.Button(self.buttons_frame, text="Enregistrer", command=self.user_save)
+        self.btn_cancel = ttk.Button(self.buttons_frame, text="Annuler", command=self.close)
+
+        self.btn_save.grid(row=0, column=1, padx=2, pady=2, sticky="nse")
+        self.btn_cancel.grid(row=0, column=2, padx=2, pady=2, sticky="nse")
+
+    # ------------------------------------------------------------------------------------------
+    # Définition des évènements générer par les traitements
+    # ------------------------------------------------------------------------------------------
+    def _events_binds(self):
+        self.protocol("WM_DELETE_WINDOW", self.close)  # arrêter le programme quand fermeture de la fenêtre
+
+    # ------------------------------------------------------------------------------------------
+    # Autres traitements
+    # ------------------------------------------------------------------------------------------
+    def set_entries(self):
+        for key, item in self.entries.items():
+            val = getattr(self.user, key)
+            item["var"].set(val)
+
+    def groups_set(self):
+        for group in self.parent.groups:
+            self.listbox.insert(tk.END, group)
+
+        if self.user:
+            for i, line in enumerate(self.listbox.get(0, tk.END)):
+                if line in self.user.grp_authorized:
+                    self.listbox.selection_set(i)
+
+    def group_add(self):
+        curr_groups = self.listbox.get(0, tk.END)
+        group = InputDialog.ask("Nouveau groupe", "Groupe à ajouter :", parent=self)
+        if group and group not in curr_groups:
+            pos = max([i for i, line in enumerate(curr_groups) if line <= group]) + 1
+            self.listbox.insert(pos, group)
+            self.listbox.selection_set(pos)
+
+    def user_save(self):
+        username = self.entries["username"]["var"].get()
+
+        if self.user:
+            user = self.user
+        else:
+            if username not in list(self.parent.tree.get_children("")):
+                user: User = User(detect_user=False)
+            else:
+                msg = "Utilisateur déjà existant !"
+                messagebox.showerror(title="Erreur ajout", message=msg, parent=self, type=messagebox.OK)
+                return
+
+        for key, item in self.entries.items():
+            val = item["var"].get()
+            setattr(user, key, val)
+
+        user.grp_authorized = [self.listbox.get(line) for line in self.listbox.curselection()]
+
+        user.save()
+        self.close(refresh_tree=True)
+
+    def close(self, _: Event = None, refresh_tree: bool = False):
+        self.parent.wm_attributes("-disabled", False)
+
+        if refresh_tree:
+            self.parent.tree_refresh()
+        self.parent.focus_set()
+
+        self.destroy()
+
+
+class GroupsDialog(tk.Toplevel):
+    @classmethod
+    def add(cls, parent: UserDialog, usernames: list[str]):
+        dialog = GroupsDialog(parent=parent, usernames=usernames, remove_mode=False)
+        cls.wait_window(dialog)
+        return
+
+    @classmethod
+    def remove(cls, parent: UserDialog, usernames: list[str]):
+        dialog = GroupsDialog(parent=parent, usernames=usernames, remove_mode=True)
+        cls.wait_window(dialog)
+        return
+
+    def __init__(self, parent, usernames: list[str], remove_mode: bool = False):
+        super().__init__(master=parent)
+        self.parent: UsersWindow = parent
+        self.usernames: list[str] = usernames
+
+        self.focus_set()
+        self.parent.wm_attributes("-disabled", True)
+        self.transient(self.parent)
+
+        self.remove_mode: bool = remove_mode
+
+        self._setup_ui()
+        self._events_binds()
+
+        self.groups_set()
+
+    # ------------------------------------------------------------------------------------------
+    # Création de l'interface
+    # ------------------------------------------------------------------------------------------
+    def _setup_ui(self):
+        nb_txt = "(1 utilisateur)" if len(self.usernames) <= 1 else f"({len(self.usernames)} utilisateurs)"
+        if not self.remove_mode:
+            self.title(f"Pytre - Affecter groupes {nb_txt}")
+        else:
+            self.title(f"Pytre - Retirer groupes {nb_txt}")
+
+        self.minsize(width=400, height=100)
+        self.geometry(f"+{self.parent.winfo_x() + 200}+{self.parent.winfo_y() + 150}")
+        self.resizable(True, True)
+
+        self.groups_frame = ttk.Frame(self, padding=2, borderwidth=2)
+        self.buttons_frame = ttk.Frame(self, padding=2, borderwidth=2)
+
+        self.groups_frame.grid(row=0, column=0, padx=0, pady=0, sticky="nswe")
+        self.buttons_frame.grid(row=1, column=0, padx=0, pady=0, sticky="nswe")
+
+        self.rowconfigure(0, weight=1)
+        self.columnconfigure(0, weight=1)
+
+        self._setup_groups()
+        self._setup_buttons()
+
+    def _setup_groups(self):
+        self.groups_frame.columnconfigure(0, weight=1)
+        self.groups_frame.rowconfigure(1, weight=1)
+
+        if not self.remove_mode:
+            title_text = "Sélection des groupes à affecter :"
+        else:
+            title_text = "Sélection des groupes à retirer :"
+
+        title_label = ttk.Label(self.groups_frame, text=title_text)
+        self.new_grp = ttk.Button(self.groups_frame, text="+", width=3, command=self.group_add)
+
+        self.listbox = tk.Listbox(self.groups_frame, selectmode=tk.MULTIPLE, activestyle="none", relief="groove")
+        ybar = ttk.Scrollbar(self.groups_frame, orient="vertical", command=self.listbox.yview)
+        self.listbox.configure(yscroll=ybar.set)
+
+        title_label.grid(row=0, column=0, padx=2, pady=2, sticky="nswe")
+        if not self.remove_mode:
+            self.new_grp.grid(row=0, column=1, padx=2, pady=2, sticky="nswe")
+        self.listbox.grid(row=1, column=0, columnspan=2, padx=2, pady=2, sticky="nswe")
+        ybar.grid(row=1, column=1, sticky="nse")
+
+    def _setup_buttons(self):
+        self.buttons_frame.columnconfigure(0, weight=1)
+
+        save_txt = "Ajouter" if not self.remove_mode else "Retirer"
+        self.btn_save = ttk.Button(self.buttons_frame, text=save_txt, command=self.users_update_groups)
+        self.btn_cancel = ttk.Button(self.buttons_frame, text="Annuler", command=self.close)
+
+        self.btn_save.grid(row=0, column=1, padx=2, pady=2, sticky="nse")
+        self.btn_cancel.grid(row=0, column=2, padx=2, pady=2, sticky="nse")
+
+    # ------------------------------------------------------------------------------------------
+    # Définition des évènements générer par les traitements
+    # ------------------------------------------------------------------------------------------
+    def _events_binds(self):
+        self.protocol("WM_DELETE_WINDOW", self.close)  # arrêter le programme quand fermeture de la fenêtre
+
+    # ------------------------------------------------------------------------------------------
+    # Autres traitements
+    # ------------------------------------------------------------------------------------------
+    def groups_set(self):
+        for group in self.parent.groups:
+            self.listbox.insert(tk.END, group)
+
+    def group_add(self):
+        curr_groups = self.listbox.get(0, tk.END)
+        group = InputDialog.ask("Nouveau groupe", "Groupe à ajouter :", parent=self)
+        if group and group not in curr_groups:
+            pos = max([i for i, line in enumerate(curr_groups) if line <= group]) + 1
+            self.listbox.insert(pos, group)
+            self.listbox.selection_set(pos)
+
+    def users_update_groups(self):
+        groups = [self.listbox.get(line) for line in self.listbox.curselection()]
+
+        if not groups:
+            action = "ajouter" if not self.remove_mode else "retirer"
+            msg = f"Aucun groupe à {action} sélectionné !"
+            messagebox.showerror(title="Erreur modification", message=msg, parent=self, type=messagebox.OK)
+            return
+
+        if not self.remove_mode:
+            User.users_add_groups(self.usernames, groups)
+        else:
+            User.users_remove_groups(self.usernames, groups)
+
+        self.close(refresh_tree=True)
+
+    def close(self, _: Event = None, refresh_tree: bool = False):
+        self.parent.wm_attributes("-disabled", False)
+
+        if refresh_tree:
+            self.parent.tree_refresh()
+        self.parent.focus_set()
+
+        self.destroy()
+
+
+class InputDialog(tk.Toplevel):
+    @classmethod
+    def ask(cls, title, prompt: str, parent: tk.Widget | None = None) -> str | None:
+        dialog = InputDialog(title, prompt, parent=parent)
+        cls.wait_window(dialog)
+        return dialog.answer
+
+    def __init__(self, title, prompt: str, parent: tk.Widget | None = None):
+        super().__init__(master=parent)
+
+        self.focus_set()
+        self.master.wm_attributes("-disabled", True)
+        self.transient(self.master)
+
+        self.answer = None
+
+        self._setup_ui(title, prompt)
+        self._setup_position(self.master)
+        self._events_binds()
+
+    def _setup_ui(self, title: str, prompt: str):
+        self.minsize(width=250, height=25)
+        self.resizable(True, False)
+        self.title(title)
+
+        self.rowconfigure(0, weight=1)
+        self.columnconfigure(0, weight=1)
+
+        self.input_frame = ttk.Frame(self, padding=1, borderwidth=2)
+        self.buttons_frame = ttk.Frame(self, padding=1, borderwidth=2)
+
+        self.input_frame.grid(row=0, column=0, padx=4, pady=1, sticky="nswe")
+        self.buttons_frame.grid(row=1, column=0, padx=4, pady=1, sticky="nswe")
+
+        self._setup_input(prompt)
+        self._setup_buttons()
+
+    def _setup_input(self, prompt):
+        self.input_frame.columnconfigure(1, weight=1)
+
+        label = ttk.Label(self.input_frame, text=prompt)
+        self.tk_var_answer = tk.StringVar()
+        self.entry = ttk.Entry(self.input_frame, textvariable=self.tk_var_answer)
+
+        label.grid(row=0, column=0, padx=2, pady=2, sticky="nswe")
+        self.entry.grid(row=1, column=0, columnspan=2, padx=2, pady=2, sticky="nswe")
+
+        self.entry.focus_set()
+
+    def _setup_position(self, parent: tk.Toplevel | None):
+        self.update_idletasks()
+
+        parent_x = parent.winfo_x() if parent else 0
+        parent_y = parent.winfo_y() if parent else 0
+        parent_width = parent.winfo_width() if parent else self.winfo_screenwidth()
+        parent_height = parent.winfo_height() if parent else self.winfo_screenheight()
+
+        x = int(parent_x + parent_width / 2 - self.winfo_width() / 2)
+        y = int(parent_y + parent_height / 2 - self.winfo_height() / 2)
+
+        self.geometry(f"+{x}+{y}")
+
+    def _setup_buttons(self):
+        self.buttons_frame.columnconfigure(0, weight=1)
+
+        self.btn_ok = ttk.Button(self.buttons_frame, text="Ok", command=self.set_answer_and_close)
+        self.btn_cancel = ttk.Button(self.buttons_frame, text="Annuler", command=self.close)
+
+        self.btn_ok.grid(row=0, column=1, padx=2, pady=2, sticky="nse")
+        self.btn_cancel.grid(row=0, column=2, padx=2, pady=2, sticky="nse")
+
+    def _events_binds(self):
+        self.entry.bind("<Return>", lambda _: self.set_answer_and_close())
+
+        self.protocol("WM_DELETE_WINDOW", self.close)  # arrêter le programme quand fermeture de la fenêtre
+
+    def set_answer_and_close(self):
+        self.answer = self.tk_var_answer.get()
+        self.close()
+
+    def close(self, _: Event = None):
+        self.master.wm_attributes("-disabled", False)
+        self.destroy()
 
 
 if __name__ == "__main__":
-    my_app = UserWindow()
+    my_app = UsersWindow()
     my_app.mainloop()

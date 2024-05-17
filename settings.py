@@ -2,6 +2,7 @@ import sys
 import os
 import getpass
 
+import csv
 import json
 from pathlib import Path
 
@@ -27,67 +28,282 @@ KEE_PWD = r"]i=L'n)X2jg@Y9U82cqy'acn"
 
 
 class User:
-    def __init__(self, domain_and_name: str = ""):
-        self.domain_and_name: str = domain_and_name if domain_and_name else self._get_domain_and_name()
-        self.exist_in_settings: bool = False
+    kee_db: PyKeePass
+    kee_file: str = KEE_FILE
+    kee_pwd: str = KEE_PWD
+    kee_open: bool = False
+    users_grp_name: str = "Utilisateurs"
+    users_grp: Group
+
+    @classmethod
+    def open_db(cls, reload: bool = False):
+        if reload or not cls.kee_open:
+            cls.kee_db = PyKeePass(cls.kee_file, password=cls.kee_pwd)
+            cls.users_grp = cls.kee_db.find_groups(name=cls.users_grp_name, first=True)
+            cls.kee_open = True
+
+    @classmethod
+    def users_get_all(cls) -> list:
+        cls.open_db(True)
+
+        u_entry: Entry | None = None
+        u_list: list[User] = []
+
+        for u_entry in cls.kee_db.find_entries(username=r".*", group=cls.users_grp, regex=True):
+            u = User(entry=u_entry)
+            u_list.append(u)
+
+        return u_list
+
+    @classmethod
+    def users_add_groups(cls, usernames: list[str], groups: list[str]):
+        cls.open_db(True)
+
+        save: bool = False
+
+        groups = [group for group in groups if not group == "all"]
+        u_entry: Entry | None = None
+        for u_entry in cls.kee_db.find_entries(username=r".*", group=cls.users_grp, regex=True):
+            if u_entry.username not in usernames:
+                continue
+
+            new_groups = u_entry.tags if u_entry.tags else []
+            new_groups = list(set(new_groups + groups))
+
+            if not new_groups == u_entry.tags:
+                u_entry.tags = new_groups
+                save = True
+
+        if save:
+            cls.kee_db.save()
+
+    @classmethod
+    def users_remove_groups(cls, usernames: list[str], groups: list[str]):
+        cls.open_db(True)
+
+        save: bool = False
+
+        u_entry: Entry | None = None
+        for u_entry in cls.kee_db.find_entries(username=r".*", group=cls.users_grp, regex=True):
+            if u_entry.username not in usernames or not u_entry.tags:
+                continue
+
+            new_groups = u_entry.tags
+            for tag in u_entry.tags:
+                if tag in groups:
+                    new_groups.remove(tag)
+
+            if not new_groups == u_entry.tags:
+                u_entry.tags = new_groups
+                save = True
+
+        if save:
+            cls.kee_db.save()
+
+    @classmethod
+    def csv_import(cls, filename: Path, delimiter: str = ";") -> bool:
+        cls.open_db(True)
+
+        entries_dict = {}
+        u_entry: Entry
+        for u_entry in cls.kee_db.find_entries(username=r".*", group=cls.users_grp, regex=True):
+            entries_dict[u_entry.username] = u_entry
+
+        with open(filename, mode="r", encoding="latin-1") as csv_file:
+            csv_reader = csv.reader(csv_file, delimiter=delimiter, quotechar='"')
+
+            for i, row in enumerate(csv_reader):
+                if i == 0:
+                    continue
+
+                # mapping des colonnes
+                col_dict = {"username": 0, "title": 1, "superuser": 2, "grp_authorized": 3, "x3_id": 4, "msg_login": 5}
+                row_dict = {}
+                for key, val in col_dict.items():
+                    row_dict[key] = row[val]
+
+                # contrôle si utilisateurs à modifier ou à créer
+                if row_dict["username"] in entries_dict.keys():
+                    u_entry = entries_dict[row_dict["username"]]
+                else:
+                    u_entry = cls.kee_db.add_entry(User.users_grp, "", row_dict["username"], "")
+
+                # modification des entry de la base
+                u_entry.title = row_dict["title"]
+
+                u_entry.set_custom_property("x3_id", row_dict["x3_id"])
+                u_entry.set_custom_property("msg_login", row_dict["msg_login"])
+
+                if row_dict["superuser"] == "true":
+                    u_entry.set_custom_property("superuser", "true")
+                else:
+                    u_entry.set_custom_property("superuser", "false")
+
+                groups = row_dict["grp_authorized"].split(delimiter)
+                u_entry.tags = [group for group in groups if not group == "all"]
+
+            # une fois que toutes les entries sont à jour, sauvegarde de la base
+            cls.kee_db.save()
+
+            return True
+
+    @classmethod
+    def csv_export(cls, filename: Path, delimiter: str = ";", overwrite: bool = False) -> bool:
+        if Path(filename).exists() and not overwrite:
+            return False
+
+        rows = [["Id", "Libellé", "Admin", "Groupes", "Id X3", "Login Message"]]
+        cls.open_db(True)
+        u_entry: Entry | None
+        for u_entry in cls.kee_db.find_entries(username=r".*", group=cls.users_grp, regex=True):
+            row = [u_entry.username, u_entry.title]
+
+            tags = u_entry.tags if u_entry.tags else []
+            group = delimiter.join(tags)
+
+            items = ["superuser", "group", "x3_id", "msg_login"]
+            for item in items:
+                if item == "group":
+                    value = group
+                else:
+                    value = u_entry.get_custom_property(item)
+
+                value = value if value is not None else ""
+                row.append(value)
+
+            rows.append(row)
+
+        with open(filename, mode="w", encoding="latin-1", newline="") as csv_file:
+            csv_writer = csv.writer(csv_file, delimiter=delimiter, quotechar='"', quoting=csv.QUOTE_MINIMAL)
+            csv_writer.writerows(rows)
+
+        return True
+
+    def __init__(self, username: str = "", entry: Entry = None, detect_user: bool = True):
+        """
+        si pas de username et d'entry, et que detect_user est faux
+        alors pas de chrgmt à partir de la base keepass
+        """
+
+        self.username: str = ""
+        self.exists: bool = False
         self.is_authorized: bool = False
         self.title: str = ""
         self.x3_id: str = ""
-        self.superuser: bool = False
-        self.grp_authorized: list[str] = []
+        self.admin: bool = False
+        self.grp_authorized: list[str] = ["all"]  # par défaut un utilisateur appartient au groupe all
         self.msg_login_cust: str = ""
         self.msg_login: str = ""
 
-    def user_description(self) -> dict:
+        if entry:
+            self._load_from_entry(entry)
+        elif username or detect_user:
+            self.username = username if username else self._get_username()
+            User.open_db()
+            self.load()
+
+    def _user_description(self) -> dict:
         return {
-            "domain_and_name": self.domain_and_name,
-            "exist_in_settings": self.exist_in_settings,
+            "id": self.username,
+            "exist_in_settings": self.exists,
             "is_authorized": self.is_authorized,
             "title": self.title,
             "x3_id": self.x3_id,
-            "superuser": self.superuser,
+            "superuser": self.admin,
             "grp_authorized": self.grp_authorized,
             "msg_login": self.msg_login,
         }
 
     def __repr__(self) -> str:
-        return str(self.user_description())
+        return str(self._user_description())
 
     def __str__(self) -> str:
-        return str(self.user_description())
+        return str(self._user_description())
 
-    def _get_domain_and_name(self) -> str:
+    def _get_username(self) -> str:
         domain = os.environ.get("userdnsdomain") or ""
         name = getpass.getuser()
         domain_and_name = f"{domain}\\{name}" if domain else name
         return domain_and_name
 
-    def update_infos(self, infos: dict) -> None:
-        # recup des attributs de base attendu
-        self.exist_in_settings = True if infos else False
-        self.is_authorized = True if infos else False
+    def _load_from_entry(self, u_entry: Entry):
+        if self.username == "":
+            self.username = u_entry.username
+        self.title = u_entry.title
 
-        self.title = infos.get("title", "")
-        self.x3_id = infos.get("x3_id", "")
-        self.msg_login_cust = infos.get("msg_login", "")
-        self.superuser = infos.get("superuser", False)
-        self.grp_authorized = infos.get("grp_authorized", [])
+        for property in u_entry.custom_properties:
+            value = u_entry.get_custom_property(property)
+            if (not hasattr(self, property) or not value) and not property == "superuser":
+                continue
 
-        # recup des autres attributs qui existerait
-        self.other_attributes = [attr for attr in infos if not hasattr(self, attr)]
-        for attr in self.other_attributes:
-            setattr(self, attr, infos.get(attr, ""))
+            if property == "superuser":
+                self.admin = True if value and value.lower() == "true" else False
+            elif property == "msg_login":
+                self.msg_login_cust = value
+            else:
+                setattr(self, property, value)
 
-        # si dans les settings pas de message de login alors ajout d'un message par défaut
+        tags = u_entry.tags if u_entry.tags else []
+        for tag in tags:
+            group = tag.lower().strip()
+            self.grp_authorized.append(group)
+
         if self.msg_login_cust == "":
             self.msg_login = f"Bonjour {self.title.split(' ')[0]} !"
         else:
             self.msg_login = self.msg_login_cust
 
+    def load(self) -> None:
+        User.open_db(True)
+
+        u_entry: Entry | None = None
+        for u_entry in User.kee_db.find_entries(username=r".*", group=User.users_grp, regex=True):
+            if u_entry.username.casefold() == self.username.casefold():
+                self.exists = True
+                self.is_authorized = True
+                self._load_from_entry(u_entry)
+                break
+
+    def save(self) -> bool:
+        User.open_db()
+
+        u_entry: User = User.kee_db.find_entries(username=self.username, group=User.users_grp, first=True)
+        if u_entry:
+            u_entry.username = self.username
+            u_entry.title = self.title
+        else:
+            u_entry: Entry = User.kee_db.add_entry(User.users_grp, self.title, self.username, password="")
+
+        u_entry.set_custom_property("x3_id", self.x3_id)
+        u_entry.set_custom_property("msg_login", self.msg_login_cust)
+
+        if self.admin:
+            u_entry.set_custom_property("superuser", "true")
+        else:
+            u_entry.set_custom_property("superuser", "false")
+
+        u_entry.tags = [grp for grp in self.grp_authorized if not grp == "all"]
+
+        User.kee_db.save()
+
+        return True
+
+    def delete(self) -> bool:
+        User.open_db()
+
+        entry: Entry = User.kee_db.find_entries(username=self.username, group=User.users_grp, first=True)
+        if entry is None:
+            raise LookupError("User not found")
+
+        entry.delete()
+        User.kee_db.save()
+
+        return True
+
 
 class Settings:
-    def __init__(self, keepass_file: Path = KEE_FILE, keepass_pwd: str = KEE_PWD, user_domain_and_name: str = ""):
-        self.keepass_db: PyKeePass = PyKeePass(keepass_file, password=keepass_pwd)
+    def __init__(self, username: str = ""):
+        self.keepass_db: PyKeePass = PyKeePass(KEE_FILE, password=KEE_PWD)
         self.app_path: Path = get_app_path()
 
         self.min_version_settings: str = "9999"  # version minimum requises pour les settings
@@ -97,8 +313,7 @@ class Settings:
         self.sql_server: dict = {}  # paramètres de connection au serveur
         self.servers_group: str = "Serveurs"
 
-        self.curr_user: User = User(domain_and_name=user_domain_and_name)  # objet utilisateur
-        self.users_group: str = "Utilisateurs"
+        self.curr_user: User = User(username=username)  # objet utilisateur
 
         self.field_separator: str = ""  # délimitateur de champs pour exports
         self.decimal_separator: str = ""  # séparateur décimal pour exports
@@ -110,7 +325,6 @@ class Settings:
         self._init_params()
         self._init_min_version()
         self._init_extract_folder()
-        self._init_curr_user()
 
     def _init_server(self):
         s_group = self.keepass_db.find_groups(name=self.servers_group, first=True)
@@ -127,42 +341,6 @@ class Settings:
         )
         self.sql_server["timeout"] = int(self.sql_server.get("timeout", "300"))
         self.sql_server["login_timeout"] = int(self.sql_server.get("login_timeout", "60"))
-
-    def _init_curr_user(self) -> None:
-        u_group: Group = self.keepass_db.find_groups(name=self.users_group, first=True)
-        u_entry: Entry | None = None
-        for u_entry in self.keepass_db.find_entries(username=r".*", group=u_group, regex=True):
-            if u_entry.username.lower() == self.curr_user.domain_and_name.lower():
-                u = self._user_from_entry(u_entry)
-                self.curr_user = u
-                break
-
-    def _user_from_entry(self, u_entry: Entry) -> User:
-        if u_entry is None:
-            return
-
-        u_dict = {}
-
-        u_dict["username"] = u_entry.username
-        u_dict["title"] = u_entry.title
-
-        for property in u_entry.custom_properties:
-            u_dict[property] = val if (val := u_entry.get_custom_property(property)) is not None else ""
-
-        if u_dict.get("superuser", "").lower() == "true":  # valeur str à convertir en bool
-            u_dict["superuser"] = True
-        else:
-            u_dict["superuser"] = False
-
-        u_dict["grp_authorized"] = ["all"]  # par défaut un utilisateur appartient au groupe all
-        u_dict["grp_authorized"].extend(
-            [item.lower().strip() for item in u_entry.tags] if u_entry.tags is not None else []
-        )
-
-        u = User(domain_and_name=u_dict["username"])
-        u.update_infos(u_dict)
-
-        return u
 
     def _init_params(self) -> None:
         p_group: Group = self.keepass_db.find_groups(name="Paramètres", first=True)
@@ -200,45 +378,10 @@ class Settings:
             except FileExistsError:
                 self.extract_folder = Path.home()
 
-    def users_get_all(self) -> list[User]:
-        self.keepass_db.reload()
-
-        u_group: Group = self.keepass_db.find_groups(name=self.users_group, first=True)
-        u_entry: Entry | None = None
-        u_list: list[User] = []
-
-        for u_entry in self.keepass_db.find_entries(username=r".*", group=u_group, regex=True):
-            u = self._user_from_entry(u_entry)
-            u_list.append(u)
-
-        return u_list
-
-    def user_add(self, title: str, username: str, x3_id: str, msg_login: str = "", superuser: str = "false") -> None:
-        group: Group = self.keepass_db.find_groups(name=self.users_group, first=True)
-
-        if self.keepass_db.find_entries(username=self.curr_user.domain_and_name, group=group, first=True) is None:
-            u_entry: Entry = self.keepass_db.add_entry(group, title, username, password="")
-            u_entry.set_custom_property("x3_id", x3_id)
-            u_entry.set_custom_property("msg_login", msg_login)
-            u_entry.set_custom_property("superuser", superuser)
-
-            self.keepass_db.save()
-
-    def user_delete(self, domain_and_name: str) -> bool:
-        group: Group = self.keepass_db.find_groups(name=self.users_group, first=True)
-        entry: Entry = self.keepass_db.find_entries(username=domain_and_name, group=group, first=True)
-
-        if entry is None:
-            raise LookupError("User not found")
-
-        entry.delete()
-        self.keepass_db.save()
-
-        return True
-
 
 if __name__ == "__main__":
-    my_settings = Settings(user_domain_and_name="PROSOL.PRI\\mferrier")
+    # my_settings = Settings(user_domain_and_name="PROSOL.PRI\\mferrier")
+    my_settings = Settings()
 
     print(my_settings.sql_server)
     print(f"Version mini Pytre : {my_settings.min_version_pytre}")
@@ -246,5 +389,5 @@ if __name__ == "__main__":
     print(f"Version utilisée Settings : {my_settings.settings_version}")
 
     print("Utilisateur courant :")
-    for key, val in my_settings.curr_user.user_description().items():
+    for key, val in my_settings.curr_user._user_description().items():
         print(f"- {key}: {val}")

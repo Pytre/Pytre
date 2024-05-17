@@ -8,7 +8,7 @@ from threading import Thread
 import utils
 import sql_query
 from app_debug import DebugWindow
-from app_users import UserWindow
+from app_users import UsersWindow
 
 SETTINGS = sql_query.SETTINGS
 PYTRE_VERSION = "1.031"
@@ -48,12 +48,12 @@ class App(tk.Tk):
                 "Erreur",
                 "Vous n'êtes pas dans liste des utilisateurs autorisées !"
                 + "\nDonnées d'identification :"
-                + f"\n- User : {self.user.domain_and_name}",
+                + f"\n- User : {self.user.username}",
             )
             self.destroy()
             return False
         else:
-            if not self.user.superuser:
+            if not self.user.admin:
                 self.queries_btn_folder.grid_forget()
             return True
 
@@ -118,13 +118,12 @@ class App(tk.Tk):
     # Création de l'interface
     # ------------------------------------------------------------------------------------------
     def setup_ui(self):
-        self.title(f"Pytre X3 - Python Requeteur pour X3 - V.{PYTRE_VERSION}")
+        self.title(f"Pytre - V.{PYTRE_VERSION}")
         icon_file = SETTINGS.app_path / "res" / "app.ico"
         self.iconbitmap(default=icon_file)
 
-        self.minsize(width=800, height=600)
+        self.minsize(width=975, height=700)
         self.resizable(True, True)
-        self.geometry("975x700")
 
         self.setup_ui_menu()
         self.setup_ui_paned_window()
@@ -137,7 +136,7 @@ class App(tk.Tk):
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(0, weight=1)
 
-        self.center_window()
+        self.position()
 
     def setup_ui_menu(self):
         menubar = tk.Menu(self)
@@ -151,7 +150,7 @@ class App(tk.Tk):
         self.menu_query.add_command(label="Recharger", command=lambda: self.refresh_queries())
         menubar.add_cascade(label="Requêtes", menu=self.menu_query)
 
-        if self.user.superuser:
+        if self.user.admin:
             menu_admin = tk.Menu(menubar, tearoff=False)
             menu_admin.add_command(label="Utilisateurs...", command=self.manage_users)
             menubar.add_cascade(label="Administation", menu=menu_admin)
@@ -309,19 +308,13 @@ class App(tk.Tk):
             my_weight = 1 if column == 0 else 0
             self.btn_frame.columnconfigure(column, weight=my_weight)
 
-    def center_window(self, my_window=None):
-        my_window = self if not my_window else my_window
+    def position(self):
+        self.update_idletasks()
 
-        my_window.update_idletasks()
+        x = int(self.winfo_screenwidth() / 2 - self.winfo_width() / 2)
+        y = int(self.winfo_screenheight() / 2 - self.winfo_height() / 1.8)
 
-        screen_width = self.winfo_screenwidth()
-        screen_height = self.winfo_screenheight()
-        app_size = tuple(int(_) for _ in my_window.geometry().split("+")[0].split("x"))
-
-        x = screen_width / 2 - app_size[0] / 2
-        y = screen_height / 2 - app_size[1] / 2
-
-        my_window.geometry("+%d+%d" % (x, y))
+        self.geometry(f"+{x}+{y}")
 
     # ------------------------------------------------------------------------------------------
     # Gestion de l'interface pour la frame de saisie des paramètres
@@ -353,7 +346,7 @@ class App(tk.Tk):
 
             # ne pas afficher le paramètre si il doit être caché
             # et que l'utilisateur n'est pas un super utilisateur
-            if params[key].is_hidden and not self.user.superuser:
+            if params[key].is_hidden and not self.user.admin:
                 continue
 
             my_widgets["label"] = ttk.Label(self.params_inner, text=params[key].description + " : ", justify=tk.LEFT)
@@ -704,7 +697,7 @@ class App(tk.Tk):
 
     def manage_users(self):
         if getattr(self, "user_window", None) is None or not self.user_window.winfo_exists():
-            self.user_window = UserWindow(self)
+            self.user_window = UsersWindow(self)
         else:
             self.user_window.focus_set()
 

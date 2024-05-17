@@ -488,7 +488,7 @@ def get_queries(folder) -> list[Query]:
             if my_query.grp_authorized == [] or set(USER.grp_authorized) & set(my_query.grp_authorized):
                 user_is_authorized = True
 
-            if (USER.superuser and my_query.hide != 2) or (user_is_authorized and my_query.hide == 0):
+            if (USER.admin and my_query.hide != 2) or (user_is_authorized and my_query.hide == 0):
                 queries.append(my_query)
 
     queries.sort(key=lambda k: k.name)

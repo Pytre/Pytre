@@ -302,8 +302,30 @@ class User:
 
 
 class Settings:
+    kee_db: PyKeePass
+    kee_file: str = KEE_FILE
+    kee_pwd: str = KEE_PWD
+    kee_open: bool = False
+
+    servers_group_name: str = "Serveurs"
+    servers_group: Group
+
+    params_grp_name: str = "Paramètres"
+    params_grp: Group
+
+    @classmethod
+    def open_db(cls, reload: bool = False):
+        if reload or not cls.kee_open:
+            cls.kee_db = PyKeePass(cls.kee_file, password=cls.kee_pwd)
+
+            cls.servers_group = cls.kee_db.find_groups(name=cls.servers_group_name, first=True)
+            cls.params_grp = cls.kee_db.find_groups(name=cls.params_grp_name, first=True)
+
+            cls.kee_open = True
+
     def __init__(self, username: str = ""):
-        self.keepass_db: PyKeePass = PyKeePass(KEE_FILE, password=KEE_PWD)
+        Settings.open_db()
+
         self.app_path: Path = get_app_path()
 
         self.min_version_settings: str = "9999"  # version minimum requises pour les settings
@@ -311,7 +333,6 @@ class Settings:
         self.settings_version: str = ""  # version actuelle des settings
 
         self.sql_server: dict = {}  # paramètres de connection au serveur
-        self.servers_group: str = "Serveurs"
 
         self.curr_user: User = User(username=username)  # objet utilisateur
 
@@ -327,8 +348,7 @@ class Settings:
         self._init_extract_folder()
 
     def _init_server(self):
-        s_group = self.keepass_db.find_groups(name=self.servers_group, first=True)
-        s_entry: Entry = self.keepass_db.find_entries(title="Default", group=s_group, first=True)
+        s_entry: Entry = Settings.kee_db.find_entries(title="Default", group=Settings.servers_group, first=True)
 
         self.sql_server["user"] = val if (val := s_entry.username) is not None else ""
         self.sql_server["password"] = val if (val := s_entry.password) is not None else ""
@@ -339,31 +359,27 @@ class Settings:
         self.sql_server["charset"] = (
             self.sql_server["charset"].upper() if self.sql_server.get("charset", "") != "" else "UTF-8"
         )
-        self.sql_server["timeout"] = int(self.sql_server.get("timeout", "300"))
-        self.sql_server["login_timeout"] = int(self.sql_server.get("login_timeout", "60"))
+
+        for key, default in {"timeout": 300, "login_timeout": 60}.items():
+            val = self.sql_server[key]
+            self.sql_server[key] = int(val) if val.isdigit() else default
 
     def _init_params(self) -> None:
-        p_group: Group = self.keepass_db.find_groups(name="Paramètres", first=True)
+        # key : keepass title, value : settings attribute
+        param_dict = {
+            "FIELD_SEPARATOR": "field_separator",
+            "DECIMAL_SEPARATOR": "decimal_separator",
+            "DATE_FORMAT": "date_format",
+            "QUERIES_FOLDER": "queries_folder",
+            "SETTINGS_VERSION": "settings_version",
+        }
 
-        infos: dict[str] = {}
-        for cust_str in (
-            "FIELD_SEPARATOR",
-            "DECIMAL_SEPARATOR",
-            "DATE_FORMAT",
-            "QUERIES_FOLDER",
-            "SETTINGS_VERSION",
-        ):
-            info: Entry = self.keepass_db.find_entries(title=cust_str, group=p_group, first=True)
-            infos[cust_str] = info.username
-
-        self.field_separator = infos["FIELD_SEPARATOR"]
-        self.decimal_separator = infos["DECIMAL_SEPARATOR"]
-        self.date_format = infos["DATE_FORMAT"]
-        self.queries_folder = Path(infos["QUERIES_FOLDER"])
-        self.settings_version = infos["SETTINGS_VERSION"]
+        for kee_title, attr_name in param_dict.items():
+            info: Entry = Settings.kee_db.find_entries(title=kee_title, group=Settings.params_grp, first=True)
+            setattr(self, attr_name, info.username)
 
     def _init_min_version(self) -> None:
-        file_src = self.queries_folder / "_version_min.json"
+        file_src = Path(self.queries_folder) / "_version_min.json"
         if file_src.exists():
             with open(file_src, mode="r", encoding="utf-8") as f:
                 json_dict = json.load(f)
@@ -378,16 +394,45 @@ class Settings:
             except FileExistsError:
                 self.extract_folder = Path.home()
 
+    def server_reload(self) -> None:
+        Settings.kee_db.reload()
+        self._init_server()
+
+    def server_save(self) -> bool:
+        s_entry: Entry = Settings.kee_db.find_entries(title="Default", group=Settings.servers_group, first=True)
+
+        for key, val in self.sql_server.items():
+            if key == "user":
+                s_entry.username = val
+            elif key == "password":
+                s_entry.password = val
+            elif key in ["timeout", "login_timeout"]:
+                if val.isdigit():
+                    s_entry.set_custom_property(key, val)
+                else:
+                    return False
+            else:
+                s_entry.set_custom_property(key, val)
+
+        Settings.kee_db.save()
+        return True
+
 
 if __name__ == "__main__":
     # my_settings = Settings(user_domain_and_name="PROSOL.PRI\\mferrier")
     my_settings = Settings()
 
+    print(f"{'='*50}\nSettings / Infos serveur et version\n{'='*50}")
     print(my_settings.sql_server)
     print(f"Version mini Pytre : {my_settings.min_version_pytre}")
     print(f"Version mini Settings : {my_settings.min_version_settings}")
     print(f"Version utilisée Settings : {my_settings.settings_version}")
 
-    print("Utilisateur courant :")
+    param_attr = ["field_separator", "decimal_separator", "date_format", "queries_folder", "extract_folder"]
+    print(f"{'='*50}\nSettings / Paramètres généraux\n{'='*50}")
+    for attr in param_attr:
+        print(f"- {attr}: {getattr(my_settings, attr)}")
+
+    print(f"{'='*50}\nSettings / Utilisateur courant\n{'='*50}")
     for key, val in my_settings.curr_user._user_description().items():
         print(f"- {key}: {val}")

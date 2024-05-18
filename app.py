@@ -10,6 +10,7 @@ import sql_query
 from app_debug import DebugWindow
 from app_users import UsersWindow
 from app_servers import ServersWindow
+from app_settings import SettingsWindow
 
 SETTINGS = sql_query.SETTINGS
 PYTRE_VERSION = "1.031"
@@ -155,6 +156,7 @@ class App(tk.Tk):
             menu_admin = tk.Menu(menubar, tearoff=False)
             menu_admin.add_command(label="Utilisateurs...", command=self.manage_users)
             menu_admin.add_command(label="Serveur...", command=self.manage_servers)
+            menu_admin.add_command(label="Paramètres généraux...", command=self.manage_settings)
             menubar.add_cascade(label="Administation", menu=menu_admin)
 
         menu_about = tk.Menu(menubar, tearoff=False)
@@ -704,7 +706,12 @@ class App(tk.Tk):
             self.user_window.focus_set()
 
     def manage_servers(self):
-        self.servers_window = ServersWindow(self)
+        ServersWindow(self)
+        SETTINGS.server_reload()
+
+    def manage_settings(self):
+        SettingsWindow(self)
+        SETTINGS.params_reload()
 
     def about_info(self):
         pass

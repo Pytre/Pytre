@@ -366,7 +366,7 @@ class Settings:
 
     def _init_params(self) -> None:
         # key : keepass title, value : settings attribute
-        param_dict = {
+        self.params_dict = {
             "FIELD_SEPARATOR": "field_separator",
             "DECIMAL_SEPARATOR": "decimal_separator",
             "DATE_FORMAT": "date_format",
@@ -374,7 +374,7 @@ class Settings:
             "SETTINGS_VERSION": "settings_version",
         }
 
-        for kee_title, attr_name in param_dict.items():
+        for kee_title, attr_name in self.params_dict.items():
             info: Entry = Settings.kee_db.find_entries(title=kee_title, group=Settings.params_grp, first=True)
             setattr(self, attr_name, info.username)
 
@@ -413,6 +413,19 @@ class Settings:
                     return False
             else:
                 s_entry.set_custom_property(key, val)
+
+        Settings.kee_db.save()
+        return True
+
+    def params_reload(self) -> None:
+        Settings.kee_db.reload()
+        self._init_params()
+
+    def params_save(self) -> bool:
+        for kee_title, attr_name in self.params_dict.items():
+            info: Entry = Settings.kee_db.find_entries(title=kee_title, group=Settings.params_grp, first=True)
+            val = getattr(self, attr_name)
+            info.username = val
 
         Settings.kee_db.save()
         return True

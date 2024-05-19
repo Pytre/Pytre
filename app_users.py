@@ -10,12 +10,13 @@ class UsersWindow(tk.Toplevel):
         self.parent = parent
         self.focus_set() if self.parent else self.master.withdraw()
 
-        self.detached_items: list[str] = []
+        self.detached_items: set[str] = set()
         self.filter_var: tk.StringVar
 
         self.default_filter_cols = ["username", "title", "grp_authorized", "x3_id"]
-        self.default_sort = "title"
-        self.groups = []
+        self.default_sort_col: str = "title"
+        self.sort_info: dict[str, str | bool] = {"col": None, "reverse": None}
+        self.groups: set = set()
 
         self._setup_ui()
         self._events_binds()
@@ -141,10 +142,10 @@ class UsersWindow(tk.Toplevel):
                 i += 1
 
         text_filter = self.filter_var.get()
-        if text_filter == "" and self.detached_items == []:
+        if text_filter == "" and self.detached_items == {}:
             return
 
-        all_items = list(self.tree.get_children("")) + self.detached_items
+        all_items = set(self.tree.get_children("")) | self.detached_items
         for item in all_items:
             hide = True
             for col in cols:
@@ -155,47 +156,51 @@ class UsersWindow(tk.Toplevel):
 
             if hide and item not in self.detached_items:
                 self.tree.detach(item)
-                self.detached_items.append(item)
+                self.detached_items.add(item)
             elif not hide and item in self.detached_items:
                 self.tree.move(item, "", tk.END)
-                self.tree_sort("title")
+                self.tree_sort(self.sort_info["col"], self.sort_info["reverse"])
                 self.detached_items.remove(item)
 
     def tree_sort(self, sort_col: str = "", reverse: bool = False):
-        sort_col = self.default_sort if sort_col == "" else sort_col
+        sort_col = self.default_sort_col if sort_col == "" else sort_col
+
+        # tri de la colonne
         items = list(self.tree.get_children(""))
         items.sort(reverse=reverse, key=lambda k: self.tree.set(k, sort_col))
         for i, item in enumerate(items):
             self.tree.move(item, "", i)
 
-        for k, v in self._tree_cols().items():
-            title = v["text"]
-            if k == sort_col:
+        # mise à jour nom des colonnes avec indication du tri
+        cols = {sort_col, old_col} if (old_col := self.sort_info["col"]) else {sort_col}
+        for col in cols:
+            title = self._tree_cols()[col]["text"]
+            if col == sort_col:
                 self.sort_symbols = ("\U000025B3", "\U000025BD")  # self pour que self.tree_autosize() en tienne compte
                 title = f"{title} {self.sort_symbols[0]}" if not reverse else f"{title} {self.sort_symbols[1]}"
-            self.tree.heading(k, text=title)
+            self.tree.heading(col, text=title)
+
+        # mise à jour info du dernier tri
+        self.sort_info["col"] = sort_col
+        self.sort_info["reverse"] = reverse
 
     def tree_header_click(self, col: str):
-        items = list(self.tree.get_children())
-        items_sorted = list(self.tree.get_children())
-        items_sorted.sort(key=lambda k: self.tree.set(k, col))
-
         reverse = False
-        if items == items_sorted:  # liste triée de A-Z
+        if col == self.sort_info["col"] and self.sort_info["reverse"] is False:
             reverse = True
 
         self.tree_sort(col, reverse)
 
     def tree_refresh(self, sort_col: str = ""):
-        sort_col = self.default_sort if sort_col == "" else sort_col
+        sort_col = self.default_sort_col if sort_col == "" else sort_col
 
         users: list[User] = User.users_get_all()
         cols = self._tree_cols()
 
         self.tree.delete(*self.tree.get_children())
         self.tree.delete(*self.detached_items)
-        self.detached_items = []
-        self.groups = []
+        self.detached_items = set()
+        self.groups = set()
 
         for u in users:
             values: list = []
@@ -204,16 +209,13 @@ class UsersWindow(tk.Toplevel):
                 if col == "grp_authorized":
                     value.remove("all")
                     value.sort()
-                    self.groups.extend(value)
+                    self.groups.update(value)
                     value = "".join([f"[{item}]" for item in value])
                 if col == "admin":
                     value = "\U0001F5F9" if value is True else "\U000000B7"
                 values.append(value)
 
             self.tree.insert("", tk.END, iid=u.username, values=values)
-
-        self.groups = list(set(self.groups))  # doublons supprimés
-        self.groups.sort()
 
         self.tree_sort(sort_col)
         self.tree_autosize()
@@ -482,7 +484,7 @@ class UserDialog(tk.Toplevel):
             item["var"].set(val)
 
     def groups_set(self):
-        for group in self.parent.groups:
+        for group in sorted(self.parent.groups):
             self.listbox.insert(tk.END, group)
 
         if self.user:
@@ -492,10 +494,16 @@ class UserDialog(tk.Toplevel):
 
     def group_add(self):
         curr_groups = self.listbox.get(0, tk.END)
-        group = InputDialog.ask("Nouveau groupe", "Groupe à ajouter :", parent=self)
-        if group and group not in curr_groups:
-            pos = max([i for i, line in enumerate(curr_groups) if line <= group]) + 1
-            self.listbox.insert(pos, group)
+        new_group = InputDialog.ask("Nouveau groupe", "Groupe à ajouter :", parent=self)
+        if new_group and new_group not in curr_groups:
+            pos = 0
+            for line in curr_groups:
+                if new_group > line:
+                    pos += 1
+                else:
+                    break
+
+            self.listbox.insert(pos, new_group)
             self.listbox.selection_set(pos)
 
     def user_save(self):
@@ -591,8 +599,10 @@ class GroupsDialog(tk.Toplevel):
 
         if not self.remove_mode:
             title_text = "Sélection des groupes à affecter :"
+            select_bg_color = "#B4FFB4"
         else:
             title_text = "Sélection des groupes à retirer :"
+            select_bg_color = "#FFC8C8"
 
         title_label = ttk.Label(self.groups_frame, text=title_text)
         self.new_grp = ttk.Button(self.groups_frame, text="+", width=3, command=self.group_add)
@@ -600,6 +610,7 @@ class GroupsDialog(tk.Toplevel):
         self.listbox = tk.Listbox(self.groups_frame, selectmode=tk.MULTIPLE, activestyle="none", relief="groove")
         ybar = ttk.Scrollbar(self.groups_frame, orient="vertical", command=self.listbox.yview)
         self.listbox.configure(yscroll=ybar.set)
+        self.listbox.configure(selectbackground=select_bg_color, selectforeground="black")
 
         title_label.grid(row=0, column=0, padx=2, pady=2, sticky="nswe")
         if not self.remove_mode:
@@ -627,15 +638,21 @@ class GroupsDialog(tk.Toplevel):
     # Autres traitements
     # ------------------------------------------------------------------------------------------
     def groups_set(self):
-        for group in self.parent.groups:
+        for group in sorted(self.parent.groups):
             self.listbox.insert(tk.END, group)
 
     def group_add(self):
         curr_groups = self.listbox.get(0, tk.END)
-        group = InputDialog.ask("Nouveau groupe", "Groupe à ajouter :", parent=self)
-        if group and group not in curr_groups:
-            pos = max([i for i, line in enumerate(curr_groups) if line <= group]) + 1
-            self.listbox.insert(pos, group)
+        new_group = InputDialog.ask("Nouveau groupe", "Groupe à ajouter :", parent=self)
+        if new_group and new_group not in curr_groups:
+            pos = 0
+            for line in curr_groups:
+                if new_group > line:
+                    pos += 1
+                else:
+                    break
+
+            self.listbox.insert(pos, new_group)
             self.listbox.selection_set(pos)
 
     def users_update_groups(self):

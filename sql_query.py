@@ -337,17 +337,17 @@ class _QueryExecute:
         self.cmd_parameters = {}
         self.extract_file = ""
         self.sql_server_params = {
-            "server": SETTINGS.sql_server["server"],
-            "host": SETTINGS.sql_server["host"],
-            "user": SETTINGS.sql_server["user"],
-            "password": SETTINGS.sql_server["password"],
-            "database": SETTINGS.sql_server["database"],
-            "timeout": SETTINGS.sql_server["timeout"],
-            "login_timeout": SETTINGS.sql_server["login_timeout"],
-            "charset": SETTINGS.sql_server["charset"],
+            "server": SETTINGS.server.server,
+            "host": SETTINGS.server.host,
+            "user": SETTINGS.server.user,
+            "password": SETTINGS.server.password,
+            "database": SETTINGS.server.database,
+            "timeout": SETTINGS.server.timeout,
+            "login_timeout": SETTINGS.server.login_timeout,
+            "charset": SETTINGS.server.charset,
             "as_dict": False,
             "appname": None,
-            "port": SETTINGS.sql_server["port"],
+            "port": SETTINGS.server.port,
         }
 
         self.field_separator = SETTINGS.field_separator

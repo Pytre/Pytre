@@ -1,7 +1,7 @@
 import tkinter as tk
 from tkinter import ttk, Event, messagebox
 
-from settings import Settings
+from settings import Server
 
 
 class ServersWindow(tk.Toplevel):
@@ -15,8 +15,7 @@ class ServersWindow(tk.Toplevel):
         else:
             self.master.withdraw()
 
-        self.settings = Settings()
-        self.server = self.settings.sql_server
+        self.server = Server()
 
         self._setup_ui()
         self._events_binds()
@@ -50,11 +49,11 @@ class ServersWindow(tk.Toplevel):
         self.entries_frame.columnconfigure(1, weight=1)
 
         self.entries = {}
-        for key in self.server.keys():
-            self.entries[key] = {}
-
         num_row = 0
-        for key, item in self.server.items():
+        for key, item in self.server.to_dict().items():
+            if key == "title":  # ne pas afficher le titre, il ne doit pas etre modifier
+                continue
+
             my_label = ttk.Label(self.entries_frame, text=key + " : ")
             my_tk_var = tk.StringVar(value=item)
             my_entry = ttk.Entry(self.entries_frame, textvariable=my_tk_var)
@@ -103,9 +102,9 @@ class ServersWindow(tk.Toplevel):
     def server_save(self):
         for key in self.entries.keys():
             val = self.entries[key]["var"].get()
-            self.settings.sql_server[key] = val
+            setattr(self.server, key, val)
 
-        result = self.settings.server_save()
+        result = self.server.save()
         if result:
             self.app_exit()
         else:

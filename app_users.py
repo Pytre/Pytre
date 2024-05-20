@@ -438,6 +438,8 @@ class UserDialog(tk.Toplevel):
             else:
                 my_tk_var = tk.StringVar()
                 my_entry = ttk.Entry(self.entries_frame, textvariable=my_tk_var)
+                if self.user and key == "username":
+                    my_entry.config(state="disabled")
 
             new_key = {"w_label": my_label, "w_entry": my_entry, "var": my_tk_var}
             item.update(new_key)

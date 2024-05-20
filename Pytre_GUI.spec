@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_all
 
-datas = [('res\\app.ico', 'res')]
+datas = [('res\\app.ico', 'res'), ('res\\app.gif', 'res'), ('app_about_license.txt', '')]
 binaries = []
 hiddenimports = ['pymssql', 'uuid']
 

@@ -11,6 +11,7 @@ from app_debug import DebugWindow
 from app_users import UsersWindow
 from app_servers import ServersWindow
 from app_settings import SettingsWindow
+from app_about import AboutWindow
 
 SETTINGS = sql_query.SETTINGS
 PYTRE_VERSION = "1.031"
@@ -714,7 +715,7 @@ class App(tk.Tk):
         SETTINGS.reload()
 
     def about_info(self):
-        pass
+        AboutWindow(self)
 
 
 if __name__ == "__main__":

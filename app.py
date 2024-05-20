@@ -711,7 +711,7 @@ class App(tk.Tk):
 
     def manage_settings(self):
         SettingsWindow(self)
-        SETTINGS.params_reload()
+        SETTINGS.reload()
 
     def about_info(self):
         pass

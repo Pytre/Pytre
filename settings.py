@@ -27,20 +27,44 @@ KEE_FILE = Path().cwd() / "Pytre_X3_Settings.db"
 KEE_PWD = r"]i=L'n)X2jg@Y9U82cqy'acn"
 
 
+class Kee:
+    _instance = None
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
+    def __init__(self):
+        self.db: PyKeePass = None
+        self.file: str = KEE_FILE
+        self.pwd: str = KEE_PWD
+        self.is_open: bool = False
+
+        self.opening_count: int = 0
+
+    def _open_db(self, reload: bool = False):
+        """A utiliser uniquement par la méthode open_db des classes User, Server et Settings"""
+        if not self.is_open:
+            self.db = PyKeePass(self.file, password=self.pwd)
+            self.is_open = True
+            self.opening_count += 1
+            # print(f"Opening count : {self.opening_count}")
+        elif reload:
+            self.db.reload()
+            self.opening_count += 1
+            # print(f"Opening count : {self.opening_count}")
+
+
 class User:
-    kee_db: PyKeePass
-    kee_file: str = KEE_FILE
-    kee_pwd: str = KEE_PWD
-    kee_open: bool = False
-    users_grp_name: str = "Utilisateurs"
-    users_grp: Group
+    kee: Kee = Kee()
+    kee_grp_name: str = "Utilisateurs"
+    kee_grp: Group = None
 
     @classmethod
     def open_db(cls, reload: bool = False):
-        if reload or not cls.kee_open:
-            cls.kee_db = PyKeePass(cls.kee_file, password=cls.kee_pwd)
-            cls.users_grp = cls.kee_db.find_groups(name=cls.users_grp_name, first=True)
-            cls.kee_open = True
+        cls.kee._open_db(reload)
+        cls.kee_grp = cls.kee.db.find_groups(name=cls.kee_grp_name, first=True)
 
     @classmethod
     def users_get_all(cls) -> list:
@@ -49,7 +73,7 @@ class User:
         u_entry: Entry | None = None
         u_list: list[User] = []
 
-        for u_entry in cls.kee_db.find_entries(username=r".*", group=cls.users_grp, regex=True):
+        for u_entry in User.kee.db.find_entries(username=r".*", group=cls.kee_grp, regex=True):
             u = User(entry=u_entry)
             u_list.append(u)
 
@@ -57,13 +81,13 @@ class User:
 
     @classmethod
     def users_add_groups(cls, usernames: list[str], groups: list[str]):
-        cls.open_db(True)
+        cls.open_db()
 
         save: bool = False
 
         groups = [group for group in groups if not group == "all"]
         u_entry: Entry | None = None
-        for u_entry in cls.kee_db.find_entries(username=r".*", group=cls.users_grp, regex=True):
+        for u_entry in User.kee.db.find_entries(username=r".*", group=cls.kee_grp, regex=True):
             if u_entry.username not in usernames:
                 continue
 
@@ -75,16 +99,16 @@ class User:
                 save = True
 
         if save:
-            cls.kee_db.save()
+            User.kee.db.save()
 
     @classmethod
     def users_remove_groups(cls, usernames: list[str], groups: list[str]):
-        cls.open_db(True)
+        cls.open_db()
 
         save: bool = False
 
         u_entry: Entry | None = None
-        for u_entry in cls.kee_db.find_entries(username=r".*", group=cls.users_grp, regex=True):
+        for u_entry in User.kee.db.find_entries(username=r".*", group=cls.kee_grp, regex=True):
             if u_entry.username not in usernames or not u_entry.tags:
                 continue
 
@@ -98,7 +122,7 @@ class User:
                 save = True
 
         if save:
-            cls.kee_db.save()
+            User.kee.db.save()
 
     @classmethod
     def csv_import(cls, filename: Path, delimiter: str = ";") -> bool:
@@ -106,7 +130,7 @@ class User:
 
         entries_dict = {}
         u_entry: Entry
-        for u_entry in cls.kee_db.find_entries(username=r".*", group=cls.users_grp, regex=True):
+        for u_entry in User.kee.db.find_entries(username=r".*", group=cls.kee_grp, regex=True):
             entries_dict[u_entry.username] = u_entry
 
         with open(filename, mode="r", encoding="latin-1") as csv_file:
@@ -126,7 +150,7 @@ class User:
                 if row_dict["username"] in entries_dict.keys():
                     u_entry = entries_dict[row_dict["username"]]
                 else:
-                    u_entry = cls.kee_db.add_entry(User.users_grp, "", row_dict["username"], "")
+                    u_entry = User.kee.db.add_entry(User.kee_grp, "", row_dict["username"], "")
 
                 # modification des entry de la base
                 u_entry.title = row_dict["title"]
@@ -143,7 +167,7 @@ class User:
                 u_entry.tags = [group for group in groups if not group == "all"]
 
             # une fois que toutes les entries sont à jour, sauvegarde de la base
-            cls.kee_db.save()
+            User.kee.db.save()
 
             return True
 
@@ -155,7 +179,7 @@ class User:
         rows = [["Id", "Libellé", "Admin", "Groupes", "Id X3", "Login Message"]]
         cls.open_db(True)
         u_entry: Entry | None
-        for u_entry in cls.kee_db.find_entries(username=r".*", group=cls.users_grp, regex=True):
+        for u_entry in User.kee.db.find_entries(username=r".*", group=cls.kee_grp, regex=True):
             row = [u_entry.username, u_entry.title]
 
             tags = u_entry.tags if u_entry.tags else []
@@ -199,7 +223,6 @@ class User:
             self._load_from_entry(entry)
         elif username or detect_user:
             self.username = username if username else self._get_username()
-            User.open_db()
             self.load()
 
     def to_dict(self) -> dict:
@@ -254,10 +277,10 @@ class User:
             self.msg_login = self.msg_login_cust
 
     def load(self) -> None:
-        User.open_db(True)
+        User.open_db()
 
         u_entry: Entry | None = None
-        for u_entry in User.kee_db.find_entries(username=r".*", group=User.users_grp, regex=True):
+        for u_entry in User.kee.db.find_entries(username=r".*", group=User.kee_grp, regex=True):
             if u_entry.username.casefold() == self.username.casefold():
                 self.exists = True
                 self.is_authorized = True
@@ -265,14 +288,14 @@ class User:
                 break
 
     def save(self) -> bool:
-        User.open_db()
+        User.open_db(True)
 
-        u_entry: Entry = User.kee_db.find_entries(username=self.username, group=User.users_grp, first=True)
+        u_entry: Entry = User.kee.db.find_entries(username=self.username, group=User.kee_grp, first=True)
         if u_entry:
             u_entry.username = self.username
             u_entry.title = self.title
         else:
-            u_entry: Entry = User.kee_db.add_entry(User.users_grp, self.title, self.username, password="")
+            u_entry: Entry = User.kee.db.add_entry(User.kee_grp, self.title, self.username, password="")
 
         u_entry.set_custom_property("x3_id", self.x3_id)
         u_entry.set_custom_property("msg_login", self.msg_login_cust)
@@ -284,38 +307,32 @@ class User:
 
         u_entry.tags = [grp for grp in self.grp_authorized if not grp == "all"]
 
-        User.kee_db.save()
+        User.kee.db.save()
 
         return True
 
     def delete(self) -> bool:
         User.open_db()
 
-        entry: Entry = User.kee_db.find_entries(username=self.username, group=User.users_grp, first=True)
+        entry: Entry = User.kee.db.find_entries(username=self.username, group=User.kee_grp, first=True)
         if entry is None:
             raise LookupError("User not found")
 
         entry.delete()
-        User.kee_db.save()
+        User.kee.db.save()
 
         return True
 
 
 class Server:
-    kee_db: PyKeePass
-    kee_file: str = KEE_FILE
-    kee_pwd: str = KEE_PWD
-    kee_open: bool = False
-
-    servers_group_name: str = "Serveurs"
-    servers_grp: Group
+    kee: Kee = Kee()
+    kee_grp_name: str = "Serveurs"
+    kee_grp: Group = None
 
     @classmethod
     def open_db(cls, reload: bool = False):
-        if reload or not cls.kee_open:
-            cls.kee_db = PyKeePass(cls.kee_file, password=cls.kee_pwd)
-            cls.servers_grp = cls.kee_db.find_groups(name=cls.servers_group_name, first=True)
-            cls.kee_open = True
+        cls.kee._open_db(reload)
+        cls.kee_grp = cls.kee.db.find_groups(name=cls.kee_grp_name, first=True)
 
     def __init__(self, title: str = "", entry: Entry = None):
         self.title: str = ""
@@ -333,7 +350,6 @@ class Server:
             self._load_from_entry(entry)
         else:
             self.title = title if title else "Default"
-            Server.open_db()
             self.load()
 
     def to_dict(self) -> dict:
@@ -374,23 +390,23 @@ class Server:
             setattr(self, property, val)
 
     def load(self):
-        Server.open_db(True)
-        s_entry: Entry = Server.kee_db.find_entries(title=self.title, group=Server.servers_grp, first=True)
+        Server.open_db()
+        s_entry: Entry = Server.kee.db.find_entries(title=self.title, group=Server.kee_grp, first=True)
         if s_entry:
             self._load_from_entry(s_entry)
 
     def reload(self) -> None:
-        Server.kee_db.reload()
+        Settings.open_db(True)
         self.load()
 
     def save(self) -> bool:
-        s_entry: Entry = Server.kee_db.find_entries(title=self.title, group=Server.servers_grp, first=True)
+        s_entry: Entry = Server.kee.db.find_entries(title=self.title, group=Server.kee_grp, first=True)
         if s_entry:
             s_entry.title = self.title
             s_entry.username = self.user
             s_entry.password = self.password
         else:
-            s_entry: Entry = Server.kee_db.add_entry(Server.servers_grp, self.title, self.user, password=self.password)
+            s_entry: Entry = Server.kee.db.add_entry(Server.kee_grp, self.title, self.user, password=self.password)
 
         for key, val in self.to_dict().items():
             if key in ["title", "user", "password"]:
@@ -403,29 +419,21 @@ class Server:
             else:
                 s_entry.set_custom_property(key, val)
 
-        Server.kee_db.save()
+        Server.kee.db.save()
         return True
 
 
 class Settings:
-    kee_db: PyKeePass
-    kee_file: str = KEE_FILE
-    kee_pwd: str = KEE_PWD
-    kee_open: bool = False
-
-    params_grp_name: str = "Paramètres"
-    params_grp: Group
+    kee: Kee = Kee()
+    kee_grp_name: str = "Paramètres"
+    kee_grp: Group = None
 
     @classmethod
     def open_db(cls, reload: bool = False):
-        if reload or not cls.kee_open:
-            cls.kee_db = PyKeePass(cls.kee_file, password=cls.kee_pwd)
-            cls.params_grp = cls.kee_db.find_groups(name=cls.params_grp_name, first=True)
-            cls.kee_open = True
+        cls.kee._open_db(reload)
+        cls.kee_grp = cls.kee.db.find_groups(name=cls.kee_grp_name, first=True)
 
     def __init__(self):
-        Settings.open_db()
-
         self.app_path: Path = get_app_path()
 
         self.min_version_settings: str = "9999"  # version minimum requises pour les settings
@@ -441,23 +449,9 @@ class Settings:
         self.queries_folder: Path = Path("")  # répertoire des requêtes SQL
         self.extract_folder: Path = Path("")  # répertoire où créer les fichiers des infos extraites
 
-        self._init_params()
+        self.load()  # à charger avant min version pour que queries_folder soit initialisé
         self._init_min_version()
         self._init_extract_folder()
-
-    def _init_params(self) -> None:
-        # key : keepass title, value : settings attribute
-        self.params_dict = {
-            "FIELD_SEPARATOR": "field_separator",
-            "DECIMAL_SEPARATOR": "decimal_separator",
-            "DATE_FORMAT": "date_format",
-            "QUERIES_FOLDER": "queries_folder",
-            "SETTINGS_VERSION": "settings_version",
-        }
-
-        for kee_title, attr_name in self.params_dict.items():
-            info: Entry = Settings.kee_db.find_entries(title=kee_title, group=Settings.params_grp, first=True)
-            setattr(self, attr_name, info.username)
 
     def _init_min_version(self) -> None:
         file_src = Path(self.queries_folder) / "_version_min.json"
@@ -475,21 +469,38 @@ class Settings:
             except FileExistsError:
                 self.extract_folder = Path.home()
 
-    def params_reload(self) -> None:
-        Settings.kee_db.reload()
-        self._init_params()
+    def load(self) -> None:
+        Settings.open_db()
 
-    def params_save(self) -> bool:
+        # key : keepass title, value : settings attribute
+        self.params_dict = {
+            "FIELD_SEPARATOR": "field_separator",
+            "DECIMAL_SEPARATOR": "decimal_separator",
+            "DATE_FORMAT": "date_format",
+            "QUERIES_FOLDER": "queries_folder",
+            "SETTINGS_VERSION": "settings_version",
+        }
+
         for kee_title, attr_name in self.params_dict.items():
-            info: Entry = Settings.kee_db.find_entries(title=kee_title, group=Settings.params_grp, first=True)
+            info: Entry = Settings.kee.db.find_entries(title=kee_title, group=Settings.kee_grp, first=True)
+            setattr(self, attr_name, info.username)
+
+    def reload(self) -> None:
+        Settings.open_db(True)
+        self.load()
+
+    def save(self) -> bool:
+        for kee_title, attr_name in self.params_dict.items():
+            info: Entry = Settings.kee.db.find_entries(title=kee_title, group=Settings.kee_grp, first=True)
             val = getattr(self, attr_name)
             info.username = val
 
-        Settings.kee_db.save()
+        Settings.kee.db.save()
         return True
 
 
 if __name__ == "__main__":
+    user = User()
     server = Server()
     my_settings = Settings()
 

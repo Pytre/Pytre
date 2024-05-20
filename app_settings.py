@@ -71,8 +71,6 @@ class SettingsWindow(tk.Toplevel):
 
             num_row += 1
 
-        self.settings_load()
-
     def _setup_buttons(self):
         self.buttons_frame.columnconfigure(0, weight=1)
 
@@ -101,7 +99,7 @@ class SettingsWindow(tk.Toplevel):
             val = item["var"].get()
             setattr(self.settings, key, val)
 
-        result = self.settings.params_save()
+        result = self.settings.save()
         if result:
             self.app_exit()
         else:

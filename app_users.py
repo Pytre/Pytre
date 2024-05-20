@@ -61,8 +61,10 @@ class UsersWindow(tk.Toplevel):
         self.menubar.add_cascade(label="Utilisateurs", menu=menu_users)
 
         menu_groups = tk.Menu(self.menubar, tearoff=False)
-        menu_groups.add_command(label="Affecter aux utilisateurs...", command=self.groups_add)
-        menu_groups.add_command(label="Retirer des utilisateurs...", command=self.groups_remove)
+        # menu_groups.add_command(label="Gestion...", command=None)
+        # menu_groups.add_separator()
+        menu_groups.add_command(label="Affecter à la sélection...", command=self.groups_add)
+        menu_groups.add_command(label="Retirer de la sélection...", command=self.groups_remove)
         self.menubar.add_cascade(label="Groupes", menu=menu_groups)
 
     def _setup_ui_ctrl(self):

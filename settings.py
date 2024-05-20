@@ -202,7 +202,7 @@ class User:
             User.open_db()
             self.load()
 
-    def _user_description(self) -> dict:
+    def to_dict(self) -> dict:
         return {
             "id": self.username,
             "exist_in_settings": self.exists,
@@ -215,10 +215,10 @@ class User:
         }
 
     def __repr__(self) -> str:
-        return str(self._user_description())
+        return str(self.to_dict())
 
     def __str__(self) -> str:
-        return str(self._user_description())
+        return str(self.to_dict())
 
     def _get_username(self) -> str:
         domain = os.environ.get("userdnsdomain") or ""
@@ -267,7 +267,7 @@ class User:
     def save(self) -> bool:
         User.open_db()
 
-        u_entry: User = User.kee_db.find_entries(username=self.username, group=User.users_grp, first=True)
+        u_entry: Entry = User.kee_db.find_entries(username=self.username, group=User.users_grp, first=True)
         if u_entry:
             u_entry.username = self.username
             u_entry.title = self.title
@@ -301,14 +301,117 @@ class User:
         return True
 
 
-class Settings:
+class Server:
     kee_db: PyKeePass
     kee_file: str = KEE_FILE
     kee_pwd: str = KEE_PWD
     kee_open: bool = False
 
     servers_group_name: str = "Serveurs"
-    servers_group: Group
+    servers_grp: Group
+
+    @classmethod
+    def open_db(cls, reload: bool = False):
+        if reload or not cls.kee_open:
+            cls.kee_db = PyKeePass(cls.kee_file, password=cls.kee_pwd)
+            cls.servers_grp = cls.kee_db.find_groups(name=cls.servers_group_name, first=True)
+            cls.kee_open = True
+
+    def __init__(self, title: str = "", entry: Entry = None):
+        self.title: str = ""
+        self.user: str = ""
+        self.password: str = ""
+        self.charset: str = "UTF-8"
+        self.database: str = ""
+        self.host: str = ""
+        self.port: str = "1433"  # string attendu et pas int
+        self.server: str = ""
+        self.login_timeout: int = 60
+        self.timeout: int = 300
+
+        if entry:
+            self._load_from_entry(entry)
+        else:
+            self.title = title if title else "Default"
+            Server.open_db()
+            self.load()
+
+    def to_dict(self) -> dict:
+        return {
+            "title": self.title,
+            "user": self.user,
+            "password": self.password,
+            "charset": self.charset,
+            "database": self.database,
+            "host": self.host,
+            "port": self.port,
+            "server": self.server,
+            "login_timeout": self.login_timeout,
+            "timeout": self.timeout,
+        }
+
+    def __repr__(self) -> str:
+        return str(self.to_dict())
+
+    def __str__(self) -> str:
+        return str(self.to_dict())
+
+    def _load_from_entry(self, s_entry: Entry):
+        self.title = s_entry.title
+
+        self.user = val if (val := s_entry.username) is not None else ""
+        self.password = val if (val := s_entry.password) is not None else ""
+
+        for property in s_entry.custom_properties:
+            val: str = val if (val := s_entry.get_custom_property(property)) is not None else ""
+            if property == "charset":
+                val = val.upper() if val else self.charset
+            elif property == "login_timeout":
+                val = int(val) if val.isdigit() else self.login_timeout
+            elif property == "timeout":
+                val = int(val) if val.isdigit() else self.timeout
+
+            setattr(self, property, val)
+
+    def load(self):
+        Server.open_db(True)
+        s_entry: Entry = Server.kee_db.find_entries(title=self.title, group=Server.servers_grp, first=True)
+        if s_entry:
+            self._load_from_entry(s_entry)
+
+    def reload(self) -> None:
+        Server.kee_db.reload()
+        self.load()
+
+    def save(self) -> bool:
+        s_entry: Entry = Server.kee_db.find_entries(title=self.title, group=Server.servers_grp, first=True)
+        if s_entry:
+            s_entry.title = self.title
+            s_entry.username = self.user
+            s_entry.password = self.password
+        else:
+            s_entry: Entry = Server.kee_db.add_entry(Server.servers_grp, self.title, self.user, password=self.password)
+
+        for key, val in self.to_dict().items():
+            if key in ["title", "user", "password"]:
+                continue  # déjà mis à jour avec la création ou recherche de l'entrée
+            elif key in ["timeout", "login_timeout"]:
+                if val.isdigit():
+                    s_entry.set_custom_property(key, val)
+                else:
+                    return False
+            else:
+                s_entry.set_custom_property(key, val)
+
+        Server.kee_db.save()
+        return True
+
+
+class Settings:
+    kee_db: PyKeePass
+    kee_file: str = KEE_FILE
+    kee_pwd: str = KEE_PWD
+    kee_open: bool = False
 
     params_grp_name: str = "Paramètres"
     params_grp: Group
@@ -317,13 +420,10 @@ class Settings:
     def open_db(cls, reload: bool = False):
         if reload or not cls.kee_open:
             cls.kee_db = PyKeePass(cls.kee_file, password=cls.kee_pwd)
-
-            cls.servers_group = cls.kee_db.find_groups(name=cls.servers_group_name, first=True)
             cls.params_grp = cls.kee_db.find_groups(name=cls.params_grp_name, first=True)
-
             cls.kee_open = True
 
-    def __init__(self, username: str = ""):
+    def __init__(self):
         Settings.open_db()
 
         self.app_path: Path = get_app_path()
@@ -332,9 +432,8 @@ class Settings:
         self.min_version_pytre: str = "9.999"  # version minimum requises pour Pytre
         self.settings_version: str = ""  # version actuelle des settings
 
-        self.sql_server: dict = {}  # paramètres de connection au serveur
-
-        self.curr_user: User = User(username=username)  # objet utilisateur
+        self.server: Server = Server(title="Default")  # objet serveyr
+        self.curr_user: User = User()  # objet utilisateur
 
         self.field_separator: str = ""  # délimitateur de champs pour exports
         self.decimal_separator: str = ""  # séparateur décimal pour exports
@@ -342,27 +441,9 @@ class Settings:
         self.queries_folder: Path = Path("")  # répertoire des requêtes SQL
         self.extract_folder: Path = Path("")  # répertoire où créer les fichiers des infos extraites
 
-        self._init_server()
         self._init_params()
         self._init_min_version()
         self._init_extract_folder()
-
-    def _init_server(self):
-        s_entry: Entry = Settings.kee_db.find_entries(title="Default", group=Settings.servers_group, first=True)
-
-        self.sql_server["user"] = val if (val := s_entry.username) is not None else ""
-        self.sql_server["password"] = val if (val := s_entry.password) is not None else ""
-
-        for property in s_entry.custom_properties:
-            self.sql_server[property] = val if (val := s_entry.get_custom_property(property)) is not None else ""
-
-        self.sql_server["charset"] = (
-            self.sql_server["charset"].upper() if self.sql_server.get("charset", "") != "" else "UTF-8"
-        )
-
-        for key, default in {"timeout": 300, "login_timeout": 60}.items():
-            val = self.sql_server[key]
-            self.sql_server[key] = int(val) if val.isdigit() else default
 
     def _init_params(self) -> None:
         # key : keepass title, value : settings attribute
@@ -394,29 +475,6 @@ class Settings:
             except FileExistsError:
                 self.extract_folder = Path.home()
 
-    def server_reload(self) -> None:
-        Settings.kee_db.reload()
-        self._init_server()
-
-    def server_save(self) -> bool:
-        s_entry: Entry = Settings.kee_db.find_entries(title="Default", group=Settings.servers_group, first=True)
-
-        for key, val in self.sql_server.items():
-            if key == "user":
-                s_entry.username = val
-            elif key == "password":
-                s_entry.password = val
-            elif key in ["timeout", "login_timeout"]:
-                if val.isdigit():
-                    s_entry.set_custom_property(key, val)
-                else:
-                    return False
-            else:
-                s_entry.set_custom_property(key, val)
-
-        Settings.kee_db.save()
-        return True
-
     def params_reload(self) -> None:
         Settings.kee_db.reload()
         self._init_params()
@@ -432,11 +490,11 @@ class Settings:
 
 
 if __name__ == "__main__":
-    # my_settings = Settings(user_domain_and_name="PROSOL.PRI\\mferrier")
+    server = Server()
     my_settings = Settings()
 
     print(f"{'='*50}\nSettings / Infos serveur et version\n{'='*50}")
-    print(my_settings.sql_server)
+    print(my_settings.server)
     print(f"Version mini Pytre : {my_settings.min_version_pytre}")
     print(f"Version mini Settings : {my_settings.min_version_settings}")
     print(f"Version utilisée Settings : {my_settings.settings_version}")
@@ -447,5 +505,5 @@ if __name__ == "__main__":
         print(f"- {attr}: {getattr(my_settings, attr)}")
 
     print(f"{'='*50}\nSettings / Utilisateur courant\n{'='*50}")
-    for key, val in my_settings.curr_user._user_description().items():
+    for key, val in my_settings.curr_user.to_dict().items():
         print(f"- {key}: {val}")

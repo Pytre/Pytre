@@ -707,7 +707,7 @@ class App(tk.Tk):
 
     def manage_servers(self):
         ServersWindow(self)
-        SETTINGS.server_reload()
+        SETTINGS.server.reload()
 
     def manage_settings(self):
         SettingsWindow(self)

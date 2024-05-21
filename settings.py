@@ -10,6 +10,12 @@ from pykeepass import PyKeePass
 from pykeepass.entry import Entry
 from pykeepass.group import Group
 
+from credentials import pwd_get, pwd_change
+
+
+KEE_FILE = Path().cwd() / "Pytre_X3_Settings.db"
+KEE_PWD = pwd_get()
+
 
 def get_app_path() -> Path:
     # If app is run as a bundle then PyInstaller bootloader
@@ -23,10 +29,6 @@ def get_app_path() -> Path:
     return Path(application_path)
 
 
-KEE_FILE = Path().cwd() / "Pytre_X3_Settings.db"
-KEE_PWD = r"]i=L'n)X2jg@Y9U82cqy'acn"
-
-
 class Kee:
     _instance = None
 
@@ -36,9 +38,9 @@ class Kee:
         return cls._instance
 
     def __init__(self):
-        self.db: PyKeePass = None
         self.file: str = KEE_FILE
-        self.pwd: str = KEE_PWD
+        self.pwd: str = self.pwd_get()
+        self.db: PyKeePass = None
         self.is_open: bool = False
 
         self.opening_count: int = 0
@@ -54,6 +56,14 @@ class Kee:
             self.db.reload()
             self.opening_count += 1
             # print(f"Opening count : {self.opening_count}")
+
+    def pwd_get(self) -> str:
+        pwd = pwd_get()
+        return pwd
+
+    def pwd_change(self, new_pwd: str):
+        pwd_change(new_pwd)
+        self.pwd = new_pwd
 
 
 class User:

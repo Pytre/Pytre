@@ -7,5 +7,9 @@ app.build/
 app.dist/
 app.onefile-build/
 
+credentials_secrets.py
+
+Pytre.key
+Pytre.db
 Pytre_X3_Settings.db
 app.exe

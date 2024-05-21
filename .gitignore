@@ -12,4 +12,5 @@ credentials_secrets.py
 Pytre.key
 Pytre.db
 Pytre_X3_Settings.db
+Pytre_SQLite.db
 app.exe

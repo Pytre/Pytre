@@ -16,7 +16,7 @@ from InputDialog import InputDialog
 from credentials import crypted_file_pwd_get, crypted_file_pwd_history, crypted_file_pwd_change
 
 
-KEE_FILE = Path().cwd() / "Pytre_X3_Settings.db"
+KEE_FILE = Path().cwd() / "Pytre.db"
 KEE_PWD = crypted_file_pwd_get()
 
 

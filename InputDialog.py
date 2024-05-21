@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import Event, ttk
+from tkinter import Event, ttk, font
 
 
 class InputDialog(tk.Toplevel):
@@ -27,8 +27,9 @@ class InputDialog(tk.Toplevel):
         self._events_binds()
 
     def _setup_ui(self, title: str, prompt: str):
-        self.minsize(width=250, height=25)
-        self.resizable(True, False)
+        minsize_width = max(250, font.Font().measure(title) + 125)
+        self.minsize(width=minsize_width, height=25)
+        self.resizable(False, False)
         self.title(title)
 
         self.rowconfigure(0, weight=1)
@@ -46,7 +47,8 @@ class InputDialog(tk.Toplevel):
     def _setup_input(self, prompt):
         self.input_frame.columnconfigure(1, weight=1)
 
-        label = ttk.Label(self.input_frame, text=prompt)
+        minsize_width = self.minsize()[0]
+        label = ttk.Label(self.input_frame, text=prompt, wraplength=minsize_width)
         self.tk_var_answer = tk.StringVar()
         self.entry = ttk.Entry(self.input_frame, textvariable=self.tk_var_answer)
 

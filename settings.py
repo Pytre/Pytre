@@ -5,16 +5,19 @@ import getpass
 import csv
 import json
 from pathlib import Path
+from tkinter import messagebox
 
 from pykeepass import PyKeePass
+from pykeepass.exceptions import CredentialsError
 from pykeepass.entry import Entry
 from pykeepass.group import Group
 
-from credentials import pwd_get, pwd_change
+from InputDialog import InputDialog
+from credentials import crypted_file_pwd_get, crypted_file_pwd_history, crypted_file_pwd_change
 
 
 KEE_FILE = Path().cwd() / "Pytre_X3_Settings.db"
-KEE_PWD = pwd_get()
+KEE_PWD = crypted_file_pwd_get()
 
 
 def get_app_path() -> Path:
@@ -31,6 +34,12 @@ def get_app_path() -> Path:
 
 class Kee:
     _instance = None
+    file: str = KEE_FILE
+    pwd: str = ""
+    db: PyKeePass = None
+    is_open: bool = False
+    is_ko: bool = False
+    opening_count: int = 0
 
     def __new__(cls):
         if cls._instance is None:
@@ -38,32 +47,94 @@ class Kee:
         return cls._instance
 
     def __init__(self):
-        self.file: str = KEE_FILE
-        self.pwd: str = self.pwd_get()
-        self.db: PyKeePass = None
-        self.is_open: bool = False
-
-        self.opening_count: int = 0
+        if not Kee.pwd:
+            Kee.pwd = self.pwd_get()
+            self._open_db()
+            print("init")
 
     def _open_db(self, reload: bool = False):
         """A utiliser uniquement par la méthode open_db des classes User, Server et Settings"""
-        if not self.is_open:
-            self.db = PyKeePass(self.file, password=self.pwd)
-            self.is_open = True
-            self.opening_count += 1
-            # print(f"Opening count : {self.opening_count}")
+        if not Kee.is_open:
+            try:
+                Kee.db = PyKeePass(Kee.file, password=Kee.pwd)
+            except CredentialsError:  # si erreur mot de passe, tentative avec les précédents
+                self.pwd_try_old_ones()
+
+            Kee.is_open = True
+            Kee.opening_count += 1
+            print(f"Opening count : {Kee.opening_count}")
         elif reload:
-            self.db.reload()
-            self.opening_count += 1
-            # print(f"Opening count : {self.opening_count}")
+            Kee.db.reload()
+            Kee.opening_count += 1
+            print(f"Opening count : {Kee.opening_count}")
+
+    def save_db(self):
+        try:
+            Kee.db.save()
+        except PermissionError:
+            msg = (
+                "Vous n'avez les droits d'accès à la base des paramètres !\n"
+                + "Vos modifications n'ont pas pu être enregistées.\n\n"
+                + "Merci d'alerter les administateurs."
+            )
+            messagebox.showerror(title="Erreur enregistrement", message=msg)
+
+    def pwd_try_old_ones(self, pwds_list: list[str] = [], _iter: int = 0) -> bool:
+        if Kee.is_ko:
+            return  # une fois que l'accès est ko, plus d'essai
+
+        if not pwds_list:
+            pwds_list = crypted_file_pwd_history()[1:]
+
+        for pwd in pwds_list:
+            try:
+                Kee.db = PyKeePass(Kee.file, password=pwd)
+                self.pwd_change(pwd, True)
+                Kee.is_ko = False
+                msg = (
+                    "Le mot de passe d'accès aux paramètres n'était pas valide !\n"
+                    + "L'accès a pu être possible à l'aide d'un ancien mot de passe.\n\n"
+                    + "Merci d'alerter les administateurs, surtout si vous avez eu "
+                    + "une erreur d'enregistrement lorsque le programme à tenter de "
+                    + "le mettre à jour."
+                )
+                messagebox.showwarning(title="Récupération mot de passe", message=msg)
+                return True
+            except CredentialsError:
+                pass
+
+        # si aucun des anciens mots de passe ne marche alors on demande à l'utilisateur le bon mot de passe
+        pwd = InputDialog.ask("Mot de passe, accès paramètres ?", "Mot de passe :")
+        if pwd and self.pwd_try_old_ones([pwd], _iter + 1):
+            Kee.is_ko = False
+            return True
+        # si l'utilisateur n'en a pas été capable alors on affiche une erreur
+        elif _iter == 0:
+            Kee.is_ko = True
+            msg = (
+                "Le mot de passe d'accès aux paramètres n'était pas valide !\n"
+                + "L'accès même avec les anciens mots de passe ne fonctionne pas.\n\n"
+                + "Merci d'alerter les administateurs."
+            )
+            messagebox.showerror(title="Récupération mot de passe", message=msg)
+            return False
+        else:
+            return False
 
     def pwd_get(self) -> str:
-        pwd = pwd_get()
+        pwd = crypted_file_pwd_get()
         return pwd
 
-    def pwd_change(self, new_pwd: str):
-        pwd_change(new_pwd)
-        self.pwd = new_pwd
+    def pwd_history(self) -> list[str]:
+        history = crypted_file_pwd_history()
+        return history
+
+    def pwd_change(self, new_pwd: str, force_save: bool = False):
+        if force_save or not new_pwd == Kee.pwd:
+            Kee.pwd = new_pwd
+            Kee.db.password = Kee.pwd
+            self.save_db()
+            crypted_file_pwd_change(new_pwd)
 
 
 class User:
@@ -109,7 +180,7 @@ class User:
                 save = True
 
         if save:
-            User.kee.db.save()
+            User.kee.save_db()
 
     @classmethod
     def users_remove_groups(cls, usernames: list[str], groups: list[str]):
@@ -132,7 +203,7 @@ class User:
                 save = True
 
         if save:
-            User.kee.db.save()
+            User.kee.save_db()
 
     @classmethod
     def csv_import(cls, filename: Path, delimiter: str = ";") -> bool:
@@ -177,7 +248,7 @@ class User:
                 u_entry.tags = [group for group in groups if not group == "all"]
 
             # une fois que toutes les entries sont à jour, sauvegarde de la base
-            User.kee.db.save()
+            User.kee.save_db()
 
             return True
 
@@ -317,7 +388,7 @@ class User:
 
         u_entry.tags = [grp for grp in self.grp_authorized if not grp == "all"]
 
-        User.kee.db.save()
+        User.kee.save_db()
 
         return True
 
@@ -329,7 +400,7 @@ class User:
             raise LookupError("User not found")
 
         entry.delete()
-        User.kee.db.save()
+        User.kee.save_db()
 
         return True
 
@@ -429,7 +500,7 @@ class Server:
             else:
                 s_entry.set_custom_property(key, val)
 
-        Server.kee.db.save()
+        Server.kee.save_db()
         return True
 
 
@@ -505,7 +576,7 @@ class Settings:
             val = getattr(self, attr_name)
             info.username = val
 
-        Settings.kee.db.save()
+        Settings.kee.save_db()
         return True
 
 

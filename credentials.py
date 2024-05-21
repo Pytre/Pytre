@@ -39,18 +39,39 @@ def decrypt_from_file(filename: Path, key: Fernet) -> str:
     return decrypted_text
 
 
-def pwd_change(new_pwd: str):
-    crypt_to_file(KEY_FILE, KEY, new_pwd)
+def crypted_file_pwd_change(new_pwd: str):
+    pwd_history = crypted_file_pwd_history()
+
+    if pwd_history:
+        pwd_history.insert(0, new_pwd)
+    else:
+        pwd_history = [new_pwd]
+
+    text_to_crypt = "\n".join(pwd_history[:25])
+    crypt_to_file(KEY_FILE, KEY, text_to_crypt)
 
 
-def pwd_get() -> str:
-    pwd = decrypt_from_file(KEY_FILE, KEY)
-    return pwd.decode("UTF-8")
+def crypted_file_pwd_history() -> list[str]:
+    try:
+        pwd = decrypt_from_file(KEY_FILE, KEY).decode("UTF-8")
+        pwd_history = pwd.split("\n")
+    except FileNotFoundError:
+        pwd_history = []
+
+    return pwd_history
+
+
+def crypted_file_pwd_get() -> str:
+    pwd_history = crypted_file_pwd_history()
+    pwd_last = pwd_history[0] if pwd_history else ""
+    return pwd_last
 
 
 if __name__ == "__main__":
     if not "" == (new_pwd := input("Changer mot de passe (vide pour non) : ")):
-        pwd_change(new_pwd)
+        crypted_file_pwd_change(new_pwd)
 
-    decrypted_text = pwd_get()
-    print(f"decrypted : {decrypted_text}")
+    pwd_history = "\n".join(crypted_file_pwd_history())
+    print(f"{'=' * 50}\nHistorique mots de passe :\n{pwd_history}")
+    pwd = crypted_file_pwd_get()
+    print(f"{'=' * 50}\nMot de passe courant : {pwd}")

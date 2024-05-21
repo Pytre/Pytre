@@ -11,6 +11,7 @@ from app_debug import DebugWindow
 from app_users import UsersWindow
 from app_servers import ServersWindow
 from app_settings import SettingsWindow
+from app_password import PasswordWindow
 from app_about import AboutWindow
 
 SETTINGS = sql_query.SETTINGS
@@ -158,6 +159,8 @@ class App(tk.Tk):
             menu_admin.add_command(label="Utilisateurs...", command=self.manage_users)
             menu_admin.add_command(label="Serveur...", command=self.manage_servers)
             menu_admin.add_command(label="Paramètres généraux...", command=self.manage_settings)
+            menu_admin.add_separator()
+            menu_admin.add_command(label="Paramètres, mot de passe...", command=self.manage_password)
             menubar.add_cascade(label="Administation", menu=menu_admin)
 
         menu_about = tk.Menu(menubar, tearoff=False)
@@ -713,6 +716,9 @@ class App(tk.Tk):
     def manage_settings(self):
         SettingsWindow(self)
         SETTINGS.reload()
+
+    def manage_password(self):
+        PasswordWindow(self)
 
     def about_info(self):
         AboutWindow(self)

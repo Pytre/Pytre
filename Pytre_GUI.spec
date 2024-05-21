@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_all
 
-datas = [('res\\app.ico', 'res'), ('res\\app.gif', 'res'), ('app_about_license.txt', '')]
+datas = [('res\\app.ico', 'res'), ('res\\app.gif', 'res'), ('app_about_license.txt', '.')]
 binaries = []
 hiddenimports = ['pymssql', 'uuid']
 
@@ -39,7 +39,7 @@ exe = EXE(pyz,
           a.zipfiles,
           a.datas,
           [],
-          name='Pytre_X3',
+          name='Pytre',
           debug=False,
           bootloader_ignore_signals=False,
           strip=False,

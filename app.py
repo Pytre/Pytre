@@ -12,10 +12,9 @@ from app_users import UsersWindow
 from app_servers import ServersWindow
 from app_settings import SettingsWindow
 from app_password import PasswordWindow
-from app_about import AboutWindow
+from app_about import AboutWindow, VERSION as APP_VERSION
 
 SETTINGS = sql_query.SETTINGS
-PYTRE_VERSION = "1.031"
 
 
 class App(tk.Tk):
@@ -88,11 +87,11 @@ class App(tk.Tk):
             )
             return False
 
-        if not self.version_used_gte_mini(PYTRE_VERSION, SETTINGS.min_version_pytre):
+        if not self.version_used_gte_mini(APP_VERSION, SETTINGS.min_version_pytre):
             messagebox.showerror(
                 "Version Pytre",
                 "Votre version de Pytre n'est pas à jour."
-                f"\n\n- Version utilisée : {PYTRE_VERSION}"
+                f"\n\n- Version utilisée : {APP_VERSION}"
                 f"\n- Version mini : {SETTINGS.min_version_pytre}"
                 "\n\nMerci d'utiliser une version à jour",
             )
@@ -136,7 +135,7 @@ class App(tk.Tk):
     # Création de l'interface
     # ------------------------------------------------------------------------------------------
     def setup_ui(self):
-        self.title(f"Pytre - V.{PYTRE_VERSION}")
+        self.title(f"Pytre - V.{APP_VERSION}")
         icon_file = SETTINGS.app_path / "res" / "app.ico"
         self.iconbitmap(default=icon_file)
 

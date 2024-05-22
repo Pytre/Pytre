@@ -3,6 +3,12 @@ from tkinter import ttk, Event
 
 from settings import get_app_path
 
+NAME = "Pytre"
+VERSION = "1.1.0"
+BUILD = "1"
+COPYRIGHT_YEAR = "2021"
+AUTHOR = "Matthieu Ferrier"
+
 
 class AboutWindow(tk.Toplevel):
     def __init__(self, parent=None):
@@ -54,23 +60,30 @@ class AboutWindow(tk.Toplevel):
 
     def _setup_top_frame(self):
         self.top_frame.rowconfigure(0, weight=1)
-        self.top_frame.columnconfigure(1, weight=1)
+        self.top_frame.columnconfigure(2, weight=1)
 
         logo_file = get_app_path() / "res" / "app.gif"
         self.logo_img = tk.PhotoImage(file=logo_file)
 
-        logo_widget = ttk.Label(self.top_frame, image=self.logo_img, justify="center")
-        app_widget = ttk.Label(self.top_frame, text="Pytre", font=("TkDefaultFont", 20, "bold"), anchor="sw")
-        author_widget = ttk.Label(
+        logo_label = ttk.Label(self.top_frame, image=self.logo_img, justify="center")
+        app_label = ttk.Label(self.top_frame, text=NAME, font=("TkDefaultFont", 20, "bold"), anchor="sw")
+        version_label = ttk.Label(
             self.top_frame,
-            text="Copyright (C) 2021 / Created by Matthieu Ferrier",
+            text=f"Version : {VERSION} - Build {BUILD}",
+            font=("TkDefaultFont", 8, "normal"),
+            anchor="ne",
+        )
+        author_label = ttk.Label(
+            self.top_frame,
+            text=f"Copyright (C) {COPYRIGHT_YEAR} / Created by {AUTHOR}",
             font=("TkDefaultFont", 8, "normal"),
             anchor="nw",
         )
 
-        logo_widget.grid(row=0, column=0, rowspan=2, padx=10, pady=4, sticky="nswe")
-        app_widget.grid(row=0, column=1, padx=4, pady=0, sticky="nswe")
-        author_widget.grid(row=1, column=1, padx=4, pady=4, sticky="nwe")
+        logo_label.grid(row=0, column=0, rowspan=2, padx=10, pady=4, sticky="nswe")
+        app_label.grid(row=0, column=1, padx=4, pady=0, sticky="nswe")
+        version_label.grid(row=0, column=2, padx=4, pady=0, sticky="ne")
+        author_label.grid(row=1, column=1, columnspan=2, padx=4, pady=4, sticky="nwe")
 
     def _setup_license_frame(self):
         self.license_frame.rowconfigure(0, weight=1)

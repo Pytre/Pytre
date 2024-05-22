@@ -59,8 +59,26 @@ class App(tk.Tk):
                 self.queries_btn_folder.grid_forget()
             return True
 
+    def version_used_gte_mini(self, used: str, mini: str) -> bool:
+        """ctrl si version utilisé supérieure ou égale à version mini"""
+        used_nums = list(map(lambda i: int(i), used.split(".")))
+        mini_nums = list(map(lambda i: int(i), mini.split(".")))
+
+        if not len(used_nums) == len(mini_nums):
+            return False
+
+        if used_nums == mini_nums:
+            return True
+        for i in range(len(mini_nums)):
+            if used_nums[i] > mini_nums[i]:
+                return True
+            elif used_nums[i] < mini_nums[i]:
+                return False
+
+        return False
+
     def check_min_version(self) -> bool:
-        if SETTINGS.min_version_settings > SETTINGS.settings_version:
+        if not self.version_used_gte_mini(SETTINGS.settings_version, SETTINGS.min_version_settings):
             messagebox.showerror(
                 "Version settings.db",
                 "Le fichier settings.db utilisé n'est pas à jour."
@@ -70,7 +88,7 @@ class App(tk.Tk):
             )
             return False
 
-        if SETTINGS.min_version_pytre > PYTRE_VERSION:
+        if not self.version_used_gte_mini(PYTRE_VERSION, SETTINGS.min_version_pytre):
             messagebox.showerror(
                 "Version Pytre",
                 "Votre version de Pytre n'est pas à jour."

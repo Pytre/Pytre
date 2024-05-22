@@ -174,7 +174,7 @@ class App(tk.Tk):
             menu_admin.add_command(label="Paramètres généraux...", command=self.manage_settings)
             menu_admin.add_separator()
             menu_admin.add_command(label="Paramètres, mot de passe...", command=self.manage_password)
-            menubar.add_cascade(label="Administation", menu=menu_admin)
+            menubar.add_cascade(label="Administration", menu=menu_admin)
 
         menu_about = tk.Menu(menubar, tearoff=False)
         menu_about.add_command(label="À propos de Pytre...", command=self.about_info)

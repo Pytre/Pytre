@@ -49,8 +49,8 @@ class Kee:
     def __init__(self):
         if not Kee.pwd:
             Kee.pwd = self.pwd_get()
+        if not Kee.is_open and not Kee.is_ko:
             self._open_db()
-            print("init")
 
     def _open_db(self, reload: bool = False):
         """A utiliser uniquement par la méthode open_db des classes User, Server et Settings"""
@@ -78,6 +78,9 @@ class Kee:
                 + "Merci d'alerter les administateurs."
             )
             messagebox.showerror(title="Erreur enregistrement", message=msg)
+
+    def access_is_ko(self) -> bool:
+        return Kee.is_ko
 
     def pwd_try_old_ones(self, pwds_list: list[str] = [], _iter: int = 0) -> bool:
         if Kee.is_ko:
@@ -143,9 +146,12 @@ class User:
     kee_grp: Group = None
 
     @classmethod
-    def open_db(cls, reload: bool = False):
+    def open_db(cls, reload: bool = False) -> bool:
         cls.kee._open_db(reload)
+        if User.kee.is_ko:
+            return False
         cls.kee_grp = cls.kee.db.find_groups(name=cls.kee_grp_name, first=True)
+        return True
 
     @classmethod
     def users_get_all(cls) -> list:
@@ -358,7 +364,8 @@ class User:
             self.msg_login = self.msg_login_cust
 
     def load(self) -> None:
-        User.open_db()
+        if not User.open_db():
+            return
 
         u_entry: Entry | None = None
         for u_entry in User.kee.db.find_entries(username=r".*", group=User.kee_grp, regex=True):
@@ -411,9 +418,12 @@ class Server:
     kee_grp: Group = None
 
     @classmethod
-    def open_db(cls, reload: bool = False):
+    def open_db(cls, reload: bool = False) -> bool:
         cls.kee._open_db(reload)
+        if Server.kee.is_ko:
+            return False
         cls.kee_grp = cls.kee.db.find_groups(name=cls.kee_grp_name, first=True)
+        return True
 
     def __init__(self, title: str = "", entry: Entry = None):
         self.title: str = ""
@@ -471,7 +481,9 @@ class Server:
             setattr(self, property, val)
 
     def load(self):
-        Server.open_db()
+        if not Server.open_db():
+            return
+
         s_entry: Entry = Server.kee.db.find_entries(title=self.title, group=Server.kee_grp, first=True)
         if s_entry:
             self._load_from_entry(s_entry)
@@ -510,9 +522,12 @@ class Settings:
     kee_grp: Group = None
 
     @classmethod
-    def open_db(cls, reload: bool = False):
+    def open_db(cls, reload: bool = False) -> bool:
         cls.kee._open_db(reload)
+        if Settings.kee.is_ko:
+            return False
         cls.kee_grp = cls.kee.db.find_groups(name=cls.kee_grp_name, first=True)
+        return True
 
     def __init__(self):
         self.app_path: Path = get_app_path()
@@ -551,7 +566,8 @@ class Settings:
                 self.extract_folder = Path.home()
 
     def load(self) -> None:
-        Settings.open_db()
+        if not Settings.open_db():
+            return
 
         # key : keepass title, value : settings attribute
         self.params_dict = {

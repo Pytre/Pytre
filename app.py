@@ -19,7 +19,7 @@ PYTRE_VERSION = "1.031"
 
 
 class App(tk.Tk):
-    def __init__(self, queries_folder="", debug=False):
+    def __init__(self, queries_folder=""):
         super().__init__()
 
         self.user: sql_query.settings.User = SETTINGS.curr_user
@@ -33,11 +33,10 @@ class App(tk.Tk):
         self.setup_ui()
         self.setup_events_binds()
 
-        if not debug:
-            if self.check_user_access() is False:
-                return
-            if self.check_min_version() is False:
-                return
+        self.is_authorized = True
+        if not self.check_user_access() or not self.check_min_version():
+            self.is_authorized = False
+            return
 
         self.refresh_queries()
 
@@ -54,7 +53,6 @@ class App(tk.Tk):
                 + "\nDonnées d'identification :"
                 + f"\n- User : {self.user.username}",
             )
-            self.destroy()
             return False
         else:
             if not self.user.admin:
@@ -70,18 +68,16 @@ class App(tk.Tk):
                 f"\n- Version mini : {SETTINGS.min_version_settings}"
                 "\n\nMerci d'utiliser le fichier des settings à jour",
             )
-            self.destroy()
             return False
 
         if SETTINGS.min_version_pytre > PYTRE_VERSION:
             messagebox.showerror(
                 "Version Pytre",
-                "Votre version de Pytre X3 n'est pas à jour."
+                "Votre version de Pytre n'est pas à jour."
                 f"\n\n- Version utilisée : {PYTRE_VERSION}"
                 f"\n- Version mini : {SETTINGS.min_version_pytre}"
                 "\n\nMerci d'utiliser une version à jour",
             )
-            self.destroy()
             return False
 
         return True
@@ -116,7 +112,7 @@ class App(tk.Tk):
     # ------------------------------------------------------------------------------------------
     def setup_style(self):
         self.style_frame_label = "Bold.TLabelFrame.Label"
-        ttk.Style().configure(self.style_frame_label, font=("TkDefaultFont", 10, "bold"))
+        ttk.Style(self).configure(self.style_frame_label, font=("TkDefaultFont", 10, "bold"))
 
     # ------------------------------------------------------------------------------------------
     # Création de l'interface
@@ -235,8 +231,10 @@ class App(tk.Tk):
         self.right_panned.columnconfigure(0, weight=1)
 
     def setup_ui_params(self):
-        self.params_label = ttk.Label(text="Saisie des paramètres", style=self.style_frame_label)
-        self.params_outer = ttk.LabelFrame(self.right_panned, labelwidget=self.params_label, borderwidth=2)
+        self.params_outer = ttk.LabelFrame(self.right_panned, borderwidth=2)
+        self.params_label = ttk.Label(self.params_outer, text="Saisie des paramètres", style=self.style_frame_label)
+        self.params_outer.config(labelwidget=self.params_label)
+
         self.params_outer.rowconfigure(0, weight=1)
         self.params_outer.columnconfigure(0, weight=1)
 
@@ -266,8 +264,13 @@ class App(tk.Tk):
         self.output_and_btn_frame.columnconfigure(0, weight=1)
 
     def setup_ui_output(self):
-        self.output_label = ttk.Label(text="Messages / Fenêtre d'execution", style=self.style_frame_label)
-        self.output_frame = ttk.LabelFrame(self.output_and_btn_frame, labelwidget=self.output_label, borderwidth=2)
+        self.setup_style()
+        self.output_frame = ttk.LabelFrame(self.output_and_btn_frame, borderwidth=2)
+        self.output_label = ttk.Label(
+            self.output_frame, text="Messages / Fenêtre d'execution", style=self.style_frame_label
+        )
+        self.output_frame.config(labelwidget=self.output_label)
+
         self.output_frame.grid(row=0, column=0, padx=0, pady=0, sticky="nswe")
 
         self.output_textbox = tk.Text(
@@ -521,6 +524,9 @@ class App(tk.Tk):
     # Traitements
     # ------------------------------------------------------------------------------------------
     def refresh_queries(self):
+        if not self.is_authorized:
+            return
+
         self.ui_params_reset()
         self.query = sql_query.Query()
         self.output_msg("")

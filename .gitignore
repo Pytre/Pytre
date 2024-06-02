@@ -3,15 +3,11 @@ __pycache__/
 build/
 dist/
 Requetes SQL/
-app.build/
-app.dist/
-app.onefile-build/
+/app*/
 
 changelog.txt
-credentials_secrets.py
+/credentials_secrets.py
 
-Pytre.key
-Pytre.db
-Pytre_X3_Settings.db
-Pytre_SQLite.db
-app.exe
+/Pytre.key
+/Pytre*.db
+

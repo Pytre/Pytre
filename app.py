@@ -193,14 +193,10 @@ class App(tk.Tk):
         self.queries_label_filter = ttk.Label(self.left_frame, text="Filtre :", justify=tk.LEFT)
         self.queries_entry_filter = ttk.Entry(self.left_frame, textvariable=self.queries_filter_text, width=30)
         self.queries_btn_folder = ttk.Button(
-            self.left_frame,
-            text="Dossier",
-            command=lambda: self.open_folder(SETTINGS.queries_folder),
+            self.left_frame, text="Dossier", command=lambda: self.open_folder(SETTINGS.queries_folder)
         )
         self.queries_btn_refresh = ttk.Button(
-            self.left_frame,
-            text="Réinitialiser",
-            command=lambda: self.refresh_queries(),
+            self.left_frame, text="Réinitialiser", command=lambda: self.refresh_queries()
         )
 
         self.queries_tree = ttk.Treeview(self.left_frame, columns=(1, 2), show="headings", selectmode="browse")
@@ -291,12 +287,7 @@ class App(tk.Tk):
         self.output_frame.grid(row=0, column=0, padx=0, pady=0, sticky="nswe")
 
         self.output_textbox = tk.Text(
-            self.output_frame,
-            width=75,
-            height=7,
-            wrap="word",
-            state="disabled",
-            font=("TkDefaultFont", 10),
+            self.output_frame, width=75, height=7, wrap="word", state="disabled", font=("TkDefaultFont", 10)
         )
         self.output_textbox_scrollbar = ttk.Scrollbar(
             self.output_frame, orient="vertical", command=self.output_textbox.yview
@@ -318,9 +309,7 @@ class App(tk.Tk):
 
         self.btn_execute = ttk.Button(self.btn_frame, text="Executer", state="disable", command=self.execute_query)
         self.btn_queries_folder = ttk.Button(
-            self.btn_frame,
-            text="Dossier",
-            command=lambda: self.open_folder(SETTINGS.extract_folder),
+            self.btn_frame, text="Dossier", command=lambda: self.open_folder(SETTINGS.extract_folder)
         )
         self.btn_debug = ttk.Button(self.btn_frame, text="Debug", state="disable", command=self.debug_query)
         self.btn_quit = ttk.Button(self.btn_frame, text="Quitter", command=self.app_exit)
@@ -403,12 +392,7 @@ class App(tk.Tk):
                 my_widgets["entry"].bind("<Return>", self.param_input_event)
 
             my_widgets["check"] = ttk.Label(
-                self.params_inner,
-                text="",
-                width=3,
-                relief="groove",
-                justify=tk.LEFT,
-                background="red",
+                self.params_inner, text="", width=3, relief="groove", justify=tk.LEFT, background="red"
             )
 
             my_widgets["label"].grid(row=i, column=0, padx=2, pady=2, sticky="nswe")
@@ -448,17 +432,13 @@ class App(tk.Tk):
     # Définition des évènements générer par les traitements
     # ------------------------------------------------------------------------------------------
     def setup_events_binds(self):
-        self.queries_entry_filter.bind(
-            "<KeyRelease>",
-            lambda e: self.queries_filter(self.queries_entry_filter.get()),
-        )
+        self.queries_entry_filter.bind("<KeyRelease>", lambda e: self.queries_filter(self.queries_entry_filter.get()))
 
         self.queries_tree.bind("<<TreeviewSelect>>", self.tree_selection_change)
 
         self.params_canvas.bind("<Configure>", self.params_resize)
         self.params_canvas.bind(
-            "<Enter>",
-            lambda _: self.params_canvas.bind_all("<MouseWheel>", self.params_scrolling),
+            "<Enter>", lambda _: self.params_canvas.bind_all("<MouseWheel>", self.params_scrolling)
         )
         self.params_canvas.bind("<Leave>", lambda _: self.params_canvas.unbind_all("<MouseWheel>"))
 
@@ -567,11 +547,7 @@ class App(tk.Tk):
             self.execute_thread = Thread(target=self.start_execute_thread, daemon=True)  # thread execution requete
             self.execute_thread.start()
         else:
-            self.output_msg(
-                "Impossible d'executer, tant que des paramètres ne sont pas valides :\n",
-                "1.0",
-                "1.0",
-            )
+            self.output_msg("Impossible d'executer, tant que des paramètres ne sont pas valides :\n", "1.0", "1.0")
 
     def params_get_input(self):
         for key in self.params_widgets:
@@ -625,13 +601,7 @@ class App(tk.Tk):
                 or item.description.lower().find(text_filter.lower()) != -1
             ):
                 color = "none" if item.description[0:3] != "(*)" else "hidden"
-                self.queries_tree.insert(
-                    "",
-                    tk.END,
-                    values=(item.name, item.description),
-                    iid=id(item),
-                    tags=color,
-                )
+                self.queries_tree.insert("", tk.END, values=(item.name, item.description), iid=id(item), tags=color)
 
     def tree_selection_change(self, _: Event):
         selected_iid = self.queries_tree.focus()

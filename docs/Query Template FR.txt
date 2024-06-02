@@ -97,20 +97,3 @@ UI_CTRL(LISTE_VAL_AUTORISEES) : précisions sur le fonctionnement
 		LIST(1: Social, 4: Situation)
 		CHECK(1, 0)    => pour ce ctrl arg 1 est la valeur quand coché (ici 1), arg 2 quand décoché (ici 0)
 		CHECK(2, 1)    => pour ce ctrl arg 1 est la valeur quand coché (ici 2), arg 2 quand décoché (ici 1)
-
-========================================================================================================================================
-Pour faciliter conversion d'une requête dans X3 en requête permettant d'interroger en direct la base SQL
-========================================================================================================================================
----------------------------
-Regex pour modif variable :
----------------------------
-- Recherche de : %(\d+)%
-- Remplacer par : @\1
-
-----------------------------------------------------------
-Regex pour rajouter les infos de la base pour les tables :
-----------------------------------------------------------
-- Recherche de : (FROM|JOIN)([^\w\(]*)(\w+)
-- Remplacer par : \1\2x3v12prod.PROSOL2.\3
-=> attention sur cette partie à bien rechecker, par défaut on considère que toute table est une table dans X3
-(alors qu'on a pu faire des sous-requetes ou des tables qui référence déjà une base)

@@ -94,7 +94,7 @@ class AboutWindow(tk.Toplevel):
         title_label = ttk.Label(self.license_frame, text=title, style="Bold.TLabelFrame.Label")
         self.license_frame.config(labelwidget=title_label, borderwidth=2, labelanchor="n")
 
-        license_file = get_app_path() / "app_about_license.txt"
+        license_file = get_app_path() / "res" / "about_license.txt"
         with open(license_file, "r") as file:
             license_txt = file.read()
         license_textbox = tk.Text(self.license_frame, wrap="word", font=("TkDefaultFont", 8, "normal"))

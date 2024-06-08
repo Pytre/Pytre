@@ -6,7 +6,7 @@ Requetes SQL/
 /app*/
 
 changelog.txt
-/credentials_secrets.py
+/pytre/credentials_secrets.py
 
 /Pytre.key
 /Pytre*.db

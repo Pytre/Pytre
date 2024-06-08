@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_all
 
-datas = [('res\\app.ico', 'res'), ('res\\app.gif', 'res'), ('app_about_license.txt', '.')]
+datas = [('pytre/res/app.ico', 'res'), ('pytre/res/app.gif', 'res'), ('pytre/res/about_license.txt', 'res')]
 binaries = []
 hiddenimports = ['pymssql', 'uuid']
 
@@ -17,8 +17,8 @@ binaries += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 block_cipher = None
 
-a = Analysis(['app.py'],
-             pathex=[],
+a = Analysis(['pytre/__main__.py'],
+             pathex=['pytre'],
              binaries=binaries,
              datas=datas,
              hiddenimports=hiddenimports,
@@ -47,7 +47,7 @@ exe = EXE(pyz,
           upx_exclude=[],
           runtime_tmpdir=None,
           console=False,
-          icon='res/app.ico')
+          icon='pytre/res/app.ico')
 
 coll = COLLECT(exe,
                a.binaries,

@@ -1,10 +1,14 @@
 import tkinter as tk
 from tkinter import ttk, Event, messagebox
 
-from settings import Server
+if not __package__:
+    import syspath_insert  # noqa: F401  # disable unused-import warning
+
+from settings import Settings
+from about import APP_NAME
 
 
-class ServersWindow(tk.Toplevel):
+class SettingsWindow(tk.Toplevel):
     def __init__(self, parent=None):
         super().__init__()
         self.parent = parent
@@ -15,7 +19,7 @@ class ServersWindow(tk.Toplevel):
         else:
             self.master.withdraw()
 
-        self.server = Server()
+        self.settings = Settings()
 
         self._setup_ui()
         self._events_binds()
@@ -24,7 +28,7 @@ class ServersWindow(tk.Toplevel):
     # Création de l'interface
     # ------------------------------------------------------------------------------------------
     def _setup_ui(self):
-        self.title("Pytre - Paramètres Serveur")
+        self.title(f"{APP_NAME} - Paramètres généraux")
 
         self.minsize(width=400, height=100)
         if self.parent:
@@ -44,39 +48,37 @@ class ServersWindow(tk.Toplevel):
 
         self._setup_entries()
         self._setup_buttons()
+        self.settings_load()
 
     def _setup_entries(self):
         self.entries_frame.columnconfigure(1, weight=1)
 
-        self.entries = {}
-        num_row = 0
-        for key, item in self.server.to_dict().items():
-            if key == "title":  # ne pas afficher le titre, il ne doit pas etre modifier
-                continue
+        self.entries = {
+            "field_separator": {"text": "Séparateur de champs"},
+            "decimal_separator": {"text": "Séparateur décimal"},
+            "date_format": {"text": "Format date"},
+            "queries_folder": {"text": "Dossier des requêtes"},
+            "settings_version": {"text": "Version des paramètres"},
+        }
 
-            my_label = ttk.Label(self.entries_frame, text=key + " : ")
-            my_tk_var = tk.StringVar(value=item)
+        num_row = 0
+        for _, item in self.entries.items():
+            my_label = ttk.Label(self.entries_frame, text=item["text"] + " : ")
+            my_tk_var = tk.StringVar()
             my_entry = ttk.Entry(self.entries_frame, textvariable=my_tk_var)
 
-            self.entries[key] = {"w_label": my_label, "w_entry": my_entry, "var": my_tk_var}
+            new_keys = {"w_label": my_label, "w_entry": my_entry, "var": my_tk_var}
+            item.update(new_keys)
 
             my_label.grid(row=num_row, column=0, padx=2, pady=2, sticky="nswe")
-
-            if key == "password":
-                my_entry.grid(row=num_row, column=1, padx=2, pady=2, sticky="nswe")
-                reveal_button = ttk.Button(self.entries_frame, width=8)
-                reveal_button.config(command=lambda wc=reveal_button, wt=my_entry: self.toggle_password(wc, wt))
-                self.toggle_password(reveal_button, my_entry)
-                reveal_button.grid(row=num_row, column=2, padx=2, pady=2, sticky="nswe")
-            else:
-                my_entry.grid(row=num_row, column=1, columnspan=2, padx=2, pady=2, sticky="nswe")
+            my_entry.grid(row=num_row, column=1, columnspan=2, padx=2, pady=2, sticky="nswe")
 
             num_row += 1
 
     def _setup_buttons(self):
         self.buttons_frame.columnconfigure(0, weight=1)
 
-        self.btn_save = ttk.Button(self.buttons_frame, text="Enregistrer", command=self.server_save)
+        self.btn_save = ttk.Button(self.buttons_frame, text="Enregistrer", command=self.settings_save)
         self.btn_cancel = ttk.Button(self.buttons_frame, text="Annuler", command=self.app_exit)
 
         self.btn_save.grid(row=0, column=1, padx=2, pady=2, sticky="nse")
@@ -91,25 +93,22 @@ class ServersWindow(tk.Toplevel):
     # ------------------------------------------------------------------------------------------
     # Autres traitements
     # ------------------------------------------------------------------------------------------
-    def toggle_password(self, w_caller: tk.Widget, w_target: tk.Widget, hide_char: str = "\U000025CF"):
-        if w_target["show"] == "":
-            w_caller.config(text="Voir")
-            w_target.config(show=hide_char)
-        else:
-            w_caller.config(text="Masquer")
-            w_target.config(show="")
+    def settings_load(self):
+        for key, item in self.entries.items():
+            val = getattr(self.settings, key)
+            item["var"].set(val)
 
-    def server_save(self):
-        for key in self.entries.keys():
-            val = self.entries[key]["var"].get()
-            setattr(self.server, key, val)
+    def settings_save(self):
+        for key, item in self.entries.items():
+            val = item["var"].get()
+            setattr(self.settings, key, val)
 
-        result = self.server.save()
+        result = self.settings.save()
         if result:
             self.app_exit()
         else:
             msg = "Problème lors de l'enregistrement !"
-            messagebox.showerror(title="Mise à jour infos serveur", message=msg, parent=self, type=messagebox.OK)
+            messagebox.showerror(title="Mise à jour paramètres", message=msg, parent=self, type=messagebox.OK)
 
     def app_exit(self, _: Event = None):
         if self.parent:
@@ -122,5 +121,5 @@ class ServersWindow(tk.Toplevel):
 
 
 if __name__ == "__main__":
-    my_app = ServersWindow()
+    my_app = SettingsWindow()
     my_app.mainloop()

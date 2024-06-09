@@ -1,7 +1,11 @@
 import tkinter as tk
 from tkinter import Event, ttk
 
+if not __package__:
+    import syspath_insert  # noqa: F401  # disable unused-import warning
+
 from settings import Kee
+from about import APP_NAME
 
 
 class PasswordWindow(tk.Toplevel):
@@ -25,7 +29,7 @@ class PasswordWindow(tk.Toplevel):
         self.set_history()
 
     def _setup_ui(self):
-        self.title("Pytre - Accès aux paramètres, mot de passe")
+        self.title(f"{APP_NAME} - Accès aux paramètres, mot de passe")
         self.minsize(width=400, height=25)
         if self.parent:
             self.geometry(f"+{self.parent.winfo_x() + 200}+{self.parent.winfo_y() + 150}")

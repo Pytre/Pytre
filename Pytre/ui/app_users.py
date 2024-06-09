@@ -1,8 +1,12 @@
 import tkinter as tk
 from tkinter import ttk, Event, font, messagebox, filedialog
 
+if not __package__:
+    import syspath_insert  # noqa: F401  # disable unused-import warning
+
 from InputDialog import InputDialog
 from settings import User
+from about import APP_NAME
 
 
 class UsersWindow(tk.Toplevel):
@@ -28,7 +32,7 @@ class UsersWindow(tk.Toplevel):
     # Création de l'interface
     # ------------------------------------------------------------------------------------------
     def _setup_ui(self):
-        self.title("Pytre - Gestion des utilisateurs")
+        self.title(f"{APP_NAME} - Gestion des utilisateurs")
         self.geometry("1200x800+100+75")
         self.resizable(True, True)
 
@@ -393,9 +397,9 @@ class UserDialog(tk.Toplevel):
     # ------------------------------------------------------------------------------------------
     def _setup_ui(self):
         if not self.user:
-            self.title("Pytre - Ajout utilisateur")
+            self.title(f"{APP_NAME} - Ajout utilisateur")
         else:
-            self.title("Pytre - Modification utilisateur")
+            self.title(f"{APP_NAME} - Modification utilisateur")
 
         self.minsize(width=400, height=100)
         self.geometry(f"+{self.parent.winfo_x() + 200}+{self.parent.winfo_y() + 150}")
@@ -578,9 +582,9 @@ class GroupsDialog(tk.Toplevel):
     def _setup_ui(self):
         nb_txt = "(1 utilisateur)" if len(self.usernames) <= 1 else f"({len(self.usernames)} utilisateurs)"
         if not self.remove_mode:
-            self.title(f"Pytre - Affecter groupes {nb_txt}")
+            self.title(f"{APP_NAME} - Affecter groupes {nb_txt}")
         else:
-            self.title(f"Pytre - Retirer groupes {nb_txt}")
+            self.title(f"{APP_NAME} - Retirer groupes {nb_txt}")
 
         self.minsize(width=400, height=100)
         self.geometry(f"+{self.parent.winfo_x() + 200}+{self.parent.winfo_y() + 150}")

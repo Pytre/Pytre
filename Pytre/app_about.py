@@ -1,4 +1,5 @@
 import tkinter as tk
+import webbrowser
 from tkinter import ttk, Event
 
 from settings import get_app_path
@@ -8,6 +9,7 @@ VERSION = "1.1.0"
 BUILD = "1"
 COPYRIGHT_YEAR = "2021"
 AUTHOR = "Matthieu Ferrier"
+HOMEPAGE_LINK = "https://github.com/Pytre/Pytre"
 
 
 class AboutWindow(tk.Toplevel):
@@ -79,11 +81,21 @@ class AboutWindow(tk.Toplevel):
             font=("TkDefaultFont", 8, "normal"),
             anchor="nw",
         )
+        link_label = ttk.Label(
+            self.top_frame,
+            text=HOMEPAGE_LINK,
+            foreground="blue",
+            font=("TkDefaultFont", 8, "underline"),
+            cursor="hand2",
+        )
 
-        logo_label.grid(row=0, column=0, rowspan=2, padx=10, pady=4, sticky="nswe")
+        link_label.bind("<Button-1>", lambda e: webbrowser.open_new_tab(HOMEPAGE_LINK))
+
+        logo_label.grid(row=0, column=0, rowspan=3, padx=10, pady=0, sticky="nswe")
         app_label.grid(row=0, column=1, padx=4, pady=0, sticky="nswe")
         version_label.grid(row=0, column=2, padx=4, pady=0, sticky="ne")
-        author_label.grid(row=1, column=1, columnspan=2, padx=4, pady=4, sticky="nwe")
+        author_label.grid(row=1, column=1, columnspan=2, padx=4, pady=0, sticky="swe")
+        link_label.grid(row=2, column=1, columnspan=2, padx=4, pady=0, sticky="nwe")
 
     def _setup_license_frame(self):
         self.license_frame.rowconfigure(0, weight=1)

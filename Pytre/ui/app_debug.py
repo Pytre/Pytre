@@ -3,6 +3,9 @@ import tkinter as tk
 from tkinter import ttk, Event
 from pathlib import Path
 
+if not __package__:
+    import syspath_insert  # noqa: F401  # disable unused-import warning
+
 import sql_query
 from sql_lexer import SqlLexer, TokenType
 

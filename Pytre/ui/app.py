@@ -5,14 +5,18 @@ from tkinter import Event, ttk, messagebox
 from os import startfile
 from threading import Thread
 
-import utils
+if not __package__:
+    import syspath_insert  # noqa: F401  # disable unused-import warning
+
+import old_files
 import sql_query
-from app_debug import DebugWindow
-from app_users import UsersWindow
-from app_servers import ServersWindow
-from app_settings import SettingsWindow
-from app_password import PasswordWindow
-from app_about import AboutWindow, VERSION as APP_VERSION
+from ui.app_debug import DebugWindow
+from ui.app_users import UsersWindow
+from ui.app_servers import ServersWindow
+from ui.app_settings import SettingsWindow
+from ui.app_password import PasswordWindow
+from ui.app_about import AboutWindow
+from about import APP_NAME, APP_VERSION
 
 SETTINGS = sql_query.SETTINGS
 
@@ -89,8 +93,8 @@ class App(tk.Tk):
 
         if not self.version_used_gte_mini(APP_VERSION, SETTINGS.min_version_pytre):
             messagebox.showerror(
-                "Version Pytre",
-                "Votre version de Pytre n'est pas à jour."
+                f"Version {APP_NAME}",
+                f"Votre version de {APP_NAME} n'est pas à jour."
                 f"\n\n- Version utilisée : {APP_VERSION}"
                 f"\n- Version mini : {SETTINGS.min_version_pytre}"
                 "\n\nMerci d'utiliser une version à jour",
@@ -102,11 +106,11 @@ class App(tk.Tk):
     def extract_folder_cleaning(self):
         extract_folder = SETTINGS.extract_folder
 
-        files = utils.old_files_list(extract_folder)  # liste des fichiers à supprimer
+        files = old_files.old_files_list(extract_folder)  # liste des fichiers à supprimer
         files_nb = len(files)
         if files_nb:
             files_size = round(sum([size.stat().st_size for size in files]) / 1024**2, 2)
-            files_date = utils.most_recent_files(files)
+            files_date = old_files.most_recent_files(files)
 
             answer = messagebox.askyesno(
                 "Suppression des anciennes extractions",
@@ -120,7 +124,7 @@ class App(tk.Tk):
             )
 
             if answer:
-                utils.old_files_delete(files)
+                old_files.old_files_delete(files)
             else:
                 self.open_folder(extract_folder)
 
@@ -135,7 +139,7 @@ class App(tk.Tk):
     # Création de l'interface
     # ------------------------------------------------------------------------------------------
     def setup_ui(self):
-        self.title(f"Pytre - V.{APP_VERSION}")
+        self.title(f"{APP_NAME} - V.{APP_VERSION}")
         icon_file = SETTINGS.app_path / "res" / "app.ico"
         self.iconbitmap(default=icon_file)
 
@@ -177,7 +181,7 @@ class App(tk.Tk):
             menubar.add_cascade(label="Administration", menu=menu_admin)
 
         menu_about = tk.Menu(menubar, tearoff=False)
-        menu_about.add_command(label="À propos de Pytre...", command=self.about_info)
+        menu_about.add_command(label=f"À propos de {APP_NAME}...", command=self.about_info)
         menubar.add_cascade(label="?", menu=menu_about)
 
     def setup_ui_paned_window(self):

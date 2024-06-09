@@ -2,14 +2,11 @@ import tkinter as tk
 import webbrowser
 from tkinter import ttk, Event
 
-from settings import get_app_path
+if not __package__:
+    import syspath_insert  # noqa: F401  # disable unused-import warning
 
-NAME = "Pytre"
-VERSION = "1.1.0"
-BUILD = "1"
-COPYRIGHT_YEAR = "2021"
-AUTHOR = "Matthieu Ferrier"
-HOMEPAGE_LINK = "https://github.com/Pytre/Pytre"
+import about
+from settings import get_app_path
 
 
 class AboutWindow(tk.Toplevel):
@@ -30,7 +27,7 @@ class AboutWindow(tk.Toplevel):
     # Création de l'interface
     # ------------------------------------------------------------------------------------------
     def _setup_ui(self):
-        self.title("Pytre - À propos")
+        self.title(f"{about.APP_NAME} - À propos")
         self.geometry("400x350")
         self._setup_position()
         self.resizable(False, False)
@@ -68,28 +65,28 @@ class AboutWindow(tk.Toplevel):
         self.logo_img = tk.PhotoImage(file=logo_file)
 
         logo_label = ttk.Label(self.top_frame, image=self.logo_img, justify="center")
-        app_label = ttk.Label(self.top_frame, text=NAME, font=("TkDefaultFont", 20, "bold"), anchor="sw")
+        app_label = ttk.Label(self.top_frame, text=about.APP_NAME, font=("TkDefaultFont", 20, "bold"), anchor="sw")
         version_label = ttk.Label(
             self.top_frame,
-            text=f"Version : {VERSION} - Build {BUILD}",
+            text=f"Version : {about.APP_VERSION} - Build {about.APP_BUILD}",
             font=("TkDefaultFont", 8, "normal"),
             anchor="ne",
         )
         author_label = ttk.Label(
             self.top_frame,
-            text=f"Copyright (C) {COPYRIGHT_YEAR} / Created by {AUTHOR}",
+            text=f"Copyright (C) {about.COPYRIGHT_YEAR} / Created by {about.AUTHOR}",
             font=("TkDefaultFont", 8, "normal"),
             anchor="nw",
         )
         link_label = ttk.Label(
             self.top_frame,
-            text=HOMEPAGE_LINK,
+            text=about.HOMEPAGE_LINK,
             foreground="blue",
             font=("TkDefaultFont", 8, "underline"),
             cursor="hand2",
         )
 
-        link_label.bind("<Button-1>", lambda e: webbrowser.open_new_tab(HOMEPAGE_LINK))
+        link_label.bind("<Button-1>", lambda e: webbrowser.open_new_tab(about.HOMEPAGE_LINK))
 
         logo_label.grid(row=0, column=0, rowspan=3, padx=10, pady=0, sticky="nswe")
         app_label.grid(row=0, column=1, padx=4, pady=0, sticky="nswe")
@@ -101,17 +98,12 @@ class AboutWindow(tk.Toplevel):
         self.license_frame.rowconfigure(0, weight=1)
         self.license_frame.columnconfigure(0, weight=1)
 
-        title = "GNU Affero General Public License"
         ttk.Style().configure("Bold.TLabelFrame.Label", font=("TkDefaultFont", 8, "bold"))
-        title_label = ttk.Label(self.license_frame, text=title, style="Bold.TLabelFrame.Label")
+        title_label = ttk.Label(self.license_frame, text=about.LICENSE_NAME, style="Bold.TLabelFrame.Label")
         self.license_frame.config(labelwidget=title_label, borderwidth=2, labelanchor="n")
 
-        license_file = get_app_path() / "res" / "about_license.txt"
-        with open(license_file, "r") as file:
-            license_txt = file.read()
         license_textbox = tk.Text(self.license_frame, wrap="word", font=("TkDefaultFont", 8, "normal"))
-
-        license_textbox.insert("0.0", license_txt)
+        license_textbox.insert("0.0", about.LICENSE_TEXT)
         license_textbox["state"] = "disabled"
 
         license_textbox.grid(row=0, column=0, padx=4, pady=4, sticky="nswe")

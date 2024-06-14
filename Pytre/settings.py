@@ -12,7 +12,7 @@ from pykeepass.exceptions import CredentialsError
 from pykeepass.entry import Entry
 from pykeepass.group import Group
 
-from InputDialog import InputDialog
+from ui.InputDialog import InputDialog
 from credentials import crypted_file_pwd_get, crypted_file_pwd_history, crypted_file_pwd_change
 
 

@@ -15,9 +15,12 @@ I am not looking for contributions but if you have any questions I would be happ
 
 Pytre is licensed under GNU Affero General Public License 3. You can find the license text in the LICENSE file.
 
-## Credits
+## Used libraries
 
-- Icon from [FlatIcon.com](https://www.flaticon.com/free-icon/buffoon_688319)
 - [pymssql](https://github.com/pymssql/pymssql)
 - [pykeepass](https://github.com/libkeepass/pykeepass)
 - [cryptography](https://github.com/pyca/cryptography)
+
+## Credits
+
+- Icon from [FlatIcon.com](https://www.flaticon.com/free-icon/buffoon_688319)

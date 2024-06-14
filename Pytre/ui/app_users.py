@@ -4,7 +4,7 @@ from tkinter import ttk, Event, font, messagebox, filedialog
 if not __package__:
     import syspath_insert  # noqa: F401  # disable unused-import warning
 
-from InputDialog import InputDialog
+from ui.InputDialog import InputDialog
 from settings import User
 from about import APP_NAME
 

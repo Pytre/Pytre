@@ -11,6 +11,17 @@ Yet development is slow. I am working on it when I have time and as it's already
 
 I am not looking for contributions but if you have any questions I would be happy to answer them.
 
+## Setup
+
+Copy from templates "credentials_secrets.py" to Pytre folder and change key.  
+Launch "\_\_main\_\_.py".
+
+If no Pytre.db and Pytre.key were previously existing then the program will create them on first run.  
+If no user is set as superuser / admin then current user will be given admin rights.
+
+Folder containing queries files should also contains "\_version_min.json" from templates.  
+It is used to make sure no one is using an old version when implementing new restrictions.
+
 ## License
 
 Pytre is licensed under GNU Affero General Public License 3. You can find the license text in the LICENSE file.

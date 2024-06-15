@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 from tkinter import messagebox
 
-from pykeepass import PyKeePass
+from pykeepass import PyKeePass, create_database
 from pykeepass.exceptions import CredentialsError
 from pykeepass.entry import Entry
 from pykeepass.group import Group
@@ -57,6 +57,8 @@ class Kee:
         if not Kee.is_open:
             try:
                 Kee.db = PyKeePass(Kee.file, password=Kee.pwd)
+            except FileNotFoundError:
+                self.create_db()
             except CredentialsError:  # si erreur mot de passe, tentative avec les précédents
                 self.pwd_try_old_ones()
 
@@ -78,6 +80,47 @@ class Kee:
                 + "Merci d'alerter les administateurs."
             )
             messagebox.showerror(title="Erreur enregistrement", message=msg)
+
+    def create_db(self):
+        Kee.is_ko = True
+
+        msg = "La base des paramètres n'a pas été trouvée !\n" + "Une nouvelle base va être créée."
+        messagebox.showwarning(title="Base introuvable", message=msg)
+        pwd = InputDialog.ask("Mot de passe, accès paramètres ?", "Mot de passe :")
+
+        Kee.db = create_database(Kee.file, password=pwd)
+        self.pwd_change(pwd, True)
+        self._create_db_set_default()
+
+        msg = "Une base des paramètres par défaut a été créée.\nMettez les à jour à l'aide du menu admin."
+        messagebox.showinfo(title="Base créée", message=msg)
+
+        Kee.is_ko = False
+
+    def _create_db_set_default(self):
+        Kee.db.root_group.name = "settings"
+
+        grps = {"Paramètres": None, "Serveurs": None, "Utilisateurs": None}
+        for grp in grps.keys():
+            grps[grp] = Kee.db.add_group(Kee.db.root_group, grp)
+
+        queries_folder = InputDialog.ask("Dossier des requêtes ?", "Dossier des requêtes :")
+        params = {
+            "DATE_FORMAT": "%d/%m/%Y",
+            "DECIMAL_SEPARATOR": ",",
+            "FIELD_SEPARATOR": ";",
+            "QUERIES_FOLDER": queries_folder,
+            "SETTINGS_VERSION": "2",
+        }
+        for k, v in params.items():
+            Kee.db.add_entry(grps["Paramètres"], title=k, username=v, password="")
+
+        server_cfg = ["charset", "database", "host", "login_timeout", "port", "server", "timeout"]
+        s_entry: Entry = Kee.db.add_entry(grps["Serveurs"], title="Default", username="", password="")
+        for item in server_cfg:
+            s_entry.set_custom_property(item, "")
+
+        self.save_db()
 
     def access_is_ko(self) -> bool:
         return Kee.is_ko
@@ -152,6 +195,20 @@ class User:
             return False
         cls.kee_grp = cls.kee.db.find_groups(name=cls.kee_grp_name, first=True)
         return True
+
+    @classmethod
+    def users_admin_exists(cls, reload: bool = False) -> bool:
+        cls.open_db(reload)
+
+        admin_exists = False
+
+        u_entry: Entry | None = None
+        for u_entry in User.kee.db.find_entries(username=r".*", group=cls.kee_grp, regex=True):
+            if u_entry.get_custom_property("superuser") == "true":
+                admin_exists = True
+                break
+
+        return admin_exists
 
     @classmethod
     def users_get_all(cls) -> list:
@@ -290,6 +347,13 @@ class User:
 
         return True
 
+    @classmethod
+    def get_username(self) -> str:
+        domain = os.environ.get("userdnsdomain") or ""
+        name = getpass.getuser()
+        domain_and_name = f"{domain}\\{name}" if domain else name
+        return domain_and_name
+
     def __init__(self, username: str = "", entry: Entry = None, detect_user: bool = True):
         """
         si pas de username et d'entry, et que detect_user est faux
@@ -309,8 +373,18 @@ class User:
         if entry:
             self._load_from_entry(entry)
         elif username or detect_user:
-            self.username = username if username else self._get_username()
+            self.username = username if username else self.get_username()
             self.load()
+
+        if not self.users_admin_exists():
+            msg = (
+                "Aucun administrateur n'existe !\n"
+                + "Vous allez être ajouté en tant qu'administrateur par défaut.\n"
+                + "Pensez à mettre à jour les utilisateurs après."
+            )
+            messagebox.showinfo(title="Base créée", message=msg)
+            self.admin = True
+            self.save()
 
     def to_dict(self) -> dict:
         return {
@@ -329,12 +403,6 @@ class User:
 
     def __str__(self) -> str:
         return str(self.to_dict())
-
-    def _get_username(self) -> str:
-        domain = os.environ.get("userdnsdomain") or ""
-        name = getpass.getuser()
-        domain_and_name = f"{domain}\\{name}" if domain else name
-        return domain_and_name
 
     def _load_from_entry(self, u_entry: Entry):
         if self.username == "":
@@ -358,10 +426,12 @@ class User:
             group = tag.lower().strip()
             self.grp_authorized.append(group)
 
-        if self.msg_login_cust == "":
+        if self.msg_login_cust:
+            self.msg_login = self.msg_login_cust
+        elif self.title:
             self.msg_login = f"Bonjour {self.title.split(' ')[0]} !"
         else:
-            self.msg_login = self.msg_login_cust
+            self.msg_login = "Bonjour !"
 
     def load(self) -> None:
         if not User.open_db():
@@ -396,6 +466,9 @@ class User:
         u_entry.tags = [grp for grp in self.grp_authorized if not grp == "all"]
 
         User.kee.save_db()
+
+        self.exists = True
+        self.is_authorized = True
 
         return True
 
@@ -489,10 +562,12 @@ class Server:
             self._load_from_entry(s_entry)
 
     def reload(self) -> None:
-        Settings.open_db(True)
+        Server.open_db(True)
         self.load()
 
     def save(self) -> bool:
+        Server.open_db()
+
         s_entry: Entry = Server.kee.db.find_entries(title=self.title, group=Server.kee_grp, first=True)
         if s_entry:
             s_entry.title = self.title
@@ -536,9 +611,6 @@ class Settings:
         self.min_version_pytre: str = "9.999"  # version minimum requises pour Pytre
         self.settings_version: str = ""  # version actuelle des settings
 
-        self.server: Server = Server(title="Default")  # objet serveyr
-        self.curr_user: User = User()  # objet utilisateur
-
         self.field_separator: str = ""  # délimitateur de champs pour exports
         self.decimal_separator: str = ""  # séparateur décimal pour exports
         self.date_format: str = ""  # format date pour les exports
@@ -546,16 +618,10 @@ class Settings:
         self.extract_folder: Path = Path("")  # répertoire où créer les fichiers des infos extraites
 
         self.load()  # à charger avant min version pour que queries_folder soit initialisé
-        self._init_min_version()
         self._init_extract_folder()
 
-    def _init_min_version(self) -> None:
-        file_src = Path(self.queries_folder) / "_version_min.json"
-        if file_src.exists():
-            with open(file_src, mode="r", encoding="utf-8") as f:
-                json_dict = json.load(f)
-                self.min_version_pytre = json_dict["pytre_x3"]
-                self.min_version_settings = json_dict["settings"]
+        self.server: Server = Server(title="Default")  # objet serveyr
+        self.curr_user: User = User()  # objet utilisateur
 
     def _init_extract_folder(self) -> None:
         self.extract_folder = Path.home() / "Pytre X3 - Extract"
@@ -582,11 +648,23 @@ class Settings:
             info: Entry = Settings.kee.db.find_entries(title=kee_title, group=Settings.kee_grp, first=True)
             setattr(self, attr_name, info.username)
 
+        self.get_min_version()
+
+    def get_min_version(self) -> None:
+        file_src = Path(self.queries_folder) / "_version_min.json"
+        if file_src.exists():
+            with open(file_src, mode="r", encoding="utf-8") as f:
+                json_dict = json.load(f)
+                self.min_version_pytre = json_dict["pytre_x3"]
+                self.min_version_settings = json_dict["settings"]
+
     def reload(self) -> None:
         Settings.open_db(True)
         self.load()
 
     def save(self) -> bool:
+        Settings.open_db()
+
         for kee_title, attr_name in self.params_dict.items():
             info: Entry = Settings.kee.db.find_entries(title=kee_title, group=Settings.kee_grp, first=True)
             val = getattr(self, attr_name)

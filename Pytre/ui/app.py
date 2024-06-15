@@ -4,6 +4,7 @@ import tkinter as tk
 from tkinter import Event, ttk, messagebox
 from os import startfile
 from threading import Thread
+from pathlib import Path
 
 if not __package__:
     import syspath_insert  # noqa: F401  # disable unused-import warning
@@ -21,23 +22,23 @@ from about import APP_NAME, APP_VERSION
 SETTINGS = sql_query.SETTINGS
 
 
-class App(tk.Tk):
-    def __init__(self, queries_folder=""):
+class App(tk.Toplevel):
+    def __init__(self):
         super().__init__()
+        self.focus_set()
+        self.master.withdraw()
 
         self.user: sql_query.settings.User = SETTINGS.curr_user
         self.queries: list[sql_query.Query] = []
         self.query: sql_query.Query = sql_query.Query()
         self.params_widgets: dict[str, ttk.Widget] = {}
 
-        self.queries_folder = SETTINGS.queries_folder if queries_folder == "" else queries_folder
-
         self.setup_style()
         self.setup_ui()
         self.setup_events_binds()
 
         self.is_authorized = True
-        if not self.check_user_access() or not self.check_min_version():
+        if not self.check_user_access():
             self.is_authorized = False
             return
 
@@ -81,6 +82,14 @@ class App(tk.Tk):
         return False
 
     def check_min_version(self) -> bool:
+        queries_folder = Path(SETTINGS.queries_folder)
+        if not queries_folder.is_dir():
+            messagebox.showerror(
+                "Répertoire inexistant",
+                f"Répertoire des requêtes non trouvée :\n{queries_folder.resolve()}",
+            )
+            return False
+
         if not self.version_used_gte_mini(SETTINGS.settings_version, SETTINGS.min_version_settings):
             messagebox.showerror(
                 "Version settings.db",
@@ -200,7 +209,7 @@ class App(tk.Tk):
             self.left_frame, text="Dossier", command=lambda: self.open_folder(SETTINGS.queries_folder)
         )
         self.queries_btn_refresh = ttk.Button(
-            self.left_frame, text="Réinitialiser", command=lambda: self.refresh_queries()
+            self.left_frame, text="Recharger", command=lambda: self.refresh_queries()
         )
 
         self.queries_tree = ttk.Treeview(self.left_frame, columns=(1, 2), show="headings", selectmode="browse")
@@ -534,7 +543,11 @@ class App(tk.Tk):
         self.queries_filter_text = ""
 
         try:
-            self.queries = sql_query.get_queries(self.queries_folder)
+            if self.check_min_version():
+                queries_folder = SETTINGS.queries_folder
+                self.queries = sql_query.get_queries(queries_folder)
+            else:
+                self.queries = []
             self.queries_filter()  # rénitialiser l'UI en simulant un filtre sur aucun élément
         except ValueError as err:
             self.queries = {}
@@ -707,11 +720,13 @@ class App(tk.Tk):
             self.user_window.focus_set()
 
     def manage_servers(self):
-        ServersWindow(self)
+        child = ServersWindow(self)
+        self.wait_window(child)
         SETTINGS.server.reload()
 
     def manage_settings(self):
-        SettingsWindow(self)
+        child = SettingsWindow(self)
+        self.wait_window(child)
         SETTINGS.reload()
 
     def manage_password(self):

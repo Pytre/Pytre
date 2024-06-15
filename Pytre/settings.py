@@ -48,31 +48,31 @@ class Kee:
 
     def __init__(self):
         if not Kee.pwd:
-            Kee.pwd = self.pwd_get()
-        if not Kee.is_open and not Kee.is_ko:
+            self.pwd = self.pwd_get()
+        if not self.is_open and not self.is_ko:
             self._open_db()
 
     def _open_db(self, reload: bool = False):
         """A utiliser uniquement par la méthode open_db des classes User, Server et Settings"""
-        if not Kee.is_open:
+        if not self.is_open:
             try:
-                Kee.db = PyKeePass(Kee.file, password=Kee.pwd)
+                self.db = PyKeePass(self.file, password=self.pwd)
             except FileNotFoundError:
                 self.create_db()
             except CredentialsError:  # si erreur mot de passe, tentative avec les précédents
                 self.pwd_try_old_ones()
 
-            Kee.is_open = True
-            Kee.opening_count += 1
-            print(f"Opening count : {Kee.opening_count}")
+            self.is_open = True
+            self.opening_count += 1
+            print(f"Opening count : {self.opening_count}")
         elif reload:
-            Kee.db.reload()
-            Kee.opening_count += 1
-            print(f"Opening count : {Kee.opening_count}")
+            self.db.reload()
+            self.opening_count += 1
+            print(f"Opening count : {self.opening_count}")
 
     def save_db(self):
         try:
-            Kee.db.save()
+            self.db.save()
         except PermissionError:
             msg = (
                 "Vous n'avez les droits d'accès à la base des paramètres !\n"
@@ -82,27 +82,27 @@ class Kee:
             messagebox.showerror(title="Erreur enregistrement", message=msg)
 
     def create_db(self):
-        Kee.is_ko = True
+        self.is_ko = True
 
         msg = "La base des paramètres n'a pas été trouvée !\n" + "Une nouvelle base va être créée."
         messagebox.showwarning(title="Base introuvable", message=msg)
         pwd = InputDialog.ask("Mot de passe, accès paramètres ?", "Mot de passe :")
 
-        Kee.db = create_database(Kee.file, password=pwd)
+        self.db = create_database(self.file, password=pwd)
         self.pwd_change(pwd, True)
         self._create_db_set_default()
 
         msg = "Une base des paramètres par défaut a été créée.\nMettez les à jour à l'aide du menu admin."
         messagebox.showinfo(title="Base créée", message=msg)
 
-        Kee.is_ko = False
+        self.is_ko = False
 
     def _create_db_set_default(self):
-        Kee.db.root_group.name = "settings"
+        self.db.root_group.name = "settings"
 
         grps = {"Paramètres": None, "Serveurs": None, "Utilisateurs": None}
         for grp in grps.keys():
-            grps[grp] = Kee.db.add_group(Kee.db.root_group, grp)
+            grps[grp] = self.db.add_group(self.db.root_group, grp)
 
         queries_folder = InputDialog.ask("Dossier des requêtes ?", "Dossier des requêtes :")
         params = {
@@ -113,20 +113,20 @@ class Kee:
             "SETTINGS_VERSION": "2",
         }
         for k, v in params.items():
-            Kee.db.add_entry(grps["Paramètres"], title=k, username=v, password="")
+            self.db.add_entry(grps["Paramètres"], title=k, username=v, password="")
 
         server_cfg = ["charset", "database", "host", "login_timeout", "port", "server", "timeout"]
-        s_entry: Entry = Kee.db.add_entry(grps["Serveurs"], title="Default", username="", password="")
+        s_entry: Entry = self.db.add_entry(grps["Serveurs"], title="Default", username="", password="")
         for item in server_cfg:
             s_entry.set_custom_property(item, "")
 
         self.save_db()
 
     def access_is_ko(self) -> bool:
-        return Kee.is_ko
+        return self.is_ko
 
     def pwd_try_old_ones(self, pwds_list: list[str] = [], _iter: int = 0) -> bool:
-        if Kee.is_ko:
+        if self.is_ko:
             return  # une fois que l'accès est ko, plus d'essai
 
         if not pwds_list:
@@ -134,9 +134,9 @@ class Kee:
 
         for pwd in pwds_list:
             try:
-                Kee.db = PyKeePass(Kee.file, password=pwd)
+                self.db = PyKeePass(self.file, password=pwd)
                 self.pwd_change(pwd, True)
-                Kee.is_ko = False
+                self.is_ko = False
                 msg = (
                     "Le mot de passe d'accès aux paramètres n'était pas valide !\n"
                     + "L'accès a pu être possible à l'aide d'un ancien mot de passe.\n\n"
@@ -152,11 +152,11 @@ class Kee:
         # si aucun des anciens mots de passe ne marche alors on demande à l'utilisateur le bon mot de passe
         pwd = InputDialog.ask("Mot de passe, accès paramètres ?", "Mot de passe :")
         if pwd and self.pwd_try_old_ones([pwd], _iter + 1):
-            Kee.is_ko = False
+            self.is_ko = False
             return True
         # si l'utilisateur n'en a pas été capable alors on affiche une erreur
         elif _iter == 0:
-            Kee.is_ko = True
+            self.is_ko = True
             msg = (
                 "Le mot de passe d'accès aux paramètres n'était pas valide !\n"
                 + "L'accès même avec les anciens mots de passe ne fonctionne pas.\n\n"
@@ -176,9 +176,9 @@ class Kee:
         return history
 
     def pwd_change(self, new_pwd: str, force_save: bool = False):
-        if force_save or not new_pwd == Kee.pwd:
-            Kee.pwd = new_pwd
-            Kee.db.password = Kee.pwd
+        if force_save or not new_pwd == self.pwd:
+            self.pwd = new_pwd
+            self.db.password = self.pwd
             self.save_db()
             crypted_file_pwd_change(new_pwd)
 
@@ -191,7 +191,7 @@ class User:
     @classmethod
     def open_db(cls, reload: bool = False) -> bool:
         cls.kee._open_db(reload)
-        if User.kee.is_ko:
+        if cls.kee.is_ko:
             return False
         cls.kee_grp = cls.kee.db.find_groups(name=cls.kee_grp_name, first=True)
         return True
@@ -203,7 +203,7 @@ class User:
         admin_exists = False
 
         u_entry: Entry | None = None
-        for u_entry in User.kee.db.find_entries(username=r".*", group=cls.kee_grp, regex=True):
+        for u_entry in cls.kee.db.find_entries(username=r".*", group=cls.kee_grp, regex=True):
             if u_entry.get_custom_property("superuser") == "true":
                 admin_exists = True
                 break
@@ -217,7 +217,7 @@ class User:
         u_entry: Entry | None = None
         u_list: list[User] = []
 
-        for u_entry in User.kee.db.find_entries(username=r".*", group=cls.kee_grp, regex=True):
+        for u_entry in cls.kee.db.find_entries(username=r".*", group=cls.kee_grp, regex=True):
             u = User(entry=u_entry)
             u_list.append(u)
 
@@ -231,7 +231,7 @@ class User:
 
         groups = [group for group in groups if not group == "all"]
         u_entry: Entry | None = None
-        for u_entry in User.kee.db.find_entries(username=r".*", group=cls.kee_grp, regex=True):
+        for u_entry in cls.kee.db.find_entries(username=r".*", group=cls.kee_grp, regex=True):
             if u_entry.username not in usernames:
                 continue
 
@@ -243,7 +243,7 @@ class User:
                 save = True
 
         if save:
-            User.kee.save_db()
+            cls.kee.save_db()
 
     @classmethod
     def users_remove_groups(cls, usernames: list[str], groups: list[str]):
@@ -252,7 +252,7 @@ class User:
         save: bool = False
 
         u_entry: Entry | None = None
-        for u_entry in User.kee.db.find_entries(username=r".*", group=cls.kee_grp, regex=True):
+        for u_entry in cls.kee.db.find_entries(username=r".*", group=cls.kee_grp, regex=True):
             if u_entry.username not in usernames or not u_entry.tags:
                 continue
 
@@ -266,7 +266,7 @@ class User:
                 save = True
 
         if save:
-            User.kee.save_db()
+            cls.kee.save_db()
 
     @classmethod
     def csv_import(cls, filename: Path, delimiter: str = ";") -> bool:
@@ -274,7 +274,7 @@ class User:
 
         entries_dict = {}
         u_entry: Entry
-        for u_entry in User.kee.db.find_entries(username=r".*", group=cls.kee_grp, regex=True):
+        for u_entry in cls.kee.db.find_entries(username=r".*", group=cls.kee_grp, regex=True):
             entries_dict[u_entry.username] = u_entry
 
         with open(filename, mode="r", encoding="latin-1") as csv_file:
@@ -294,7 +294,7 @@ class User:
                 if row_dict["username"] in entries_dict.keys():
                     u_entry = entries_dict[row_dict["username"]]
                 else:
-                    u_entry = User.kee.db.add_entry(User.kee_grp, "", row_dict["username"], "")
+                    u_entry = cls.kee.db.add_entry(cls.kee_grp, "", row_dict["username"], "")
 
                 # modification des entry de la base
                 u_entry.title = row_dict["title"]
@@ -311,7 +311,7 @@ class User:
                 u_entry.tags = [group for group in groups if not group == "all"]
 
             # une fois que toutes les entries sont à jour, sauvegarde de la base
-            User.kee.save_db()
+            cls.kee.save_db()
 
             return True
 
@@ -323,7 +323,7 @@ class User:
         rows = [["Id", "Libellé", "Admin", "Groupes", "Id X3", "Login Message"]]
         cls.open_db(True)
         u_entry: Entry | None
-        for u_entry in User.kee.db.find_entries(username=r".*", group=cls.kee_grp, regex=True):
+        for u_entry in cls.kee.db.find_entries(username=r".*", group=cls.kee_grp, regex=True):
             row = [u_entry.username, u_entry.title]
 
             tags = u_entry.tags if u_entry.tags else []
@@ -434,11 +434,11 @@ class User:
             self.msg_login = "Bonjour !"
 
     def load(self) -> None:
-        if not User.open_db():
+        if not self.open_db():
             return
 
         u_entry: Entry | None = None
-        for u_entry in User.kee.db.find_entries(username=r".*", group=User.kee_grp, regex=True):
+        for u_entry in self.kee.db.find_entries(username=r".*", group=self.kee_grp, regex=True):
             if u_entry.username.casefold() == self.username.casefold():
                 self.exists = True
                 self.is_authorized = True
@@ -446,14 +446,14 @@ class User:
                 break
 
     def save(self) -> bool:
-        User.open_db(True)
+        self.open_db(True)
 
-        u_entry: Entry = User.kee.db.find_entries(username=self.username, group=User.kee_grp, first=True)
+        u_entry: Entry = self.kee.db.find_entries(username=self.username, group=self.kee_grp, first=True)
         if u_entry:
             u_entry.username = self.username
             u_entry.title = self.title
         else:
-            u_entry: Entry = User.kee.db.add_entry(User.kee_grp, self.title, self.username, password="")
+            u_entry: Entry = self.kee.db.add_entry(self.kee_grp, self.title, self.username, password="")
 
         u_entry.set_custom_property("x3_id", self.x3_id)
         u_entry.set_custom_property("msg_login", self.msg_login_cust)
@@ -465,7 +465,7 @@ class User:
 
         u_entry.tags = [grp for grp in self.grp_authorized if not grp == "all"]
 
-        User.kee.save_db()
+        self.kee.save_db()
 
         self.exists = True
         self.is_authorized = True
@@ -473,14 +473,14 @@ class User:
         return True
 
     def delete(self) -> bool:
-        User.open_db()
+        self.open_db()
 
-        entry: Entry = User.kee.db.find_entries(username=self.username, group=User.kee_grp, first=True)
+        entry: Entry = self.kee.db.find_entries(username=self.username, group=self.kee_grp, first=True)
         if entry is None:
             raise LookupError("User not found")
 
         entry.delete()
-        User.kee.save_db()
+        self.kee.save_db()
 
         return True
 
@@ -493,7 +493,7 @@ class Server:
     @classmethod
     def open_db(cls, reload: bool = False) -> bool:
         cls.kee._open_db(reload)
-        if Server.kee.is_ko:
+        if cls.kee.is_ko:
             return False
         cls.kee_grp = cls.kee.db.find_groups(name=cls.kee_grp_name, first=True)
         return True
@@ -554,27 +554,27 @@ class Server:
             setattr(self, property, val)
 
     def load(self):
-        if not Server.open_db():
+        if not self.open_db():
             return
 
-        s_entry: Entry = Server.kee.db.find_entries(title=self.title, group=Server.kee_grp, first=True)
+        s_entry: Entry = self.kee.db.find_entries(title=self.title, group=self.kee_grp, first=True)
         if s_entry:
             self._load_from_entry(s_entry)
 
     def reload(self) -> None:
-        Server.open_db(True)
+        self.open_db(True)
         self.load()
 
     def save(self) -> bool:
-        Server.open_db()
+        self.open_db()
 
-        s_entry: Entry = Server.kee.db.find_entries(title=self.title, group=Server.kee_grp, first=True)
+        s_entry: Entry = self.kee.db.find_entries(title=self.title, group=self.kee_grp, first=True)
         if s_entry:
             s_entry.title = self.title
             s_entry.username = self.user
             s_entry.password = self.password
         else:
-            s_entry: Entry = Server.kee.db.add_entry(Server.kee_grp, self.title, self.user, password=self.password)
+            s_entry: Entry = self.kee.db.add_entry(self.kee_grp, self.title, self.user, password=self.password)
 
         for key, val in self.to_dict().items():
             if key in ["title", "user", "password"]:
@@ -587,7 +587,7 @@ class Server:
             else:
                 s_entry.set_custom_property(key, val)
 
-        Server.kee.save_db()
+        self.kee.save_db()
         return True
 
 
@@ -599,7 +599,7 @@ class Settings:
     @classmethod
     def open_db(cls, reload: bool = False) -> bool:
         cls.kee._open_db(reload)
-        if Settings.kee.is_ko:
+        if cls.kee.is_ko:
             return False
         cls.kee_grp = cls.kee.db.find_groups(name=cls.kee_grp_name, first=True)
         return True
@@ -632,7 +632,7 @@ class Settings:
                 self.extract_folder = Path.home()
 
     def load(self) -> None:
-        if not Settings.open_db():
+        if not self.open_db():
             return
 
         # key : keepass title, value : settings attribute
@@ -645,7 +645,7 @@ class Settings:
         }
 
         for kee_title, attr_name in self.params_dict.items():
-            info: Entry = Settings.kee.db.find_entries(title=kee_title, group=Settings.kee_grp, first=True)
+            info: Entry = self.kee.db.find_entries(title=kee_title, group=self.kee_grp, first=True)
             setattr(self, attr_name, info.username)
 
         self.get_min_version()
@@ -659,18 +659,18 @@ class Settings:
                 self.min_version_settings = json_dict["settings"]
 
     def reload(self) -> None:
-        Settings.open_db(True)
+        self.open_db(True)
         self.load()
 
     def save(self) -> bool:
-        Settings.open_db()
+        self.open_db()
 
         for kee_title, attr_name in self.params_dict.items():
-            info: Entry = Settings.kee.db.find_entries(title=kee_title, group=Settings.kee_grp, first=True)
+            info: Entry = self.kee.db.find_entries(title=kee_title, group=self.kee_grp, first=True)
             val = getattr(self, attr_name)
             info.username = val
 
-        Settings.kee.save_db()
+        self.kee.save_db()
         return True
 
 

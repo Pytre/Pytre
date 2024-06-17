@@ -56,6 +56,7 @@ class App(tk.Toplevel):
                 "Vous n'êtes pas dans liste des utilisateurs autorisées !"
                 + "\nDonnées d'identification :"
                 + f"\n- User : {self.user.username}",
+                parent=self,
             )
             return False
         else:
@@ -87,6 +88,7 @@ class App(tk.Toplevel):
             messagebox.showerror(
                 "Répertoire inexistant",
                 f"Répertoire des requêtes non trouvée :\n{queries_folder.resolve()}",
+                parent=self,
             )
             return False
 
@@ -97,6 +99,7 @@ class App(tk.Toplevel):
                 f"\n\n- Version utilisée : {SETTINGS.settings_version}"
                 f"\n- Version mini : {SETTINGS.min_version_settings}"
                 "\n\nMerci d'utiliser le fichier des settings à jour",
+                parent=self,
             )
             return False
 
@@ -107,6 +110,7 @@ class App(tk.Toplevel):
                 f"\n\n- Version utilisée : {APP_VERSION}"
                 f"\n- Version mini : {SETTINGS.min_version_pytre}"
                 "\n\nMerci d'utiliser une version à jour",
+                parent=self,
             )
             return False
 
@@ -129,6 +133,7 @@ class App(tk.Toplevel):
                 + "Vous pouvez choisir de ne pas les supprimer mais ce message reviendra à chaque ouverture.\n\n"
                 + "Si des fichiers doivent être conservés cliquer sur non et changer les de répertoire "
                 + "ou déplacer les dans un sous-répertoire.",
+                parent=self,
                 icon="warning",
             )
 
@@ -477,11 +482,11 @@ class App(tk.Toplevel):
         self.unlock_ui()
 
         if rows_number > 0:
-            answer = messagebox.askyesno("Fin execution", "Voulez vous ouvrir le fichier extrait ?")
+            answer = messagebox.askyesno("Fin execution", "Voulez vous ouvrir le fichier extrait ?", parent=self)
             if answer:
                 startfile(output_file)  # ouvrir le fichier
         else:
-            messagebox.showinfo("Fin execution", "Aucune donnée extraite !")
+            messagebox.showinfo("Fin execution", "Aucune donnée extraite !", parent=self)
 
     def lock_ui(self):
         self.menu_query.entryconfig("Executer", state="disable")
@@ -555,7 +560,7 @@ class App(tk.Toplevel):
 
     def execute_query(self):
         if self.query is None:
-            messagebox.showwarning("Warning", "Aucune requête de sélectionnée !")
+            messagebox.showwarning("Warning", "Aucune requête de sélectionnée !", parent=self)
             return False
 
         self.output_msg("")

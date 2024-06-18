@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 from tkinter import messagebox
 
-from pykeepass import PyKeePass, create_database
+from pykeepass import PyKeePass
 from pykeepass.exceptions import CredentialsError
 from pykeepass.entry import Entry
 from pykeepass.group import Group
@@ -18,6 +18,8 @@ from credentials import crypted_file_pwd_get, crypted_file_pwd_history, crypted_
 
 KEE_FILE = Path().cwd() / "Pytre.db"
 KEE_PWD = crypted_file_pwd_get()
+BLANK_FILE = "res/blank.db"  # relative path for blank db
+BLANK_PWD = "password"  # password for blank db
 
 
 def get_app_path() -> Path:
@@ -86,10 +88,14 @@ class Kee:
 
         msg = "La base des paramètres n'a pas été trouvée !\n" + "Une nouvelle base va être créée."
         messagebox.showwarning(title="Base introuvable", message=msg)
-        pwd = InputDialog.ask("Mot de passe, accès paramètres ?", "Mot de passe :")
 
-        self.db = create_database(self.file, password=pwd)
+        pwd = InputDialog.ask("Mot de passe, accès paramètres ?", "Mot de passe :")
+        pwd = pwd if pwd else BLANK_PWD
+
+        self.db = PyKeePass(get_app_path() / BLANK_FILE, password=BLANK_PWD)
+        self.db.filename = self.file
         self.pwd_change(pwd, True)
+
         self._create_db_set_default()
 
         msg = "Une base des paramètres par défaut a été créée.\nMettez les à jour à l'aide du menu admin."
@@ -105,6 +111,8 @@ class Kee:
             grps[grp] = self.db.add_group(self.db.root_group, grp)
 
         queries_folder = InputDialog.ask("Dossier des requêtes ?", "Dossier des requêtes :")
+        queries_folder = queries_folder if queries_folder else "."
+
         params = {
             "DATE_FORMAT": "%d/%m/%Y",
             "DECIMAL_SEPARATOR": ",",

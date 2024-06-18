@@ -26,6 +26,10 @@ class InputDialog(tk.Toplevel):
         self._setup_position(self.parent)
         self._events_binds()
 
+        if not self.parent:
+            self.update_idletasks()  # get window on top
+            self.focus_force()  # force focus to the window
+
     def _setup_ui(self, title: str, prompt: str):
         minsize_width = max(250, font.Font().measure(title) + 125)
         self.minsize(width=minsize_width, height=25)

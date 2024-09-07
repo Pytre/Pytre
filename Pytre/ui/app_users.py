@@ -131,6 +131,7 @@ class UsersWindow(tk.Toplevel):
         self.tree.bind("<End>", lambda e: self.tree_select_pos(-1, e))
         self.tree.bind("<Next>", lambda e: self.tree_select_move(10, e))
         self.tree.bind("<Prior>", lambda e: self.tree_select_move(-10, e))
+        self.tree.bind("<Double-Button-1>", lambda e: self.user_modify())
         self.tree.bind("<Button-3>", lambda e: self.menubar.post(e.x_root, e.y_root))
 
         self.protocol("WM_DELETE_WINDOW", self.app_exit)  # arrêter le programme quand fermeture de la fenêtre

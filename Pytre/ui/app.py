@@ -59,10 +59,8 @@ class App(tk.Toplevel):
                 parent=self,
             )
             return False
-        else:
-            if not self.user.admin:
-                self.queries_btn_folder.grid_forget()
-            return True
+
+        return True
 
     def version_used_gte_mini(self, used: str, mini: str) -> bool:
         """ctrl si version utilisé supérieure ou égale à version mini"""
@@ -183,6 +181,12 @@ class App(tk.Toplevel):
         self.menu_query.add_command(label="Debug...", state="disabled", command=self.debug_query)
         self.menu_query.add_separator()
         self.menu_query.add_command(label="Recharger", command=lambda: self.refresh_queries())
+        if self.user.admin:
+            self.menu_query.add_command(
+                label="Paramètrage...", command=lambda: self.open_folder(SETTINGS.queries_folder)
+            )
+        self.menu_query.add_separator()
+        self.menu_query.add_command(label="Quitter", command=self.app_exit)
         menubar.add_cascade(label="Requêtes", menu=self.menu_query)
 
         if self.user.admin:
@@ -210,9 +214,6 @@ class App(tk.Toplevel):
 
         self.queries_label_filter = ttk.Label(self.left_frame, text="Filtre :", justify=tk.LEFT)
         self.queries_entry_filter = ttk.Entry(self.left_frame, textvariable=self.queries_filter_text, width=30)
-        self.queries_btn_folder = ttk.Button(
-            self.left_frame, text="Dossier", command=lambda: self.open_folder(SETTINGS.queries_folder)
-        )
         self.queries_btn_refresh = ttk.Button(
             self.left_frame, text="Recharger", command=lambda: self.refresh_queries()
         )
@@ -232,10 +233,9 @@ class App(tk.Toplevel):
         # placement des éléments dans la frame
         self.queries_label_filter.grid(row=0, column=0, padx=2, pady=2, sticky="nswe")
         self.queries_entry_filter.grid(row=0, column=1, columnspan=3, padx=2, pady=2, sticky="nswe")
-        self.queries_btn_folder.grid(row=0, column=4, columnspan=1, padx=2, pady=2, sticky="nswe")
-        self.queries_btn_refresh.grid(row=0, column=5, columnspan=2, padx=2, pady=2, sticky="nswe")
-        self.queries_tree.grid(row=1, column=0, columnspan=7, padx=2, pady=2, sticky="nswe")
-        self.queries_tree_scrollbar_y.grid(row=1, column=6, sticky="nse")
+        self.queries_btn_refresh.grid(row=0, column=4, columnspan=2, padx=2, pady=2, sticky="nswe")
+        self.queries_tree.grid(row=1, column=0, columnspan=6, padx=2, pady=2, sticky="nswe")
+        self.queries_tree_scrollbar_y.grid(row=1, column=5, sticky="nse")
 
         # paramètrage poids lignes et colonnes
         self.left_frame.rowconfigure(1, weight=1)
@@ -490,9 +490,9 @@ class App(tk.Toplevel):
 
     def lock_ui(self):
         self.menu_query.entryconfig("Executer", state="disable")
+        self.menu_query.entryconfig("Recharger", state="disable")
 
         self.btn_execute["state"] = "disable"
-        self.queries_btn_folder["state"] = "disable"
         self.queries_entry_filter["state"] = "disable"
         self.queries_btn_refresh["state"] = "disable"
         self.queries_tree["selectmode"] = "none"
@@ -503,9 +503,9 @@ class App(tk.Toplevel):
 
     def unlock_ui(self):
         self.menu_query.entryconfig("Executer", state="normal")
+        self.menu_query.entryconfig("Recharger", state="normal")
 
         self.btn_execute["state"] = "enable"
-        self.queries_btn_folder["state"] = "enable"
         self.queries_entry_filter["state"] = "enable"
         self.queries_btn_refresh["state"] = "enable"
         self.queries_tree["selectmode"] = "browse"

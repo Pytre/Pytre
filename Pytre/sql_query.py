@@ -134,8 +134,9 @@ class Query:
         self.update_values()
 
         if self.values_ok():
-            self.query_execute.cmd_template = self.cmd_template
-            self.query_execute.cmd_parameters = self.cmd_params
+            cmd_exec, cmd_params = self.get_infos_for_exec()
+            self.query_execute.cmd_template = cmd_exec
+            self.query_execute.cmd_parameters = cmd_params
             if file_output:
                 extract_file = SETTINGS.extract_folder / (
                     f"{self.name}_{USER.x3_id.upper()}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
@@ -157,10 +158,24 @@ class Query:
             self._broadcast(err_msg)
             return False
 
+    def get_infos_for_exec(self):
+        cmd_exec = self.cmd_template
+        cmd_params = {}
+        for k, v in self.cmd_params.items():
+            if k[0:2] != "@!":  # si une variable
+                cmd_params[k] = v
+            else:  # sinon valeur à remplacer en dur
+                cmd_exec = re.sub(rf"{k}", rf"{v}", cmd_exec)
+
+        return cmd_exec, cmd_params
+
     def get_cmd_for_debug(self):
         cmd_debug = self.cmd_template
         for k, v in self.cmd_params.items():
-            if isinstance(v, str):
+            if k[0:2] == "@!":  # pas une variable
+                cmd_debug = re.sub(rf"{k}", rf"{v}", cmd_debug)
+                continue
+            elif isinstance(v, str):
                 value = "'" + v.replace("'", "''") + "'"
             else:
                 value = str(v)
@@ -185,7 +200,7 @@ class _Param:
         self.set_default()
 
     def set_default(self) -> None:
-        self.var_name = re.search(r"^@[\d\w#_\$@]+", self.sql_declare)[0]
+        self.var_name = re.search(r"^@!?[\d\w#_\$@]+", self.sql_declare)[0]
         self.type_name = re.search(r"^[^(=]+as\s+([^(\s=]+)", self.sql_declare, re.IGNORECASE)[1].lower()
         self.type_args = self._get_type_args()
         self.display_value = re.search(r"^[^=]*=\s*('.*?'|[^,\s]*)", self.sql_declare)[1].replace("'", "").strip()
@@ -488,12 +503,12 @@ def get_queries(folder) -> list[Query]:
             try:
                 my_query = Query(file)
             except ValueError as e:
-                error = f"Erreur chrgmt '{file.name}' : ValueError - {e}"
+                error = f"Erreur chrgmt '{file.name}' : ValueError, {e}"
                 errors.append(error)
                 print(error)
                 continue
             except Exception as e:
-                error = f"Erreur chrgmt '{file.name}' : {e.__class__.__name__} - {e}"
+                error = f"Erreur chrgmt '{file.name}' : {e.__class__.__name__}, {e}"
                 errors.append(error)
                 print(error)
                 continue  # si erreur, ne pas bloquer et ignorer la requête
@@ -512,10 +527,14 @@ def get_queries(folder) -> list[Query]:
 
 if __name__ == "__main__":
     APP_PATH = SETTINGS.app_path
-    sql_script = SETTINGS.queries_folder / "_add_user.sql"  # ZGL_BUG_Encodage   ZGENDOC
+    sql_scripts = Path(SETTINGS.queries_folder).glob("*.sql")
+    sql_script = ""
+    for sql_script in sql_scripts:
+        break
 
     my_query = Query(sql_script)
     my_query.update_values()
+    print(my_query.get_infos_for_exec())
     print(my_query.get_cmd_for_debug())
     print(my_query.cmd_params)
     my_query.execute_cmd(file_output=True)

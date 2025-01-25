@@ -87,11 +87,11 @@ class DebugWindow(tk.Toplevel):
 
         params_lst = []
         for param, value in self.query.cmd_params.items():
-            val = str(value) if not isinstance(value, str) else "'" + value + "'"
+            val = str(value) if not isinstance(value, str) or param[0:2] == "@!" else "'" + value + "'"
             params_lst.append(f"{param} : {val}")
 
         self.output_to_textbox(self.tabs["debug"]["textbox"], self.query.get_cmd_for_debug())
-        self.output_to_textbox(self.tabs["template"]["textbox"], self.query.cmd_template)
+        self.output_to_textbox(self.tabs["template"]["textbox"], self.query.get_infos_for_exec()[0])
         self.output_to_textbox(self.tabs["params"]["textbox"], "\n".join(params_lst))
 
         for tab in ["debug", "template", "params"]:

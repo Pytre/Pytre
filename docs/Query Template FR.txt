@@ -53,6 +53,11 @@ Les types possibles sont :
 		UI_CTRL(LISTE_VAL_AUTORISEES) : UI_CTRL pour le type de contrôle à afficher et LISTE_VAL_AUTORISEES pour valeurs possibles (cf.ci-dessous)
 => nb : si pas de types mais juste des valeurs entre parentheses alors il est considéré qu'il s'agit d'une liste des valeurs autorisées.
 
+Les paramètres qui commencent par @! (par ex : "@!TABLE) sont remplacés en dur dans la commande SQL.
+Il est fortement recommendé de ne pas les utiliser avec un contrôle de type ENTRY.
+Ce type de contrôle permettrait de réaliser une injection SQL.
+=> l'objectif des paramètres @! est de pouvoir variabiliser la requête pour par exemple choisir un schéma ou une table.
+
 VAL_FORMULE : fonctions possibles pour valeur calculée d'un paramètre
 ---------------------------------------------------------------------
 - user_info(attribute) : récupération de l'attribut utilisateur définit par les settings

@@ -132,28 +132,28 @@ class SqlLexer:
         text = self.sql_text if text == "" else text
         regex_start: str = r"/\*"  # to match start of comment
         regex_end: str = r"\*/"  # to match end of comment
-        token: TokenType = self.nested_test(regex_start, regex_end, text, pos, TokenType.COMMENT)
+        token: Token = self.nested_test(regex_start, regex_end, text, pos, TokenType.COMMENT)
         return token
 
     def t_COMMENT(self, pos: int, text: str = "") -> Token | None:
         text = self.sql_text if text == "" else text
         regex: str = r"--.*?$"
         flags = re.MULTILINE
-        token: TokenType = self.basic_test(regex, text, pos, flags, TokenType.COMMENT)
+        token: Token = self.basic_test(regex, text, pos, flags, TokenType.COMMENT)
         return token
 
     def t_TEXT(self, pos: int, text: str = "") -> Token | None:
         text = self.sql_text if text == "" else text
         regex: str = r"\'.*?\'"
         flags = re.DOTALL
-        token: TokenType = self.basic_test(regex, text, pos, flags, TokenType.TEXT)
+        token: Token = self.basic_test(regex, text, pos, flags, TokenType.TEXT)
         return token
 
     def t_KEYWORD(self, pos: int, text: str = "") -> Token | None:
         text = self.sql_text if text == "" else text
         regex: str = r"_?[_a-zA-Z0-9]+"
         flags = re.NOFLAG
-        token: TokenType = self.basic_test(regex, text, pos, flags, TokenType.KEYWORD)
+        token: Token = self.basic_test(regex, text, pos, flags, TokenType.KEYWORD)
         if token and token.value.casefold() in SqlLexer.keywords:
             return token
 
@@ -164,17 +164,17 @@ class SqlLexer:
                     "(" +  r"\[.*?\]"                     + ")"
         # fmt: on
         flags = re.DOTALL
-        token: TokenType = self.basic_test(regex, text, pos, flags, TokenType.IDENTIFIER)
+        token: Token = self.basic_test(regex, text, pos, flags, TokenType.IDENTIFIER)
         return token
 
     def t_PARAMETER(self, pos: int, text: str = "") -> Token | None:
         text = self.sql_text if text == "" else text
         # fmt: off
-        regex:str = "(" +  r"@[\d\w#\$@]+"        + ")|" \
+        regex:str = "(" +  r"@!?[\d\w#\$@]+"        + ")|" \
                     "(" +  r"%\(@[\d\w#\$@]+\)s"  + ")"
         # fmt: on
         flags = re.NOFLAG
-        token: TokenType = self.basic_test(regex, text, pos, flags, TokenType.PARAMETER)
+        token: Token = self.basic_test(regex, text, pos, flags, TokenType.PARAMETER)
         return token
 
     def t_NUMBER(self, pos: int, text: str = "") -> Token | None:
@@ -188,7 +188,7 @@ class SqlLexer:
                     "(" +  r"0b[0-1]+"                + ")"
         # fmt: on
         flags = re.NOFLAG
-        token: TokenType = self.basic_test(regex, text, pos, flags, TokenType.NUMBER)
+        token: Token = self.basic_test(regex, text, pos, flags, TokenType.NUMBER)
         return token
 
     def t_OPERATOR(self, pos: int, text: str = "") -> Token | None:
@@ -202,21 +202,21 @@ class SqlLexer:
                     "(" +  r"[&]"             + ")"
         # fmt: on
         flags = re.NOFLAG
-        token: TokenType = self.basic_test(regex, text, pos, flags, TokenType.OPERATOR)
+        token: Token = self.basic_test(regex, text, pos, flags, TokenType.OPERATOR)
         return token
 
     def t_DELIMITER(self, pos: int, text: str = "") -> Token | None:
         text = self.sql_text if text == "" else text
         regex: str = r";"
         flags = re.NOFLAG
-        token: TokenType = self.basic_test(regex, text, pos, flags, TokenType.DELIMITER)
+        token: Token = self.basic_test(regex, text, pos, flags, TokenType.DELIMITER)
         return token
 
     def t_WHITESPACE(self, pos: int, text: str = "") -> Token | None:
         text = self.sql_text if text == "" else text
         regex: str = r"[\s]"
         flags = re.NOFLAG
-        token: TokenType = self.basic_test(regex, text, pos, flags, TokenType.WHITESPACE)
+        token: Token = self.basic_test(regex, text, pos, flags, TokenType.WHITESPACE)
         return token
 
 

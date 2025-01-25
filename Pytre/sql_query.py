@@ -20,6 +20,8 @@ class Query:
 
         self.last_extracted_file = ""  # info du dernier fichier extrait
         self.msg_list: list[str] = []  # liste de msg à l'utilisateur pour interface graphique
+        self.exec_ask_stop: bool = False  # pour signaler que l'execution doit être stoppée
+        self.exec_can_stop: bool = False  # pour savoir si l'execution peut stopper proprement
 
         self.filename = filename
         self.file_content = self._init_file_content(encoding_format)
@@ -363,11 +365,13 @@ class _QueryExecute:
         starting_date = self._time_log()
         self._broadcast(self._time_log() + " - Connection à la base de données...")
 
+        self.parent.exec_can_stop = False
         with pymssql.connect(**self.sql_server_params) as conn:
             with conn.cursor() as cursor:
                 self._broadcast(self._time_log() + " - Requête en cours d'execution...")
                 try:
                     cursor.execute(self.cmd_template, self.cmd_parameters)
+                    self.parent.exec_can_stop = True
                 except pymssql._pymssql.ProgrammingError as err:
                     error_code = err.args[0]
                     error_msg = str(err.args[1])[2:-2]
@@ -429,9 +433,10 @@ class _QueryExecute:
                 self._file_write(buffer)
                 buffer.clear()
 
-        if (
-            self.extract_file != "" and len(buffer) > 1
-        ):  # si buffer pas vide (et pas que entête) alors écrire ce qui reste
+            if self.parent.exec_ask_stop:
+                return 0, ""
+
+        if self.extract_file != "" and len(buffer) > 1:  # si buffer (et pas que entête) alors écrire ce qui reste
             self._broadcast(self._time_log() + " - Ecriture des dernières lignes...")
             self._file_write(buffer)
             buffer.clear()

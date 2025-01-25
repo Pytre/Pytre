@@ -1,10 +1,12 @@
 import time
 import subprocess
 import tkinter as tk
+import ctypes
 from tkinter import Event, ttk, messagebox
 from os import startfile
 from threading import Thread
 from pathlib import Path
+from datetime import datetime
 
 if not __package__:
     import syspath_insert  # noqa: F401  # disable unused-import warning
@@ -20,6 +22,7 @@ from ui.app_about import AboutWindow
 from about import APP_NAME, APP_VERSION
 
 SETTINGS = sql_query.SETTINGS
+PRINT_DATE_FORMAT = sql_query.PRINT_DATE_FORMAT
 
 
 class App(tk.Toplevel):
@@ -463,36 +466,86 @@ class App(tk.Toplevel):
         self.protocol("WM_DELETE_WINDOW", self.app_exit)  # arrêter le programme quand fermeture de la fenêtre
 
     # ------------------------------------------------------------------------------------------
-    # Gestion thread pour execution de la requête
+    # Execution de requête
     # ------------------------------------------------------------------------------------------
-    def start_execute_thread(self):  # démarrer par la méthode execute_query
-        self.execute_thread_running = True
+    def manager_thread_start(self):  # démarrer par la méthode execute_query
+        self.force_stop: bool = False
+        self.log_running: bool = True
+        self.rows_number: int = 0
+        self.log_pos: int = 0
+        self.output_file: str = ""
 
-        self.logging_thread = Thread(target=self.start_logging_thread, daemon=True)  # thread pour recup msg process
-        self.logging_thread.start()
-
+        print("Thread manager starting")
         self.lock_ui()
-        result = self.query.execute_cmd(file_output=True)
-        rows_number, output_file = result if isinstance(result, tuple) else (0, "")
-        self.execute_thread_running = False
 
-        while self.logging_thread_running:  # attendre l'écriture de tous les messages
-            time.sleep(0.100)
+        self.query.exec_ask_stop = False
+        self.exec_thread = Thread(target=self.exec_thread_start, daemon=True)  # thread execution requete
+        self.exec_thread.start()
+
+        while self.exec_thread.is_alive() or self.log_running:
+            # si demande d'interruption et que l'execution n'est pas déjà finie
+            if self.force_stop and self.exec_thread.is_alive():
+                self.exec_force_stop()
+                break
+            self.exec_log()
+            time.sleep(1)
 
         self.unlock_ui()
+        self.exec_finish()
+        print("Thread manager ending")
 
-        if rows_number > 0:
+    def exec_thread_start(self):  # démarrer par la méthode thread_manage_start
+        print("Thread execute starting")
+        result = self.query.execute_cmd(file_output=True)
+        self.rows_number, self.output_file = result if isinstance(result, tuple) else (0, "")
+        print("Thread execute ending")
+
+    def exec_force_stop(self):
+        if self.query.exec_can_stop:
+            self.query.exec_ask_stop = True
+            while self.exec_thread.is_alive():
+                time.sleep(1)
+        else:
+            thread_handle = ctypes.windll.kernel32.OpenThread(0x0001, False, self.exec_thread.ident)
+            ctypes.windll.kernel32.TerminateThread(thread_handle, 0)  # Windows API pour terminer le thread
+            ctypes.windll.kernel32.CloseHandle(thread_handle)  # fermeture du handle pour éviter les leaks
+
+        msg = "\n" + datetime.now().strftime(PRINT_DATE_FORMAT) + " - Requête interrompue"
+        self.output_msg(msg, "end")
+
+    def exec_log(self):
+        # quand l'execution est finie et qu'il n'y a plus de message à écrire
+        if not self.exec_thread.is_alive() and not len(self.query.msg_list) > self.log_pos:
+            self.log_running = False
+            return
+
+        # affichage / logging des événements
+        my_msg_list = self.query.msg_list  # pour figer la liste actuelle
+        if len(my_msg_list) > self.log_pos:
+            msg_to_print = "\n" + "\n".join(my_msg_list[self.log_pos :])
+            if self.log_pos == 0:
+                msg_to_print = msg_to_print[1:]
+            self.output_msg(msg_to_print, "end")
+            self.log_pos = len(my_msg_list)
+
+    def exec_finish(self):
+        if self.force_stop:
+            messagebox.showwarning("Fin execution", "Execution interrompue !", parent=self)
+        elif self.rows_number > 0:
             answer = messagebox.askyesno("Fin execution", "Voulez vous ouvrir le fichier extrait ?", parent=self)
             if answer:
-                startfile(output_file)  # ouvrir le fichier
+                startfile(self.output_file)  # ouvrir le fichier
         else:
             messagebox.showinfo("Fin execution", "Aucune donnée extraite !", parent=self)
 
+    # ------------------------------------------------------------------------------------------
+    # Verrouillage / Déverrouillage de l'UI
+    # ------------------------------------------------------------------------------------------
     def lock_ui(self):
-        self.menu_query.entryconfig("Executer", state="disable")
+        self.menu_query.entryconfig("Executer", label="Interrompre")
         self.menu_query.entryconfig("Recharger", state="disable")
 
-        self.btn_execute["state"] = "disable"
+        self.btn_execute["text"] = "Interrompre"
         self.queries_entry_filter["state"] = "disable"
         self.queries_btn_refresh["state"] = "disable"
         self.queries_tree["selectmode"] = "none"
@@ -502,10 +555,15 @@ class App(tk.Toplevel):
                 widget_entry["state"] = "disable"
 
     def unlock_ui(self):
-        self.menu_query.entryconfig("Executer", state="normal")
+        if not hasattr(self, "counter_test"):
+            self.counter_test = 0
+        self.counter_test += 1
+        print(f"Unlock UI counter : {self.counter_test}")
+
+        self.menu_query.entryconfig("Interrompre", label="Executer")
         self.menu_query.entryconfig("Recharger", state="normal")
 
-        self.btn_execute["state"] = "enable"
+        self.btn_execute["text"] = "Executer"
         self.queries_entry_filter["state"] = "enable"
         self.queries_btn_refresh["state"] = "enable"
         self.queries_tree["selectmode"] = "browse"
@@ -513,27 +571,6 @@ class App(tk.Toplevel):
         for key in self.params_widgets:
             if (widget_entry := self.params_widgets[key].get("entry", None)) is not None:
                 widget_entry["state"] = "enable" if not isinstance(widget_entry, ttk.Combobox) else "readonly"
-
-    # ------------------------------------------------------------------------------------------
-    # Gestion thread pour log pendant l'execution de la requête
-    # ------------------------------------------------------------------------------------------
-    def start_logging_thread(self):  # démarrer par la méthode start_execute_thread
-        self.logging_thread_running = True
-        update_speed = 1
-
-        my_counter = 0
-        while self.execute_thread_running or len(self.query.msg_list) > my_counter:
-            time.sleep(update_speed)
-            my_msg_list = self.query.msg_list
-
-            if len(my_msg_list) > my_counter:
-                msg_to_print = "\n" + "\n".join(my_msg_list[my_counter:])
-                if my_counter == 0:
-                    msg_to_print = msg_to_print[1:]
-                self.output_msg(msg_to_print, "end")
-                my_counter = len(my_msg_list)
-
-        self.logging_thread_running = False
 
     # ------------------------------------------------------------------------------------------
     # Traitements
@@ -563,11 +600,15 @@ class App(tk.Toplevel):
             messagebox.showwarning("Warning", "Aucune requête de sélectionnée !", parent=self)
             return False
 
+        # si une requête est en cours d'execution alors la stopper
+        if hasattr(self, "manager_thread") and self.manager_thread.is_alive():
+            self.force_stop = True
+            return False
+
         self.output_msg("")
         if self.params_get_input():
-            self.output_msg("")
-            self.execute_thread = Thread(target=self.start_execute_thread, daemon=True)  # thread execution requete
-            self.execute_thread.start()
+            self.manager_thread = Thread(target=self.manager_thread_start, daemon=True)
+            self.manager_thread.start()
         else:
             self.output_msg("Impossible d'executer, tant que des paramètres ne sont pas valides :\n", "1.0", "1.0")
 

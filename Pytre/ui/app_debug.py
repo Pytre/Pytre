@@ -99,7 +99,7 @@ class DebugWindow(tk.Toplevel):
 
     def syntax_color(self, tbox: tk.Text):
         tbox.tag_configure(TokenType.KEYWORD.value, foreground="blue")
-        tbox.tag_configure(TokenType.PARAMETER.value, foreground="purple")
+        tbox.tag_configure(TokenType.PARAMETER.value, foreground="purple", background="gray90")
         tbox.tag_configure(TokenType.NUMBER.value, foreground="red")
         tbox.tag_configure(TokenType.COMMENT.value, foreground="green")
         tbox.tag_configure(TokenType.TEXT.value, foreground="maroon")

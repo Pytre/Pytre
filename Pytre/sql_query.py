@@ -317,7 +317,7 @@ class _Param:
                 val_to_test = [k for k, v in self.authorized_values.items() if v == val_to_test][0]
 
         if not val_to_test and not self.is_optional:
-            raise ValueError("paramètre obligatoire")
+            raise ValueError(f"paramètre obligatoire pour {self.var_name}")
         else:
             self.value_cmd = self.converter.to_cmd(self.type_name, val_to_test, self.type_args)
 
@@ -482,11 +482,20 @@ def get_queries(folder) -> list[Query]:
         raise ValueError(f"Erreur : le répertoire {folder} n'a pas été trouvé ou n'est pas accessible !")
 
     queries: list[Query] = []
+    errors: list[str] = []
     for file in Path(folder).iterdir():
         if file.is_file() and file.suffix == ".sql":
             try:
                 my_query = Query(file)
-            except Exception:
+            except ValueError as e:
+                error = f"Erreur chrgmt '{file.name}' : ValueError - {e}"
+                errors.append(error)
+                print(error)
+                continue
+            except Exception as e:
+                error = f"Erreur chrgmt '{file.name}' : {e.__class__.__name__} - {e}"
+                errors.append(error)
+                print(error)
                 continue  # si erreur, ne pas bloquer et ignorer la requête
 
             user_is_authorized = False
@@ -498,7 +507,7 @@ def get_queries(folder) -> list[Query]:
 
     queries.sort(key=lambda k: k.name)
 
-    return queries
+    return queries, errors
 
 
 if __name__ == "__main__":

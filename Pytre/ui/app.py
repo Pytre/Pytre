@@ -587,13 +587,16 @@ class App(tk.Toplevel):
         try:
             if self.check_min_version():
                 queries_folder = SETTINGS.queries_folder
-                self.queries = sql_query.get_queries(queries_folder)
+                self.queries, errors = sql_query.get_queries(queries_folder)
             else:
-                self.queries = []
+                self.queries, errors = [], []
             self.queries_filter()  # rénitialiser l'UI en simulant un filtre sur aucun élément
         except ValueError as err:
             self.queries = {}
             self.queries_filter(msg_filter=err)
+
+        if errors:
+            self.output_msg("\n".join(errors))
 
     def execute_query(self):
         if self.query is None:

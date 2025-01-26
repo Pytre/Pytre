@@ -5,7 +5,7 @@ dist/
 Requetes SQL/
 /app*/
 
-changelog.txt
+changelog*.txt
 /pytre/credentials_secrets.py
 
 /Pytre.key

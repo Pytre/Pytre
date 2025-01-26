@@ -223,7 +223,10 @@ class UsersWindow(tk.Toplevel):
                     value = "\U0001F5F9" if value is True else "\U000000B7"
                 values.append(value)
 
-            self.tree.insert("", tk.END, iid=u.username, values=values)
+            try:
+                self.tree.insert("", tk.END, iid=u.username, values=values)
+            except Exception as e:
+                messagebox.showerror("Erreur chargement liste", e)
 
         self.tree_sort(sort_col)
         self.tree_autosize()
@@ -522,12 +525,12 @@ class UserDialog(tk.Toplevel):
         if self.user:
             user = self.user
         else:
-            if username not in list(self.parent.tree.get_children("")):
-                user: User = User(detect_user=False)
-            else:
+            u_entry = User.find_user_entry(username)
+            if u_entry:
                 msg = "Utilisateur déjà existant !"
                 messagebox.showerror(title="Erreur ajout", message=msg, parent=self, type=messagebox.OK)
                 return
+            user: User = User(detect_user=False)
 
         for key, item in self.entries.items():
             val = item["var"].get()

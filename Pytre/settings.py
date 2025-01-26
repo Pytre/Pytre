@@ -283,7 +283,7 @@ class User:
         entries_dict = {}
         u_entry: Entry
         for u_entry in cls.kee.db.find_entries(username=r".*", group=cls.kee_grp, regex=True):
-            entries_dict[u_entry.username] = u_entry
+            entries_dict[u_entry.username] = u_entry.upper()
 
         with open(filename, mode="r", encoding="latin-1") as csv_file:
             csv_reader = csv.reader(csv_file, delimiter=delimiter, quotechar='"')
@@ -299,7 +299,7 @@ class User:
                     row_dict[key] = row[val]
 
                 # contrôle si utilisateurs à modifier ou à créer
-                if row_dict["username"] in entries_dict.keys():
+                if row_dict["username"].upper() in entries_dict.keys():
                     u_entry = entries_dict[row_dict["username"]]
                 else:
                     u_entry = cls.kee.db.add_entry(cls.kee_grp, "", row_dict["username"], "")
@@ -356,11 +356,20 @@ class User:
         return True
 
     @classmethod
-    def get_username(self) -> str:
+    def get_username(cls) -> str:
         domain = os.environ.get("userdnsdomain") or ""
         name = getpass.getuser()
         domain_and_name = f"{domain}\\{name}" if domain else name
         return domain_and_name
+
+    @classmethod
+    def find_user_entry(cls, username) -> Entry | None:
+        u_entries: list[Entry] = cls.kee.db.find_entries(username=".*", group=cls.kee_grp, regex=True)
+        u_entries = [user for user in u_entries if username.upper() == user.username.upper()]
+        if u_entries:
+            return u_entries[0]
+        else:
+            return None
 
     def __init__(self, username: str = "", entry: Entry = None, detect_user: bool = True):
         """
@@ -447,7 +456,7 @@ class User:
 
         u_entry: Entry | None = None
         for u_entry in self.kee.db.find_entries(username=r".*", group=self.kee_grp, regex=True):
-            if u_entry.username.casefold() == self.username.casefold():
+            if u_entry.username.upper() == self.username.upper():
                 self.exists = True
                 self.is_authorized = True
                 self._load_from_entry(u_entry)
@@ -456,7 +465,7 @@ class User:
     def save(self) -> bool:
         self.open_db(True)
 
-        u_entry: Entry = self.kee.db.find_entries(username=self.username, group=self.kee_grp, first=True)
+        u_entry: Entry = self.find_user_entry(self.username)
         if u_entry:
             u_entry.username = self.username
             u_entry.title = self.title
@@ -483,11 +492,11 @@ class User:
     def delete(self) -> bool:
         self.open_db()
 
-        entry: Entry = self.kee.db.find_entries(username=self.username, group=self.kee_grp, first=True)
-        if entry is None:
+        u_entry: Entry = self.find_user_entry(self.username)
+        if u_entry is None:
             raise LookupError("User not found")
 
-        entry.delete()
+        u_entry.delete()
         self.kee.save_db()
 
         return True

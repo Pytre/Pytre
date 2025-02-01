@@ -138,9 +138,10 @@ class Query:
             self.query_execute.cmd_template = cmd_exec
             self.query_execute.cmd_parameters = cmd_params
             if file_output:
-                extract_file = SETTINGS.extract_folder / (
-                    f"{self.name}_{USER.x3_id.upper()}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-                )
+                user_id = USER.attribs_cust.get("x3_id", "").upper()
+                query_name = f"{self.name}_{user_id}" if user_id else f"{self.name}"
+                file_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                extract_file = SETTINGS.extract_folder / (f"{query_name}_{file_stamp}.csv")
             else:
                 extract_file = ""
 
@@ -257,7 +258,12 @@ class _Param:
 
     def _calc_func(self, func: str, func_args: str) -> str:
         def user_info(attr: str) -> str:
-            return getattr(USER, attr, "")
+            if attr in USER.attribs_std:
+                info = getattr(USER, attr, "")
+            else:
+                info = USER.attribs_cust.get(attr, "")
+
+            return info
 
         def fiscal_year(
             last_month: int, month_offset: int = 0, days_offset: int = 0, today_mth_offset: int = 0

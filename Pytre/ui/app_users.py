@@ -112,14 +112,18 @@ class UsersWindow(tk.Toplevel):
         ybar.grid(row=0, column=1, sticky="ns")
 
     def _tree_cols(self) -> dict:
-        return {
+        cols = {
             "username": {"text": "Id", "minwidth": 200, "stretch": False},
             "title": {"text": "Libellé", "minwidth": 200, "stretch": False},
             "admin": {"text": "Admin", "minwidth": 75, "stretch": False},
             "grp_authorized": {"text": "Groupes", "minwidth": 60, "stretch": True},
-            "x3_id": {"text": "Id X3", "minwidth": 60, "stretch": False},
             "msg_login_cust": {"text": "Login Message", "minwidth": 100, "stretch": False},
         }
+
+        for attr in User.get_cust_attribs_list():
+            cols[attr] = {"text": attr, "minwidth": 60, "stretch": False}
+
+        return cols
 
     # ------------------------------------------------------------------------------------------
     # Définition des évènements générer par les traitements
@@ -213,7 +217,11 @@ class UsersWindow(tk.Toplevel):
         for u in users:
             values: list = []
             for col in cols.keys():
-                value = getattr(u, col, "")
+                if col in User.get_cust_attribs_list():
+                    value = u.attribs_cust.get(col, "")
+                else:
+                    value = getattr(u, col, "")
+
                 if col == "grp_authorized":
                     value.remove("all")
                     value.sort()
@@ -431,9 +439,10 @@ class UserDialog(tk.Toplevel):
             "username": {"text": "Id"},
             "title": {"text": "Libellé"},
             "admin": {"text": "Admin"},
-            "x3_id": {"text": "Id X3"},
             "msg_login_cust": {"text": "Login Message"},
         }
+        for attr in User.get_cust_attribs_list():
+            self.entries[attr] = {"text": attr}
 
         num_row = 0
         for key, item in self.entries.items():
@@ -493,7 +502,10 @@ class UserDialog(tk.Toplevel):
     # ------------------------------------------------------------------------------------------
     def set_entries(self):
         for key, item in self.entries.items():
-            val = getattr(self.user, key)
+            if key in User.get_cust_attribs_list():
+                val = self.user.attribs_cust.get(key, "")
+            else:
+                val = getattr(self.user, key, "")
             item["var"].set(val)
 
     def groups_set(self):
@@ -534,7 +546,10 @@ class UserDialog(tk.Toplevel):
 
         for key, item in self.entries.items():
             val = item["var"].get()
-            setattr(user, key, val)
+            if key in User.get_cust_attribs_list():
+                user.attribs_cust[key] = val
+            else:
+                setattr(user, key, val)
 
         user.grp_authorized = [self.listbox.get(line) for line in self.listbox.curselection()]
 

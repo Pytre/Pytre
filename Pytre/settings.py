@@ -195,6 +195,7 @@ class User:
     kee: Kee = Kee()
     kee_grp_name: str = "Utilisateurs"
     kee_grp: Group = None
+    attribs_std: tuple[str] = ("username", "title", "admin", "msg_login")
 
     @classmethod
     def open_db(cls, reload: bool = False) -> bool:
@@ -230,6 +231,21 @@ class User:
             u_list.append(u)
 
         return u_list
+
+    @classmethod
+    def get_cust_attribs_list(cls) -> list:
+        cls.open_db(False)
+
+        u_entry: Entry | None = None
+        attribs_set: set[str] = set()
+
+        for u_entry in cls.kee.db.find_entries(username=r".*", group=cls.kee_grp, regex=True):
+            for property in u_entry.custom_properties:
+                if not property in cls.attribs_std + ("superuser",):
+                    attribs_set.add(property)
+
+        cust_lists = list(attribs_set)
+        return sorted(attribs_set)
 
     @classmethod
     def users_add_groups(cls, usernames: list[str], groups: list[str]):
@@ -285,6 +301,12 @@ class User:
         for u_entry in cls.kee.db.find_entries(username=r".*", group=cls.kee_grp, regex=True):
             entries_dict[u_entry.username] = u_entry.upper()
 
+        cols_std = ["username", "title", "superuser", "grp_authorized", "msg_login"]
+        cols_cust = cls.get_cust_attribs_list()
+        cols_dict = {}
+        for i, val in enumerate(cols_std + cols_cust):
+            cols_dict[val] = i
+
         with open(filename, mode="r", encoding="latin-1") as csv_file:
             csv_reader = csv.reader(csv_file, delimiter=delimiter, quotechar='"')
 
@@ -293,9 +315,8 @@ class User:
                     continue
 
                 # mapping des colonnes
-                col_dict = {"username": 0, "title": 1, "superuser": 2, "grp_authorized": 3, "x3_id": 4, "msg_login": 5}
                 row_dict = {}
-                for key, val in col_dict.items():
+                for key, val in cols_dict.items():
                     row_dict[key] = row[val]
 
                 # contrôle si utilisateurs à modifier ou à créer
@@ -307,13 +328,15 @@ class User:
                 # modification des entry de la base
                 u_entry.title = row_dict["title"]
 
-                u_entry.set_custom_property("x3_id", row_dict["x3_id"])
-                u_entry.set_custom_property("msg_login", row_dict["msg_login"])
-
                 if row_dict["superuser"] == "true":
                     u_entry.set_custom_property("superuser", "true")
                 else:
                     u_entry.set_custom_property("superuser", "false")
+
+                u_entry.set_custom_property("msg_login", row_dict["msg_login"])
+
+                for prop in cols_cust:
+                    u_entry.set_custom_property(prop, row_dict[prop])
 
                 groups = row_dict["grp_authorized"].split(delimiter)
                 u_entry.tags = [group for group in groups if not group == "all"]
@@ -328,7 +351,10 @@ class User:
         if Path(filename).exists() and not overwrite:
             return False
 
-        rows = [["Id", "Libellé", "Admin", "Groupes", "Id X3", "Login Message"]]
+        items_std = ["superuser", "group", "msg_login"]
+        items_cust = cls.get_cust_attribs_list()
+
+        rows = [["Id", "Libellé"] + ["Admin", "Groupes", "Login Message"] + items_cust]
         cls.open_db(True)
         u_entry: Entry | None
         for u_entry in cls.kee.db.find_entries(username=r".*", group=cls.kee_grp, regex=True):
@@ -337,8 +363,12 @@ class User:
             tags = u_entry.tags if u_entry.tags else []
             group = delimiter.join(tags)
 
-            items = ["superuser", "group", "x3_id", "msg_login"]
-            for item in items:
+            properties_dict = {}
+            for property in u_entry.custom_properties:
+                value = u_entry.get_custom_property(property)
+                properties_dict[property] = value
+
+            for item in items_std + items_cust:
                 if item == "group":
                     value = group
                 else:
@@ -365,7 +395,7 @@ class User:
     @classmethod
     def find_user_entry(cls, username) -> Entry | None:
         u_entries: list[Entry] = cls.kee.db.find_entries(username=".*", group=cls.kee_grp, regex=True)
-        u_entries = [user for user in u_entries if username.upper() == user.username.upper()]
+        u_entries = [user for user in u_entries if user.username and username.upper() == user.username.upper()]
         if u_entries:
             return u_entries[0]
         else:
@@ -381,11 +411,11 @@ class User:
         self.exists: bool = False
         self.is_authorized: bool = False
         self.title: str = ""
-        self.x3_id: str = ""
         self.admin: bool = False
         self.grp_authorized: list[str] = ["all"]  # par défaut un utilisateur appartient au groupe all
         self.msg_login_cust: str = ""
         self.msg_login: str = ""
+        self.attribs_cust: dict[str, str] = {}  # dictionnaire des attributs spéciaux
 
         if entry:
             self._load_from_entry(entry)
@@ -404,16 +434,20 @@ class User:
             self.save()
 
     def to_dict(self) -> dict:
-        return {
+        attribs = {
             "id": self.username,
             "exist_in_settings": self.exists,
             "is_authorized": self.is_authorized,
             "title": self.title,
-            "x3_id": self.x3_id,
             "superuser": self.admin,
             "grp_authorized": self.grp_authorized,
             "msg_login": self.msg_login,
         }
+
+        for key, val in self.attribs_cust.items():
+            attribs[key] = val
+
+        return attribs
 
     def __repr__(self) -> str:
         return str(self.to_dict())
@@ -422,21 +456,22 @@ class User:
         return str(self.to_dict())
 
     def _load_from_entry(self, u_entry: Entry):
-        if self.username == "":
+        if self.username == "" and u_entry.username:
             self.username = u_entry.username
         self.title = u_entry.title
 
         for property in u_entry.custom_properties:
             value = u_entry.get_custom_property(property)
-            if (not hasattr(self, property) or not value) and not property == "superuser":
-                continue
+            value = value if value else ""
 
             if property == "superuser":
                 self.admin = True if value and value.lower() == "true" else False
             elif property == "msg_login":
                 self.msg_login_cust = value
-            else:
+            elif property in self.attribs_std:
                 setattr(self, property, value)
+            else:
+                self.attribs_cust[property] = value
 
         tags = u_entry.tags if u_entry.tags else []
         for tag in tags:
@@ -456,13 +491,16 @@ class User:
 
         u_entry: Entry | None = None
         for u_entry in self.kee.db.find_entries(username=r".*", group=self.kee_grp, regex=True):
-            if u_entry.username.upper() == self.username.upper():
+            if u_entry.username and u_entry.username.upper() == self.username.upper():
                 self.exists = True
                 self.is_authorized = True
                 self._load_from_entry(u_entry)
                 break
 
     def save(self) -> bool:
+        if not self.username or self.username == "":
+            raise ValueError("User must have an Id / Username")
+
         self.open_db(True)
 
         u_entry: Entry = self.find_user_entry(self.username)
@@ -472,13 +510,15 @@ class User:
         else:
             u_entry: Entry = self.kee.db.add_entry(self.kee_grp, self.title, self.username, password="")
 
-        u_entry.set_custom_property("x3_id", self.x3_id)
-        u_entry.set_custom_property("msg_login", self.msg_login_cust)
-
         if self.admin:
             u_entry.set_custom_property("superuser", "true")
         else:
             u_entry.set_custom_property("superuser", "false")
+
+        u_entry.set_custom_property("msg_login", self.msg_login_cust)
+
+        for attr, val in self.attribs_cust.items():
+            u_entry.set_custom_property(attr, val)
 
         u_entry.tags = [grp for grp in self.grp_authorized if not grp == "all"]
 

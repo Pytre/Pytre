@@ -234,7 +234,7 @@ class User:
         return u_list
 
     @classmethod
-    def get_cust_attribs_list(cls) -> list:
+    def get_cust_attribs_list(cls) -> list[str]:
         cls.open_db(False)
 
         u_entry: Entry | None = None
@@ -245,7 +245,6 @@ class User:
                 if not property in cls.attribs_std + ("superuser",):
                     attribs_set.add(property)
 
-        cust_lists = list(attribs_set)
         return sorted(attribs_set)
 
     @classmethod

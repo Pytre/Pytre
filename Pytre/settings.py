@@ -20,6 +20,7 @@ KEE_FILE = Path().cwd() / "Pytre.db"
 KEE_PWD = crypted_file_pwd_get()
 BLANK_FILE = "res/blank.db"  # relative path for blank db
 BLANK_PWD = "password"  # password for blank db
+USER_FOLDER = Path.home() / "Pytre"
 
 
 def get_app_path() -> Path:
@@ -681,7 +682,13 @@ class Settings:
         self.curr_user: User = User()  # objet utilisateur
 
     def _init_extract_folder(self) -> None:
-        self.extract_folder = Path.home() / "Pytre X3 - Extract"
+        self.extract_folder = USER_FOLDER
+
+        # TODO : migration dossier à retirer dans le futur
+        old_folder: Path = Path.home() / "Pytre X3 - Extract"
+        if old_folder.exists():
+            old_folder.rename(self.extract_folder)
+
         if not self.extract_folder.exists() or not self.extract_folder.is_dir():
             try:
                 self.extract_folder.mkdir(parents=True, exist_ok=True)

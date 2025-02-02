@@ -2,8 +2,12 @@ from pathlib import Path
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
 
+from logs import LOG_FILE
+
 
 def old_files_list(folder: Path) -> list[Path]:
+    white_list = (LOG_FILE,)
+
     if not folder.exists():
         return []
 
@@ -16,6 +20,9 @@ def old_files_list(folder: Path) -> list[Path]:
     trigger_treshold: datetime.date = datetime.now().date() + relativedelta(months=-trigger_month)
 
     for file in folder.iterdir():
+        if file in white_list:
+            continue
+
         time_created = datetime.fromtimestamp(file.stat().st_ctime).date()  # date de création du fichier
         if time_created < trigger_treshold and not trigger:
             trigger = True

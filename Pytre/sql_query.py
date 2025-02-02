@@ -6,6 +6,7 @@ from pathlib import Path
 import pymssql
 
 import settings
+import logs
 from convert import Convert
 
 
@@ -383,8 +384,8 @@ class _QueryExecute:
         if self.cmd_template == "":
             return False
 
-        starting_date = self._time_log()
-        self._broadcast(self._time_log() + " - Connection à la base de données...")
+        starting_date = datetime.now()
+        self._broadcast(starting_date.strftime(self.print_date_format) + " - Connection à la base de données...")
 
         self.parent.exec_can_stop = False
         with pymssql.connect(**self.sql_server_params) as conn:
@@ -408,12 +409,19 @@ class _QueryExecute:
                 self._broadcast(self._time_log() + " - Début récupération des lignes...")
                 rows_count, execute_output = self._extract_to_file(cursor)
 
-                ending_date = self._time_log()
+                ending_date = datetime.now()
+
+                params_for_log = self.params_for_log()
+                logs.insert_exec(
+                    self.parent.name, starting_date, ending_date, rows_count, params_for_log, self.extract_file
+                )
+
                 self._broadcast(
                     str("=") * 50
                     + "\nLigne(s) extraite(s) : "
                     + "{:,}".format(rows_count).replace(",", " ")
-                    + f"\nDébut : {starting_date}\nFin : {ending_date}"
+                    + f"\nDébut : {starting_date.strftime(self.print_date_format)}"
+                    + f"\nFin : {ending_date.strftime(self.print_date_format)}"
                 )
                 if rows_count > 0:
                     self._broadcast(f"Fichier extrait : {self.extract_file}\n" + str("=") * 50)
@@ -496,6 +504,18 @@ class _QueryExecute:
 
     def _time_log(self):
         return datetime.now().strftime(self.print_date_format)
+
+    def params_for_log(self):
+        params: dict = {}
+        param: _Param
+        for k, param in self.parent.params_obj.items():
+            params[k] = {
+                "description": param.description,
+                "val_cmd": param.value_cmd,
+                "val_display": param.display_value,
+            }
+
+        return params
 
 
 def get_queries(folder) -> list[Query]:

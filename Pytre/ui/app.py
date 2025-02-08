@@ -13,6 +13,7 @@ if not __package__:
 
 import old_files
 import sql_query
+from ui.app_logs import LogsWindow
 from ui.app_debug import DebugWindow
 from ui.app_users import UsersWindow
 from ui.app_servers import ServersWindow
@@ -180,7 +181,10 @@ class App(tk.Toplevel):
 
         self.menu_query = tk.Menu(menubar, tearoff=False)
         self.menu_query.add_command(label="Executer", state="disabled", command=self.execute_query)
-        self.menu_query.add_command(label="Extractions...", command=lambda: self.open_folder(SETTINGS.extract_folder))
+        self.menu_query.add_command(
+            label="Dossier des extractions...", command=lambda: self.open_folder(SETTINGS.extract_folder)
+        )
+        self.menu_query.add_command(label="Liste des extractions...", command=lambda: self.open_logs(True))
         self.menu_query.add_command(label="Debug...", state="disabled", command=self.debug_query)
         self.menu_query.add_separator()
         self.menu_query.add_command(label="Recharger", command=lambda: self.refresh_queries())
@@ -328,6 +332,7 @@ class App(tk.Toplevel):
         self.btn_frame = ttk.Frame(self.output_and_btn_frame, borderwidth=2)
         self.btn_frame.grid(row=1, column=0, padx=0, pady=0, sticky="nswe")
 
+        self.btn_log = ttk.Button(self.btn_frame, text="\U0001F56E", width=4, command=self.open_logs)
         self.btn_execute = ttk.Button(self.btn_frame, text="Executer", state="disable", command=self.execute_query)
         self.btn_queries_folder = ttk.Button(
             self.btn_frame, text="Dossier", command=lambda: self.open_folder(SETTINGS.extract_folder)
@@ -335,15 +340,16 @@ class App(tk.Toplevel):
         self.btn_debug = ttk.Button(self.btn_frame, text="Debug", state="disable", command=self.debug_query)
         self.btn_quit = ttk.Button(self.btn_frame, text="Quitter", command=self.app_exit)
 
-        self.btn_execute.grid(row=0, column=1, padx=2, pady=0, sticky="nswe")
-        self.btn_queries_folder.grid(row=0, column=2, padx=2, pady=0, sticky="nswe")
-        self.btn_debug.grid(row=0, column=3, padx=2, pady=0, sticky="nswe")
-        self.btn_quit.grid(row=0, column=4, padx=0, pady=0, sticky="nswe")
+        self.btn_log.grid(row=0, column=0, padx=2, pady=0, sticky="nswe")
+        self.btn_execute.grid(row=0, column=2, padx=2, pady=0, sticky="nswe")
+        self.btn_queries_folder.grid(row=0, column=3, padx=2, pady=0, sticky="nswe")
+        self.btn_debug.grid(row=0, column=4, padx=2, pady=0, sticky="nswe")
+        self.btn_quit.grid(row=0, column=5, padx=0, pady=0, sticky="nswe")
 
         # paramètrage des poids des lignes et colonnes
         self.btn_frame.rowconfigure(0, weight=1)
         for column in range(self.btn_frame.grid_size()[0]):
-            my_weight = 1 if column == 0 else 0
+            my_weight = 1 if column == 1 else 0
             self.btn_frame.columnconfigure(column, weight=my_weight)
 
     def position(self):
@@ -758,6 +764,12 @@ class App(tk.Toplevel):
     # ------------------------------------------------------------------------------------------
     # Sous-fenêtres
     # ------------------------------------------------------------------------------------------
+    def open_logs(self, all: bool = False):
+        if not all and self.query is not None:
+            LogsWindow(self, self.query.name)
+        else:
+            LogsWindow(self)
+
     def debug_query(self):
         if self.query is not None:
             DebugWindow(self.query, self)

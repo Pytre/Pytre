@@ -36,6 +36,7 @@ class App(tk.Toplevel):
         self.queries: list[sql_query.Query] = []
         self.query: sql_query.Query = sql_query.Query()
         self.params_widgets: dict[str, ttk.Widget] = {}
+        self.output_file: Path = ""
 
         self.setup_style()
         self.setup_ui()
@@ -479,7 +480,7 @@ class App(tk.Toplevel):
         self.log_running: bool = True
         self.rows_number: int = 0
         self.log_pos: int = 0
-        self.output_file: str = ""
+        self.output_file = ""
 
         print("Thread manager starting")
         self.lock_ui()
@@ -651,7 +652,10 @@ class App(tk.Toplevel):
             pass
 
     def open_folder(self, folder: str):
-        subprocess.Popen(f"explorer {folder}")
+        if self.output_file:
+            subprocess.Popen(f"explorer /select,{self.output_file}")
+        else:
+            subprocess.Popen(f"explorer {folder}")
 
     # ------------------------------------------------------------------------------------------
     # Mise à jour de l'interface et des variables d'instances quand évènement

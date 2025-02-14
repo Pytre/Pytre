@@ -4,6 +4,7 @@ import getpass
 
 import csv
 import json
+from enum import Enum
 from pathlib import Path
 from tkinter import messagebox
 
@@ -16,11 +17,13 @@ from ui.InputDialog import InputDialog
 from credentials import crypted_file_pwd_get, crypted_file_pwd_history, crypted_file_pwd_change
 
 
-KEE_FILE = Path().cwd() / "Pytre.db"
-KEE_PWD = crypted_file_pwd_get()
-BLANK_FILE = "res/blank.db"  # relative path for blank db
-BLANK_PWD = "password"  # password for blank db
-USER_FOLDER = Path.home() / "Pytre"
+KEE_FILE: Path = Path().cwd() / "Pytre.db"
+KEE_PWD: str = crypted_file_pwd_get()
+BLANK_FILE: str = "res/blank.db"  # relative path for blank db
+BLANK_PWD: str = "password"  # password for blank db
+
+USER_FOLDER: Path = Path.home() / "Pytre"
+USER_SETTING_FILE: Path = Path.home() / "Pytre_Settings.json"
 
 
 def get_app_path() -> Path:
@@ -735,6 +738,41 @@ class Settings:
 
         self.kee.save_db()
         return True
+
+
+class UserPrefsEnum(Enum):
+    save_as_folder = "save_as_folder"
+
+
+class UserPrefs:
+    def __init__(self):
+        self.file: Path = USER_SETTING_FILE
+
+    def set(self, key: UserPrefsEnum, value):
+        if not key in UserPrefsEnum:
+            raise KeyError(f"'{key}' n'est pas un paramètre existant")
+
+        json_dict: dict = self._get_all()
+        json_dict[key] = value
+
+        with open(self.file, mode="w", encoding="utf-8") as f:
+            json.dump(json_dict, f, indent=4)
+
+    def get(self, key: UserPrefsEnum):
+        if not key in UserPrefsEnum:
+            raise KeyError(f"'{key}' n'est pas un paramètre existant")
+
+        json_dict: dict = self._get_all()
+        return json_dict.get(key, None)
+
+    def _get_all(self):
+        json_dict: dict = {}
+
+        if self.file.exists():
+            with open(self.file, mode="r", encoding="utf-8") as f:
+                json_dict: dict = json.load(f)
+
+        return json_dict
 
 
 if __name__ == "__main__":

@@ -7,7 +7,7 @@ import settings
 
 
 LOG_FILE: Path = settings.USER_FOLDER / "Pytre_Logs.db"
-LOG_MAX: int = 250
+LOG_MAX: int = 2500
 
 
 class LogRecord:
@@ -120,7 +120,7 @@ def insert_exec(
                 (query, log_start, log_end, log_duration, nb_rows, log_params, log_file),
             )
 
-            # nettoyage pour ne garder que les 250 requêtes les plus récentes
+            # nettoyage pour ne garder que les requêtes les plus récentes
             conn.execute(
                 f"""DELETE FROM QUERIES_EXEC
                 WHERE START IN (SELECT START FROM QUERIES_EXEC ORDER BY START DESC LIMIT -1 OFFSET {LOG_MAX})"""

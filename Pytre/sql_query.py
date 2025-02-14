@@ -6,7 +6,7 @@ from pathlib import Path
 import pymssql
 
 import settings
-import logs
+import logs_user
 from convert import Convert
 
 
@@ -412,7 +412,7 @@ class _QueryExecute:
                 ending_date = datetime.now()
 
                 params_for_log = self.params_for_log()
-                logs.insert_exec(
+                logs_user.insert_exec(
                     self.parent.name, starting_date, ending_date, rows_count, params_for_log, self.extract_file
                 )
 

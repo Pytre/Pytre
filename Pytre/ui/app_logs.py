@@ -1,7 +1,7 @@
 import tkinter as tk
 import json
 import subprocess
-from tkinter import ttk, Event, messagebox
+from tkinter import ttk, Event, messagebox, filedialog
 from datetime import datetime
 from pathlib import Path
 from os import startfile
@@ -9,8 +9,9 @@ from os import startfile
 if not __package__:
     import syspath_insert  # noqa: F401  # disable unused-import warning
 
-import logs
-from ui.InputDialog import InputDialog
+import logs_user
+from save_as import save_as
+from settings import UserPrefsEnum, UserPrefs
 from about import APP_NAME
 
 DATE_FORMAT = "%d/%m/%Y"
@@ -26,11 +27,14 @@ class LogsWindow(tk.Toplevel):
         self.query_name: str = query_name
         self.saved_query_name: str = ""  # pour pouvoir refiltrer après tout montrer
         self.stats_mode: bool = False
+        self.sort_info: dict[str, str | bool] = {"col": None, "reverse": None}
 
         self._setup_ui()
         self._events_binds()
 
         self.tree_refresh()
+        self.tree_select_pos(0)
+        self.tree.focus_set()
 
     # ------------------------------------------------------------------------------------------
     # Création de l'interface
@@ -64,11 +68,12 @@ class LogsWindow(tk.Toplevel):
 
         self.menu_extract = tk.Menu(self.menubar, tearoff=False)
         self.menu_extract.add_command(label="Ouvrir...", command=self.show_file)
+        self.menu_extract.add_command(label="Enregistrer...", command=self.save_as)
         self.menu_extract.add_command(label="Dossier...", command=lambda: self.show_file(True))
         self.menu_extract.add_command(label="Recharger", command=self.tree_refresh)
         self.menu_extract.add_separator()
-        self.menu_extract.add_command(label="Toutes les requêtes", command=self.show_all_queries)
-        self.menu_extract.add_command(label="Basculer en vue stats", command=self.show_all_stats)
+        self.menu_extract.add_command(label="Afficher tout", command=self.show_all_queries)
+        self.menu_extract.add_command(label="Vue stats", command=self.show_all_stats)
         self.menu_extract.add_separator()
         self.menu_extract.add_command(label="Fermer", command=self.app_exit)
         self.menubar.add_cascade(label="Extractions", menu=self.menu_extract)
@@ -76,15 +81,13 @@ class LogsWindow(tk.Toplevel):
     def _setup_ui_ctrl(self):
         self.btn_stats = ttk.Button(self.ctrl_frame, text="Stats", command=self.show_query_stats)
         self.btn_open = ttk.Button(self.ctrl_frame, text="Ouvrir", command=self.show_file)
+        self.btn_save_as = ttk.Button(self.ctrl_frame, text="Enregistrer", command=self.save_as)
         self.btn_folder = ttk.Button(self.ctrl_frame, text="Dossier", command=lambda: self.show_file(True))
-        self.btn_refresh = ttk.Button(self.ctrl_frame, text="Recharger", command=self.tree_refresh)
-        self.btn_cancel = ttk.Button(self.ctrl_frame, text="Fermer", command=self.app_exit)
 
         self.btn_stats.grid(row=0, column=0, padx=2, pady=2, sticky="nswe")
         self.btn_open.grid(row=0, column=2, padx=2, pady=2, sticky="nswe")
-        self.btn_folder.grid(row=0, column=3, padx=2, pady=2, sticky="nswe")
-        self.btn_refresh.grid(row=0, column=4, padx=2, pady=2, sticky="nswe")
-        self.btn_cancel.grid(row=0, column=5, padx=2, pady=2, sticky="nswe")
+        self.btn_save_as.grid(row=0, column=3, padx=2, pady=2, sticky="nswe")
+        self.btn_folder.grid(row=0, column=4, padx=2, pady=2, sticky="nswe")
 
         self.ctrl_frame.grid_rowconfigure(0, weight=1)
         self.ctrl_frame.grid_columnconfigure(1, weight=1)
@@ -150,7 +153,7 @@ class LogsWindow(tk.Toplevel):
             self.tree_frame, height=20, columns=list(cols.keys()), show="headings", selectmode="browse"
         )
         for col, attr in cols.items():
-            self.tree.heading(col, text=attr["text"])
+            self.tree.heading(col, text=attr["text"], command=lambda c=col: self.tree_header_click(c))
             self.tree.column(col, width=attr["width"], stretch=attr["stretch"])
             if attr.get("anchor", ""):
                 self.tree.column(col, anchor="e")
@@ -186,8 +189,14 @@ class LogsWindow(tk.Toplevel):
     # Définition des évènements générer par les traitements
     # ------------------------------------------------------------------------------------------
     def _events_binds(self):
-        self.tree.bind("<<TreeviewSelect>>", lambda e: self.show_query_params())
-        self.tree.bind("<Double-Button-1>", lambda e: self.show_file(True))
+        self.tree.bind("<<TreeviewSelect>>", lambda _: self.show_query_params())
+        self.tree.bind("<Double-Button-1>", lambda _: self.show_file(True))
+        self.tree.bind("<Return>", lambda _: self.show_file(True))
+        self.tree.bind("<Home>", lambda _: self.tree_select_pos(0))
+        self.tree.bind("<End>", lambda _: self.tree_select_pos(-1))
+        self.tree.bind("<Next>", lambda _: self.tree_select_move(10))
+        self.tree.bind("<Prior>", lambda _: self.tree_select_move(-10))
+
         self.bind("<Escape>", self.app_exit)
 
         self.protocol("WM_DELETE_WINDOW", self.app_exit)  # arrêter le programme quand fermeture de la fenêtre
@@ -223,8 +232,8 @@ class LogsWindow(tk.Toplevel):
         self.set_cols_to_display()
 
         cols_to_update: dict = self.get_cols_to_update()
-        rows_to_insert: list[logs.LogRecord | logs.LogStats] = []
-        rows_to_insert = logs.get_stats() if self.stats_mode else logs.get_last_records(self.query_name)
+        rows_to_insert: list[logs_user.LogRecord | logs_user.LogStats] = []
+        rows_to_insert = logs_user.get_stats() if self.stats_mode else logs_user.get_last_records(self.query_name)
 
         count: int = 0
         for rows in rows_to_insert:
@@ -233,11 +242,13 @@ class LogsWindow(tk.Toplevel):
             self.tree.insert("", tk.END, iid=iid)
 
             for col, val in cols_to_update.items():
-                value = getattr(rows, val["attr"], "")
-
                 if col == "num":
                     value = count
-                elif col in ("date", "last_date"):
+                else:
+                    value = getattr(rows, val["attr"], "")
+
+                # Formatage des valeurs
+                if col in ("date", "last_date"):
                     value = datetime.strftime(value, DATE_FORMAT)
                 elif col in ("time", "last_time"):
                     value = datetime.strftime(value, TIME_FORMAT)
@@ -253,6 +264,55 @@ class LogsWindow(tk.Toplevel):
 
         self.show_query_stats()
 
+    def tree_select_move(self, offset: int):
+        curr_item = self.tree.selection()
+        if not curr_item == ():
+            pos = self.tree.index(curr_item[0])
+        else:
+            pos = 0
+
+        self.tree_select_pos(pos + offset)
+
+    def tree_select_pos(self, pos: int):
+        max_pos = len(self.tree.get_children()) - 1
+
+        if max_pos < 0:
+            return
+        elif pos < 0 or pos > max_pos:
+            pos = max_pos
+        elif pos < 0:
+            pos = 0
+
+        item = self.tree.get_children()[pos]
+        self.tree.selection_set(item)
+        self.tree.focus(item)
+        self.tree.see(item)
+
+    def tree_header_click(self, col: str):
+        reverse = False
+        if col == self.sort_info["col"] and self.sort_info["reverse"] is False:
+            reverse = True
+
+        self.tree_sort(col, reverse)
+
+    def tree_sort(self, sort_col: str = "query", reverse: bool = False):
+        # fonction récup valeur
+        def get_col_value(key):
+            value = self.tree.set(key, sort_col)
+            if sort_col in ("num", "nb_rows", "nb_run"):
+                value = int(value)
+            return value
+
+        # tri de la colonne
+        items = list(self.tree.get_children(""))
+        items.sort(reverse=reverse, key=lambda k: get_col_value(k))
+        for i, item in enumerate(items):
+            self.tree.move(item, "", i)
+
+        # mise à jour info du dernier tri
+        self.sort_info["col"] = sort_col
+        self.sort_info["reverse"] = reverse
+
     def show_query_stats(self):
         stats_lst: list
         stats_txt: str = ""
@@ -263,9 +323,9 @@ class LogsWindow(tk.Toplevel):
         else:
             query = self.query_name
 
-        stats_lst = logs.get_stats(query)
+        stats_lst = logs_user.get_stats(query)
         if stats_lst and len(stats_lst) == 1:
-            stats: logs.LogStats = stats_lst[0]
+            stats: logs_user.LogStats = stats_lst[0]
             stats_txt = f"Nombre d'execution : {stats.nb_run}"
             stats_txt += f"\nDurée mini : {self.duration_format(stats.min_run)}"
             stats_txt += f"\nDurée maxi : {self.duration_format(stats.max_run)}"
@@ -313,21 +373,21 @@ class LogsWindow(tk.Toplevel):
         if self.saved_query_name:
             self.query_name = self.saved_query_name
             self.saved_query_name = ""
-            self.menu_extract.entryconfig(f"Revenir à {self.query_name}", label="Toutes les requêtes")
+            self.menu_extract.entryconfig(f"Revenir à {self.query_name}", label="Afficher tout")
         else:
             self.saved_query_name = self.query_name
             self.query_name = ""
-            self.menu_extract.entryconfig("Toutes les requêtes", label=f"Revenir à {self.saved_query_name}")
+            self.menu_extract.entryconfig("Afficher tout", label=f"Revenir à {self.saved_query_name}")
 
         self.tree_refresh()
 
     def show_all_stats(self):
         if self.stats_mode:
             self.stats_mode = False
-            self.menu_extract.entryconfig("Basculer en vue requête", label="Basculer en vue stats")
+            self.menu_extract.entryconfig("Vue requêtes", label="Vue stats")
         else:
             self.stats_mode = True
-            self.menu_extract.entryconfig("Basculer en vue stats", label="Basculer en vue requête")
+            self.menu_extract.entryconfig("Vue stats", label="Vue requêtes")
 
         self.tree_refresh()
 
@@ -355,6 +415,10 @@ class LogsWindow(tk.Toplevel):
             subprocess.Popen(f"explorer /select,{file}")
         else:
             startfile(file)
+
+    def save_as(self):
+        src: Path = self.get_extract_path()
+        save_as(self, src)
 
     def get_extract_path(self) -> Path | None:
         item = self.tree.selection()

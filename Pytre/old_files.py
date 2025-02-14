@@ -2,11 +2,12 @@ from pathlib import Path
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
 
-from logs import LOG_FILE
+from logs_user import LOG_FILE
+from settings import USER_SETTING_FILE
 
 
 def old_files_list(folder: Path) -> list[Path]:
-    white_list = (LOG_FILE,)
+    white_list = (LOG_FILE, USER_SETTING_FILE)
 
     if not folder.exists():
         return []

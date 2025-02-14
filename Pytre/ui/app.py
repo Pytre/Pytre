@@ -182,10 +182,8 @@ class App(tk.Toplevel):
 
         self.menu_query = tk.Menu(menubar, tearoff=False)
         self.menu_query.add_command(label="Executer", state="disabled", command=self.execute_query)
-        self.menu_query.add_command(
-            label="Dossier des extractions...", command=lambda: self.open_folder(SETTINGS.extract_folder)
-        )
-        self.menu_query.add_command(label="Liste des extractions...", command=lambda: self.open_logs(True))
+        self.menu_query.add_command(label="Dossier...", command=lambda: self.open_folder(SETTINGS.extract_folder))
+        self.menu_query.add_command(label="Journal...", command=lambda: self.open_logs(True))
         self.menu_query.add_command(label="Debug...", state="disabled", command=self.debug_query)
         self.menu_query.add_separator()
         self.menu_query.add_command(label="Recharger", command=lambda: self.refresh_queries())

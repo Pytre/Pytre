@@ -257,8 +257,18 @@ class UsersWindow(tk.Toplevel):
         if e is not None and e.widget is self.filter:  # désactivation si le filtre est en saisi
             return
 
+        max_pos = len(self.tree.get_children()) - 1
+
+        if max_pos < 0:
+            return
+        elif pos < 0 or pos > max_pos:
+            pos = max_pos
+        elif pos < 0:
+            pos = 0
+
         item = self.tree.get_children()[pos]
         self.tree.selection_set(item)
+        self.tree.focus(item)
         self.tree.see(item)
 
     def tree_select_move(self, offset: int, e: Event = None):
@@ -267,14 +277,11 @@ class UsersWindow(tk.Toplevel):
 
         curr_item = self.tree.selection()
         if not curr_item == ():
-            curr_item = curr_item[0]
-        pos = [i for i, item in enumerate(self.tree.get_children()) if item == curr_item]
+            pos = self.tree.index(curr_item[0])
+        else:
+            pos = 0
 
-        max_pos = len(self.tree.get_children()) - 1
-        new_pos = pos[0] + offset if not pos == [] else offset
-        new_pos = min(max(0, new_pos), max_pos)
-
-        self.tree_select_pos(new_pos)
+        self.tree_select_pos(pos + offset)
 
     def app_exit(self, _: Event = None):
         self.destroy()

@@ -339,13 +339,11 @@ class App(tk.Toplevel):
             self.btn_frame, text="Dossier", command=lambda: self.open_folder(SETTINGS.extract_folder)
         )
         self.btn_debug = ttk.Button(self.btn_frame, text="Debug", state="disable", command=self.debug_query)
-        self.btn_quit = ttk.Button(self.btn_frame, text="Quitter", command=self.app_exit)
 
         self.btn_log.grid(row=0, column=0, padx=2, pady=0, sticky="nswe")
         self.btn_execute.grid(row=0, column=2, padx=2, pady=0, sticky="nswe")
         self.btn_queries_folder.grid(row=0, column=3, padx=2, pady=0, sticky="nswe")
         self.btn_debug.grid(row=0, column=4, padx=2, pady=0, sticky="nswe")
-        self.btn_quit.grid(row=0, column=5, padx=0, pady=0, sticky="nswe")
 
         # paramètrage des poids des lignes et colonnes
         self.btn_frame.rowconfigure(0, weight=1)

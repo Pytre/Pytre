@@ -13,6 +13,8 @@ if not __package__:
 
 import old_files
 import sql_query
+from save_as import save_as
+from ui.MsgDialog import MsgDialog
 from ui.app_logs import LogsWindow
 from ui.app_debug import DebugWindow
 from ui.app_users import UsersWindow
@@ -535,9 +537,12 @@ class App(tk.Toplevel):
         if self.force_stop:
             messagebox.showwarning("Fin execution", "Execution interrompue !", parent=self)
         elif self.rows_number > 0:
-            answer = messagebox.askyesno("Fin execution", "Voulez vous ouvrir le fichier extrait ?", parent=self)
-            if answer:
-                startfile(self.output_file)  # ouvrir le fichier
+            buttons = ("Ouvrir", "Enregistrer", "Annuler")
+            answer = MsgDialog.ask("Fin execution", "Que voulez vous faire avec le fichier extrait ?", buttons)
+            if answer == "Ouvrir":
+                startfile(self.output_file)
+            elif answer == "Enregistrer":
+                save_as(self, self.output_file)
         else:
             messagebox.showinfo("Fin execution", "Aucune donnée extraite !", parent=self)
 

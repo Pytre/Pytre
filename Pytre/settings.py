@@ -513,11 +513,8 @@ class User:
         else:
             u_entry: Entry = self.kee.db.add_entry(self.kee_grp, self.title, self.username, password="")
 
-        if self.admin:
-            u_entry.set_custom_property("superuser", "true")
-        else:
-            u_entry.set_custom_property("superuser", "false")
-
+        admin_val = "true" if self.admin else "false"
+        u_entry.set_custom_property("superuser", admin_val)
         u_entry.set_custom_property("msg_login", self.msg_login_cust)
 
         for attr, val in self.attribs_cust.items():
@@ -655,6 +652,8 @@ class Settings:
     kee: Kee = Kee()
     kee_grp_name: str = "Paramètres"
     kee_grp: Group = None
+    logs_are_on: bool = False  # indicateur si logs centraux
+    logs_folder: Path = Path("")  # répertoire où stocker les logs centraux
 
     @classmethod
     def open_db(cls, reload: bool = False) -> bool:
@@ -663,6 +662,11 @@ class Settings:
             return False
         cls.kee_grp = cls.kee.db.find_groups(name=cls.kee_grp_name, first=True)
         return True
+
+    @classmethod
+    def set_cls_logs_info(cls, logs_are_on, logs_folder):
+        cls.logs_are_on = logs_are_on
+        cls.logs_folder = logs_folder
 
     def __init__(self):
         self.app_path: Path = get_app_path()
@@ -707,13 +711,23 @@ class Settings:
             "DECIMAL_SEPARATOR": "decimal_separator",
             "DATE_FORMAT": "date_format",
             "QUERIES_FOLDER": "queries_folder",
+            "LOGS_ARE_ON": "logs_are_on",
+            "LOGS_FOLDER": "logs_folder",
             "SETTINGS_VERSION": "settings_version",
         }
 
         for kee_title, attr_name in self.params_dict.items():
             info: Entry = self.kee.db.find_entries(title=kee_title, group=self.kee_grp, first=True)
-            setattr(self, attr_name, info.username)
+            if not info:
+                continue
 
+            value: str = info.username
+            if kee_title in ("LOGS_ARE_ON",):
+                value = True if value.lower() == "true" else False
+
+            setattr(self, attr_name, value)
+
+        self.set_cls_logs_info(self.logs_are_on, self.logs_folder)
         self.get_min_version()
 
     def get_min_version(self) -> None:
@@ -733,10 +747,17 @@ class Settings:
 
         for kee_title, attr_name in self.params_dict.items():
             info: Entry = self.kee.db.find_entries(title=kee_title, group=self.kee_grp, first=True)
-            val = getattr(self, attr_name)
-            info.username = val
+            if not info:
+                info = self.kee.db.add_entry(self.kee_grp, kee_title, username="", password="")
+
+            value = getattr(self, attr_name)
+            if kee_title in ("LOGS_ARE_ON",):
+                value = "true" if value else "false"
+
+            info.username = value
 
         self.kee.save_db()
+        self.set_cls_logs_info(self.logs_are_on, self.logs_folder)
         return True
 
 
@@ -793,7 +814,15 @@ if __name__ == "__main__":
     print(f"Version mini Settings : {my_settings.min_version_settings}")
     print(f"Version utilisée Settings : {my_settings.settings_version}")
 
-    param_attr = ["field_separator", "decimal_separator", "date_format", "queries_folder", "extract_folder"]
+    param_attr = (
+        "field_separator",
+        "decimal_separator",
+        "date_format",
+        "queries_folder",
+        "extract_folder",
+        "logs_are_on",
+        "logs_folder",
+    )
     print(f"{'='*50}\nSettings / Paramètres généraux\n{'='*50}")
     for attr in param_attr:
         print(f"- {attr}: {getattr(my_settings, attr)}")

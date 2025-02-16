@@ -7,13 +7,15 @@ import pymssql
 
 import settings
 import logs_user
+from logs_central import CentralLogs
 from convert import Convert
 from about import APP_NAME, APP_VERSION
 
 
-SETTINGS = settings.Settings()
-PRINT_DATE_FORMAT = "%d/%m/%Y à %H:%M:%S"  # pour le format de la date pour les logs / output
+SETTINGS: settings.Settings = settings.Settings()
+PRINT_DATE_FORMAT: str = "%d/%m/%Y à %H:%M:%S"  # pour le format de la date pour les logs / output
 USER: settings.User = SETTINGS.curr_user
+CENTRAL_LOGS: CentralLogs = CentralLogs(SETTINGS.logs_folder)
 
 
 class Query:
@@ -401,9 +403,6 @@ class _QueryExecute:
                     error_msg = str(err.args[1])[2:-2]
                     self._broadcast(self._time_log() + f" - Erreur {error_code} : {error_msg}")
                     return False
-                except ValueError as err:
-                    self._broadcast(self._time_log() + f" - Erreur : {err}")
-                    return False
                 except Exception as err:
                     self._broadcast(self._time_log() + f" - Erreur : {err}")
                     return False
@@ -411,26 +410,31 @@ class _QueryExecute:
                 self._broadcast(self._time_log() + " - Début récupération des lignes...")
                 rows_count, execute_output = self._extract_to_file(cursor)
 
-                ending_date = datetime.now()
-
-                params_for_log = self.params_for_log()
-                logs_user.insert_exec(
-                    self.parent.name, starting_date, ending_date, rows_count, params_for_log, self.extract_file
-                )
-
-                self._broadcast(
-                    str("=") * 50
-                    + "\nLigne(s) extraite(s) : "
-                    + "{:,}".format(rows_count).replace(",", " ")
-                    + f"\nDébut : {starting_date.strftime(self.print_date_format)}"
-                    + f"\nFin : {ending_date.strftime(self.print_date_format)}"
-                )
-                if rows_count > 0:
-                    self._broadcast(f"Fichier extrait : {self.extract_file}\n" + str("=") * 50)
-                else:
-                    self._broadcast("Fichier extrait : aucune ligne de récupérée, pas de fichier\n" + str("=") * 50)
+        ending_date = datetime.now()
+        self._execute_end(starting_date, ending_date, rows_count)
 
         return rows_count, execute_output
+
+    def _execute_end(self, starting_date: datetime, ending_date: datetime, rows_count: int):
+        params_for_log = self._params_for_log()
+        logs_user.insert_exec(
+            self.parent.name, starting_date, ending_date, rows_count, params_for_log, self.extract_file
+        )
+
+        if SETTINGS.logs_are_on:
+            CENTRAL_LOGS.trigger_sync(logs_user.USER_DB, USER.username, USER.title)
+
+        self._broadcast(
+            str("=") * 50
+            + "\nLigne(s) extraite(s) : "
+            + "{:,}".format(rows_count).replace(",", " ")
+            + f"\nDébut : {starting_date.strftime(self.print_date_format)}"
+            + f"\nFin : {ending_date.strftime(self.print_date_format)}"
+        )
+        if rows_count > 0:
+            self._broadcast(f"Fichier extrait : {self.extract_file}\n" + str("=") * 50)
+        else:
+            self._broadcast("Fichier extrait : aucune ligne de récupérée, pas de fichier\n" + str("=") * 50)
 
     def _extract_to_file(self, cursor):
         if cursor is None:
@@ -504,10 +508,10 @@ class _QueryExecute:
             with open(filename, mode="a", encoding="utf-8") as f:
                 f.write("\n".join(list_to_write) + "\n")  # écriture du buffer
 
-    def _time_log(self):
+    def _time_log(self) -> str:
         return datetime.now().strftime(self.print_date_format)
 
-    def params_for_log(self):
+    def _params_for_log(self) -> dict:
         params: dict = {}
         param: _Param
         for k, param in self.parent.params_obj.items():

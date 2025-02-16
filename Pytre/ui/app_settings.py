@@ -49,6 +49,7 @@ class SettingsWindow(tk.Toplevel):
         self._setup_entries()
         self._setup_buttons()
         self.settings_load()
+        self._set_logs_folder_state()
 
     def _setup_entries(self):
         self.entries_frame.columnconfigure(1, weight=1)
@@ -58,14 +59,22 @@ class SettingsWindow(tk.Toplevel):
             "decimal_separator": {"text": "Séparateur décimal"},
             "date_format": {"text": "Format date"},
             "queries_folder": {"text": "Dossier des requêtes"},
+            "logs_are_on": {"text": "Activer les logs"},
+            "logs_folder": {"text": "Dossier des logs"},
             "settings_version": {"text": "Version des paramètres"},
         }
 
         num_row = 0
-        for _, item in self.entries.items():
+        for key, item in self.entries.items():
             my_label = ttk.Label(self.entries_frame, text=item["text"] + " : ")
-            my_tk_var = tk.StringVar()
-            my_entry = ttk.Entry(self.entries_frame, textvariable=my_tk_var)
+
+            if key == "logs_are_on":
+                my_tk_var = tk.BooleanVar()
+                my_entry = ttk.Checkbutton(self.entries_frame, variable=my_tk_var, onvalue=True, offvalue=False)
+                my_entry["command"] = self._set_logs_folder_state
+            else:
+                my_tk_var = tk.StringVar()
+                my_entry = ttk.Entry(self.entries_frame, textvariable=my_tk_var)
 
             new_keys = {"w_label": my_label, "w_entry": my_entry, "var": my_tk_var}
             item.update(new_keys)
@@ -83,6 +92,17 @@ class SettingsWindow(tk.Toplevel):
 
         self.btn_save.grid(row=0, column=1, padx=2, pady=2, sticky="nse")
         self.btn_cancel.grid(row=0, column=2, padx=2, pady=2, sticky="nse")
+
+    def _set_logs_folder_state(self):
+        state: ttk.Checkbutton = self.entries["logs_are_on"]["var"].get()
+        folder_entry: ttk.Entry = self.entries["logs_folder"]["w_entry"]
+
+        if state:
+            state: str = "enable"
+        else:
+            state: str = "disable"
+
+        folder_entry["state"] = state
 
     # ------------------------------------------------------------------------------------------
     # Définition des évènements générer par les traitements

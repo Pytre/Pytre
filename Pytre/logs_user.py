@@ -6,7 +6,7 @@ from pathlib import Path
 import settings
 
 
-LOG_FILE: Path = settings.USER_FOLDER / "Pytre_Logs.db"
+USER_DB: Path = settings.USER_FOLDER / "Pytre_Logs.db"
 LOG_MAX: int = 2500
 
 
@@ -77,7 +77,7 @@ class LogStats:
 
 
 def create_db() -> None:
-    with sqlite3.connect(LOG_FILE) as conn:
+    with sqlite3.connect(USER_DB) as conn:
         conn.execute(
             """
                 CREATE TABLE QUERIES_EXEC (
@@ -102,7 +102,7 @@ def create_db() -> None:
 def insert_exec(
     query: str, start: datetime, end: datetime = None, nb_rows: float = None, params: dict = None, file: str = None
 ) -> None:
-    if not LOG_FILE.exists():
+    if not USER_DB.exists():
         create_db()
 
     log_start: str = start.isoformat()
@@ -112,7 +112,7 @@ def insert_exec(
     log_file = str(file) if file else None  # si un objet Path est retourné il ne peut pas être insérer
 
     try:
-        with sqlite3.connect(LOG_FILE) as conn:
+        with sqlite3.connect(f"file:{USER_DB}?mode=rw", uri=True) as conn:
             # insertion infos
             conn.execute(
                 """INSERT INTO QUERIES_EXEC (QUERY, START, END, DURATION_SECS, NB_ROWS, PARAMETERS, FILE)
@@ -132,10 +132,10 @@ def insert_exec(
 
 
 def get_last_files(nb_files: int = 10) -> list[Path]:
-    if not LOG_FILE.exists():
+    if not USER_DB.exists():
         return []
 
-    with sqlite3.connect(LOG_FILE) as conn:
+    with sqlite3.connect(f"file:{USER_DB}?mode=ro", uri=True) as conn:
         cursor: sqlite3.Cursor = conn.cursor()
         cursor.execute(
             """SELECT FILE FROM QUERIES_EXEC
@@ -150,10 +150,10 @@ def get_last_files(nb_files: int = 10) -> list[Path]:
 
 
 def get_stats(query_name: str = "") -> list[LogStats]:
-    if not LOG_FILE.exists():
+    if not USER_DB.exists():
         return []
 
-    with sqlite3.connect(LOG_FILE) as conn:
+    with sqlite3.connect(f"file:{USER_DB}?mode=ro", uri=True) as conn:
         conn.row_factory = sqlite3.Row
 
         cursor: sqlite3.Cursor = conn.cursor()
@@ -188,10 +188,10 @@ def row_to_stats(row: dict) -> LogStats:
 
 
 def get_last_records(query_name: str = "", nb_records: int = 100) -> list[LogRecord]:
-    if not LOG_FILE.exists():
+    if not USER_DB.exists():
         return []
 
-    with sqlite3.connect(LOG_FILE) as conn:
+    with sqlite3.connect(f"file:{USER_DB}?mode=ro", uri=True) as conn:
         conn.row_factory = sqlite3.Row
 
         cursor: sqlite3.Cursor = conn.cursor()

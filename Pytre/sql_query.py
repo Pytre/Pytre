@@ -8,6 +8,7 @@ import pymssql
 import settings
 import logs_user
 from convert import Convert
+from about import APP_NAME, APP_VERSION
 
 
 SETTINGS = settings.Settings()
@@ -372,6 +373,8 @@ class _QueryExecute:
             "as_dict": False,
             "appname": None,
             "port": SETTINGS.server.port,
+            "read_only": True,
+            "appname": f"{APP_NAME}_{APP_VERSION}",
         }
 
         self.field_separator = SETTINGS.field_separator

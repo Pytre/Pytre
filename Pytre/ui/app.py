@@ -470,6 +470,9 @@ class App(tk.Toplevel):
 
         self.protocol("WM_DELETE_WINDOW", self.app_exit)  # arrêter le programme quand fermeture de la fenêtre
 
+        self.event_add("<<exec_finished>>", "None")
+        self.bind("<<exec_finished>>", lambda _: self.exec_finish())
+
     # ------------------------------------------------------------------------------------------
     # Execution de requête
     # ------------------------------------------------------------------------------------------
@@ -496,7 +499,7 @@ class App(tk.Toplevel):
             time.sleep(1)
 
         self.unlock_ui()
-        self.exec_finish()
+        self.event_generate("<<exec_finished>>")  # pour lancer exec_finish à partir du thread principal
         print("Thread manager ending")
 
     def exec_thread_start(self):  # démarrer par la méthode thread_manage_start

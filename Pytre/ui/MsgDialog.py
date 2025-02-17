@@ -10,7 +10,7 @@ from settings import get_app_path
 class MsgDialog(tk.Toplevel):
     @classmethod
     def ask(cls, title: str, msg: str, buttons_txt: tuple, parent: tk.Tk | None = None) -> str | None:
-        dialog = MsgDialog(title, msg, buttons_txt, parent)
+        dialog = MsgDialog(title, msg, buttons_txt, parent=parent)
         cls.wait_window(dialog)
         return dialog.button_clicked
 

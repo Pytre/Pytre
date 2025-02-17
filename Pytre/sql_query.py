@@ -371,7 +371,6 @@ class _QueryExecute:
             "login_timeout": SETTINGS.server.login_timeout,
             "charset": SETTINGS.server.charset,
             "as_dict": False,
-            "appname": None,
             "port": SETTINGS.server.port,
             "read_only": True,
             "appname": f"{APP_NAME}_{APP_VERSION}",

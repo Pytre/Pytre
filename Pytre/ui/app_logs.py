@@ -10,8 +10,7 @@ if not __package__:
     import syspath_insert  # noqa: F401  # disable unused-import warning
 
 import logs_user
-from save_as import save_as
-from settings import UserPrefsEnum, UserPrefs
+from ui.save_as import save_as
 from about import APP_NAME
 
 DATE_FORMAT = "%d/%m/%Y"

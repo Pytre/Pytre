@@ -23,7 +23,7 @@ BLANK_FILE: str = "res/blank.db"  # relative path for blank db
 BLANK_PWD: str = "password"  # password for blank db
 
 USER_FOLDER: Path = Path.home() / "Pytre"
-USER_SETTING_FILE: Path = Path.home() / "Pytre_Settings.json"
+USER_SETTING_FILE: Path = USER_FOLDER / "Pytre_Settings.json"
 
 
 def get_app_path() -> Path:
@@ -245,7 +245,7 @@ class User:
 
         for u_entry in cls.kee.db.find_entries(username=r".*", group=cls.kee_grp, regex=True):
             for property in u_entry.custom_properties:
-                if not property in cls.attribs_std + ("superuser",):
+                if property not in cls.attribs_std + ("superuser",):
                     attribs_set.add(property)
 
         return sorted(attribs_set)
@@ -748,18 +748,25 @@ class UserPrefs:
     def __init__(self):
         self.file: Path = USER_SETTING_FILE
 
-    def set(self, key: UserPrefsEnum, value):
-        if not key in UserPrefsEnum:
+    def set(self, key: UserPrefsEnum, value: str | int | float | bool | None):
+        if key not in UserPrefsEnum:
             raise KeyError(f"'{key}' n'est pas un paramètre existant")
 
+        if not value:
+            new_value = ""
+        elif not isinstance(value, (str, int, float, bool)):
+            new_value = str(value)
+        else:
+            new_value = value
+
         json_dict: dict = self._get_all()
-        json_dict[key] = value
+        json_dict[key.value] = new_value
 
         with open(self.file, mode="w", encoding="utf-8") as f:
             json.dump(json_dict, f, indent=4)
 
     def get(self, key: UserPrefsEnum):
-        if not key in UserPrefsEnum:
+        if key not in UserPrefsEnum:
             raise KeyError(f"'{key}' n'est pas un paramètre existant")
 
         json_dict: dict = self._get_all()

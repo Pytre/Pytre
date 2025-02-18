@@ -32,12 +32,11 @@ class MsgDialog(tk.Toplevel):
         self._setup_position(self.parent)
         self._events_binds()
 
-        if not self.parent:
-            self.update_idletasks()  # get window on top
-            self.focus_force()  # force focus to the window
+        self.update_idletasks()  # get window on top
+        self.focus_force()  # force focus to the window
 
     def _setup_ui(self, title: str, msg: str):
-        minsize_width = max(275, font.Font().measure(title) + 125)
+        minsize_width = max(300, font.Font().measure(title) + 125)
         self.minsize(width=minsize_width, height=125)
         self.resizable(False, False)
         self.title(title)
@@ -84,9 +83,9 @@ class MsgDialog(tk.Toplevel):
         self.msg_frame.columnconfigure(1, weight=1)
 
     def _setup_buttons(self):
-        for i, button in enumerate(self.buttons):
+        for i, button in enumerate(self.buttons, 1):
             btn = ttk.Button(self.buttons_frame, text=button, command=lambda b=button: self.on_click(b))
-            btn.grid(row=0, column=i + 1, padx=2, pady=2, sticky="nswe")
+            btn.grid(row=0, column=i, padx=2, pady=2, sticky="nswe")
 
         self.buttons_frame.columnconfigure(0, weight=1)
 

@@ -496,7 +496,8 @@ class App(tk.Toplevel):
                 self.exec_force_stop()
                 break
             self.exec_log()
-            time.sleep(1)
+            if self.log_running:  # attendre uniquement si log pas fini
+                time.sleep(1)
 
         self.unlock_ui()
         self.event_generate("<<exec_finished>>")  # pour lancer exec_finish à partir du thread principal
@@ -522,11 +523,6 @@ class App(tk.Toplevel):
         self.output_msg(msg, "end")
 
     def exec_log(self):
-        # quand l'execution est finie et qu'il n'y a plus de message à écrire
-        if not self.exec_thread.is_alive() and not len(self.query.msg_list) > self.log_pos:
-            self.log_running = False
-            return
-
         # affichage / logging des événements
         my_msg_list = self.query.msg_list  # pour figer la liste actuelle
         if len(my_msg_list) > self.log_pos:
@@ -535,6 +531,11 @@ class App(tk.Toplevel):
                 msg_to_print = msg_to_print[1:]
             self.output_msg(msg_to_print, "end")
             self.log_pos = len(my_msg_list)
+
+        # quand l'execution est finie et qu'il n'y a plus de message à écrire
+        if not self.exec_thread.is_alive() and not len(self.query.msg_list) > self.log_pos:
+            self.log_running = False
+            return
 
     def exec_finish(self):
         if self.force_stop:

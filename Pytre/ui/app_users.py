@@ -457,9 +457,7 @@ class UserDialog(tk.Toplevel):
 
             if key == "admin":
                 my_tk_var = tk.BooleanVar()
-                my_entry = ttk.Checkbutton(self.entries_frame, variable=my_tk_var)
-                my_entry["onvalue"] = True
-                my_entry["offvalue"] = False
+                my_entry = ttk.Checkbutton(self.entries_frame, variable=my_tk_var, onvalue=True, offvalue=False)
             else:
                 my_tk_var = tk.StringVar()
                 my_entry = ttk.Entry(self.entries_frame, textvariable=my_tk_var)

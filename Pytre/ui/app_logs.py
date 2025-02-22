@@ -254,7 +254,8 @@ class LogsWindow(tk.Toplevel):
                 elif col in ("duration", "min_run", "max_run"):
                     value = self.duration_format(value)
                 elif col == "file":
-                    value = "" if Path(value).exists() else "\U0000274C"
+                    nb_rows = getattr(rows, "nb_rows", "")
+                    value = "" if nb_rows == 0 or Path(value).exists() else "\U0000274C"
                 elif col in ("num", "nb_rows", "nb_run"):
                     value = format(value, ",").replace(",", " ")
 
@@ -409,7 +410,7 @@ class LogsWindow(tk.Toplevel):
         if not file:
             return
         elif not file.exists():
-            messagebox.showerror("Erreur", "Le fichier n'existe plus", parent=self)
+            messagebox.showerror("Erreur", "Le fichier n'existe pas", parent=self)
         elif only_reveal:
             subprocess.Popen(f"explorer /select,{file}")
         else:

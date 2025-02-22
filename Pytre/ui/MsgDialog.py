@@ -108,5 +108,9 @@ class MsgDialog(tk.Toplevel):
 
 if __name__ == "__main__":
     buttons = ("Ouvrir", "Enregistrer", "Annuler")
-    answer = MsgDialog.ask("Fin execution", "Que voulez vous faire avec le fichier extrait ?", buttons)
+    answer = MsgDialog.ask(
+        "Fin execution",
+        "Le fichier extrait a été enregisté.\nVoulez-vous l'ouvrir ou enregistrer une copie ailleurs ?",
+        buttons,
+    )
     print(answer)

@@ -543,7 +543,10 @@ class App(tk.Toplevel):
         elif self.rows_number > 0:
             buttons = ("Ouvrir", "Enregistrer", "Annuler")
             answer = MsgDialog.ask(
-                "Fin execution", "Que voulez vous faire avec le fichier extrait ?", buttons, parent=self
+                "Fin execution",
+                "Le fichier extrait a été enregisté.\nVoulez-vous l'ouvrir ou enregistrer une copie ailleurs ?",
+                buttons,
+                parent=self,
             )
             if answer == "Ouvrir":
                 startfile(self.output_file)

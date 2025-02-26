@@ -44,35 +44,37 @@ class CentralLogs:
         if not self.central_db:
             print(f"Erreur base de logs centrale non renseignée")
             return
-        if not user_db or not user_db.exists():
+        if not user_db or not Path(user_db).exists():
             print(f"Erreur base de logs utilisateur inexistante : {user_db}")
             return
 
         if self.sync_thread is None or not self.sync_thread.is_alive():
-            args = (user_db, user_id, user_name)
+            args = (Path(user_db), user_id, user_name)
             self.sync_thread = Thread(target=self._sync_thread_start, args=args, daemon=True)
             self.sync_thread.start()
 
     def _sync_thread_start(self, user_db: Path, user_id: str, user_name: str):  # démarrer par trigger_sync
         print("Thread logs sync starting")
-        nb_try: int = 0
-        while True:
+        retry_delay: int = 30
+        for _ in range(5):
             try:
-                nb_try += 1
                 unsynced = self.rows_get_unsynced(user_db, user_id, user_name)
                 if not unsynced:
                     break
-                elif nb_try > 1:
-                    time.sleep(60)
 
                 rows_id = [item[0] for item in unsynced]
                 rows_values = [item[1:] for item in unsynced]
 
-                self.sync_rows(rows_values)
-                self.mark_rows_as_synced(user_db, rows_id)
+                is_synced: bool = self.sync_rows(rows_values)
+                if is_synced:
+                    self.mark_rows_as_synced(user_db, rows_id)
+                    break
 
             except Exception as e:
-                print(f"Erreur de synchro des données dans la base de logs centrale : {e}")
+                print(f"Syncing logs error : {e}")
+
+            time.sleep(retry_delay)
+            retry_delay = min(retry_delay * 2, 300)
 
         print("Thread logs sync ending")
 
@@ -96,26 +98,34 @@ class CentralLogs:
 
         return unsynced
 
-    def sync_rows(self, rows_values: list[tuple]):
+    def sync_rows(self, rows_values: list[tuple]) -> bool:
         try:
-            with sqlite3.connect(f"file:{self.central_db}?mode=rw", uri=True, timeout=15) as conn:
+            with sqlite3.connect(f"file:{self.central_db}?mode=rw", uri=True, timeout=30) as conn:
+                conn.execute("PRAGMA busy_timeout=10000")
+                conn.execute("PRAGMA synchronous=NORMAL")
+                conn.execute("PRAGMA cache_size=-10000")
+
                 cursor: sqlite3.Cursor = conn.cursor()
-                cursor.execute("BEGIN TRANSACTION;")
-                for record in rows_values:
-                    cursor.execute(
-                        """
-                        INSERT INTO QUERIES_EXEC (USER_ID, USER_NAME, QUERY, START, END, DURATION_SECS, NB_ROWS, PARAMETERS)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                        """,
-                        record,
-                    )
+                cursor.executemany(
+                    """
+                    INSERT INTO QUERIES_EXEC (USER_ID, USER_NAME, QUERY, START, END, DURATION_SECS, NB_ROWS, PARAMETERS)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    rows_values,
+                )
                 conn.commit()
                 cursor.close()
+                return True
         except sqlite3.OperationalError as e:
             if "database is locked" in str(e):
-                pass
+                print(f"Central database is locked : {e}")
+                return False
             else:
-                raise
+                print(f"Error writing to central database : {e}")
+                return False
+        except Exception as e:
+            print(f"Unexpected error while syncing to central database : {e}")
+            return False
 
     def mark_rows_as_synced(self, user_db: Path, rows_id: list[int]):
         with sqlite3.connect(f"file:{user_db}?mode=rw", uri=True) as conn:
@@ -129,3 +139,7 @@ class CentralLogs:
 if __name__ == "__main__":
     central_log = CentralLogs(".")
     central_log.trigger_sync("Pytre_Logs_User.db", "id_test", "name_test")
+    for i in range(10):
+        time.sleep(30)
+        if central_log.sync_thread is None or not central_log.sync_thread.is_alive():
+            break

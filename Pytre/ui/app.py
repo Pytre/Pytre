@@ -21,6 +21,7 @@ from ui.app_users import UsersWindow
 from ui.app_servers import ServersWindow
 from ui.app_settings import SettingsWindow
 from ui.app_password import PasswordWindow
+from ui.app_console import ConsoleWindow
 from ui.app_about import AboutWindow
 from about import APP_NAME, APP_VERSION
 
@@ -54,6 +55,7 @@ class App(tk.Toplevel):
         if self.user.msg_login:
             self.output_msg(str(self.user.msg_login) + "\n", "1.0", "1.0")
 
+        self.console_start()
         self.extract_folder_cleaning()
 
     def check_user_access(self) -> bool:
@@ -207,6 +209,8 @@ class App(tk.Toplevel):
             menubar.add_cascade(label="Administration", menu=menu_admin)
 
         menu_about = tk.Menu(menubar, tearoff=False)
+        menu_about.add_command(label="Ouvrir la console...", command=self.console)
+        menu_about.add_separator()
         menu_about.add_command(label=f"À propos de {APP_NAME}...", command=self.about_info)
         menubar.add_cascade(label="?", menu=menu_about)
 
@@ -806,6 +810,14 @@ class App(tk.Toplevel):
 
     def manage_password(self):
         PasswordWindow(self)
+
+    def console_start(self):
+        self.console: tk.Toplevel = ConsoleWindow(self, hide=True)
+
+    def console(self):
+        if not self.console.winfo_exists():
+            self.console_start
+        self.console.deiconify()
 
     def about_info(self):
         AboutWindow(self)

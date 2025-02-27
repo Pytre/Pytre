@@ -25,7 +25,8 @@ class MsgDialog(tk.Toplevel):
             self.parent.wm_attributes("-disabled", True)
             self.transient(self.parent)
 
-        self.buttons = buttons_txt
+        self.buttons_txt = buttons_txt
+        self.buttons_widgets: list[tk.Widget] = []
         self.button_clicked = None
 
         self._setup_ui(title, msg)
@@ -83,17 +84,48 @@ class MsgDialog(tk.Toplevel):
         self.msg_frame.columnconfigure(1, weight=1)
 
     def _setup_buttons(self):
-        for i, button in enumerate(self.buttons, 1):
-            btn = ttk.Button(self.buttons_frame, text=button, command=lambda b=button: self.on_click(b))
+        for i, btn_text in enumerate(self.buttons_txt, 1):
+            btn = ttk.Button(self.buttons_frame, text=btn_text, command=lambda txt=btn_text: self.on_click(txt))
             btn.grid(row=0, column=i, padx=2, pady=2, sticky="nswe")
+            self.buttons_widgets.append(btn)
 
         self.buttons_frame.columnconfigure(0, weight=1)
 
     def _events_binds(self):
+        self.bind("<Left>", lambda _: self.select_btn_move(-1))
+        self.bind("<Right>", lambda _: self.select_btn_move(1))
+        self.bind("<Return>", lambda _: self.on_click(None))
+        self.bind("<Escape>", self.close)
         self.protocol("WM_DELETE_WINDOW", self.close)  # arrêter le programme quand fermeture de la fenêtre
 
-    def on_click(self, button_clicked):
-        self.button_clicked = button_clicked
+    def select_btn_move(self, move: int):
+        widget_with_focus = self.focus_displayof()
+
+        # détermination de la position du bouton à sélectionner
+        if widget_with_focus in self.buttons_widgets:
+            pos = self.buttons_widgets.index(widget_with_focus) + move
+        elif move < 0:
+            pos = len(self.buttons_widgets) - 1
+        else:
+            pos = 0
+
+        # gestion de la position si en dehors de la borne début / fin
+        if pos >= len(self.buttons_widgets):
+            pos = 0
+        if pos < 0:
+            pos = len(self.buttons_widgets) - 1
+
+        self.buttons_widgets[pos].focus_set()
+
+    def on_click(self, button_text):
+        if button_text is None:
+            widget_with_focus = self.focus_displayof()
+            if not widget_with_focus in self.buttons_widgets:
+                return
+            elif button_text is None:
+                button_text = widget_with_focus["text"]
+
+        self.button_clicked = button_text
         self.close()
 
     def close(self, _: Event = None):

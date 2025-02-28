@@ -1,7 +1,7 @@
 import tkinter as tk
 import json
 import subprocess
-from tkinter import ttk, Event, messagebox, filedialog
+from tkinter import ttk, Event, messagebox
 from datetime import datetime
 from pathlib import Path
 from os import startfile

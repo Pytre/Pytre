@@ -654,6 +654,7 @@ class App(tk.Toplevel):
         return self.query.values_ok()
 
     def app_exit(self, event: Event = None):
+        sql_query.CENTRAL_LOGS.stop_sync()
         self.quit()
 
     def output_msg(self, txt_message: str, start_pos: str = "1.0", end_pos: str = "end"):

@@ -7,7 +7,7 @@ import pymssql
 
 import settings
 import logs_user
-from logs_central import CentralLogs
+import logs_central
 from convert import Convert
 from about import APP_NAME, APP_VERSION
 
@@ -15,7 +15,7 @@ from about import APP_NAME, APP_VERSION
 SETTINGS: settings.Settings = settings.Settings()
 PRINT_DATE_FORMAT: str = "%d/%m/%Y à %H:%M:%S"  # pour le format de la date pour les logs / output
 USER: settings.User = SETTINGS.curr_user
-CENTRAL_LOGS: CentralLogs = CentralLogs(SETTINGS.logs_folder)
+CENTRAL_LOGS: logs_central.FileDriven = logs_central.FileDriven(SETTINGS.logs_folder)
 
 
 class Query:

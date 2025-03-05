@@ -76,8 +76,21 @@ class LogStats:
         )
 
 
+def check_db_exists(create: bool = True) -> bool:
+    if not USER_DB.exists():
+        if create:
+            create_db()
+            return True
+
+        return False
+    else:
+        update_db()
+        return True
+
+
 def create_db() -> None:
     with sqlite3.connect(USER_DB) as conn:
+        conn.execute("PRAGMA user_version = 1;")
         conn.execute(
             """
                 CREATE TABLE QUERIES_EXEC (
@@ -93,17 +106,44 @@ def create_db() -> None:
             """
         )
         conn.execute("CREATE INDEX IDX_QUERY ON QUERIES_EXEC (QUERY);")
-        conn.execute("CREATE INDEX START ON QUERIES_EXEC (START DESC);")
+        conn.execute("CREATE INDEX IDX_START ON QUERIES_EXEC (START DESC);")
         conn.execute("CREATE INDEX IDX_EXPORTED ON QUERIES_EXEC (EXPORTED ASC);")
 
         conn.commit()
 
 
+def update_db() -> bool:
+    try:
+        if update_db.already_run:
+            return True
+    except AttributeError:
+        update_db.already_run = False
+
+    try:
+        with sqlite3.connect(USER_DB) as conn:
+            cursor = conn.cursor()
+            cursor.execute("PRAGMA user_version;")
+            user_version: int = cursor.fetchone()[0]
+            cursor.close()
+
+            if user_version < 1:
+                conn.execute("PRAGMA user_version = 1;")
+                conn.execute("ALTER TABLE QUERIES_EXEC ADD COLUMN SERVER_ID TEXT;")
+                conn.execute("DROP INDEX IF EXISTS IDX_SERVER_ID;")
+                conn.execute("CREATE INDEX IDX_SERVER_ID ON QUERIES_EXEC (SERVER_ID);")
+                conn.commit()
+                print("Added SERVER_ID column to QUERIES_EXEC table")
+
+            return True
+    except Exception as e:
+        print(f"Unexpected error in schema update: {e}")
+        return False
+
+
 def insert_exec(
     query: str, start: datetime, end: datetime = None, nb_rows: float = None, params: dict = None, file: str = None
 ) -> None:
-    if not USER_DB.exists():
-        create_db()
+    check_db_exists()
 
     log_start: str = start.isoformat()
     log_end: str = end.isoformat() if end is not None else None
@@ -132,7 +172,7 @@ def insert_exec(
 
 
 def get_last_files(nb_files: int = 10) -> list[Path]:
-    if not USER_DB.exists():
+    if not check_db_exists(False):
         return []
 
     with sqlite3.connect(f"file:{USER_DB}?mode=ro", uri=True) as conn:
@@ -150,7 +190,7 @@ def get_last_files(nb_files: int = 10) -> list[Path]:
 
 
 def get_stats(query_name: str = "") -> list[LogStats]:
-    if not USER_DB.exists():
+    if not check_db_exists(False):
         return []
 
     with sqlite3.connect(f"file:{USER_DB}?mode=ro", uri=True) as conn:
@@ -188,7 +228,7 @@ def row_to_stats(row: dict) -> LogStats:
 
 
 def get_last_records(query_name: str = "", nb_records: int = 100) -> list[LogRecord]:
-    if not USER_DB.exists():
+    if not check_db_exists(False):
         return []
 
     with sqlite3.connect(f"file:{USER_DB}?mode=ro", uri=True) as conn:

@@ -2,9 +2,9 @@ import time
 import subprocess
 import tkinter as tk
 import ctypes
+import threading
 from tkinter import Event, ttk, messagebox
 from os import startfile
-from threading import Thread
 from pathlib import Path
 from datetime import datetime
 
@@ -40,6 +40,7 @@ class App(tk.Toplevel):
         self.query: sql_query.Query = sql_query.Query()
         self.params_widgets: dict[str, ttk.Widget] = {}
         self.output_file: Path = ""
+        self.force_stop: threading.Event = threading.Event()
 
         self.setup_style()
         self.setup_ui()
@@ -178,7 +179,7 @@ class App(tk.Toplevel):
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(0, weight=1)
 
-        self.position()
+        self.setup_ui_position()
 
     def setup_ui_menu(self):
         menubar = tk.Menu(self)
@@ -337,7 +338,7 @@ class App(tk.Toplevel):
         self.btn_frame = ttk.Frame(self.output_and_btn_frame, borderwidth=2)
         self.btn_frame.grid(row=1, column=0, padx=0, pady=0, sticky="nswe")
 
-        self.btn_log = ttk.Button(self.btn_frame, text="\U0001F56E", width=4, command=self.open_logs)
+        self.btn_log = ttk.Button(self.btn_frame, text="\U0001f56e", width=4, command=self.open_logs)
         self.btn_execute = ttk.Button(self.btn_frame, text="Executer", state="disable", command=self.execute_query)
         self.btn_queries_folder = ttk.Button(
             self.btn_frame, text="Dossier", command=lambda: self.open_folder(SETTINGS.extract_folder)
@@ -355,7 +356,7 @@ class App(tk.Toplevel):
             my_weight = 1 if column == 1 else 0
             self.btn_frame.columnconfigure(column, weight=my_weight)
 
-    def position(self):
+    def setup_ui_position(self):
         self.update_idletasks()
 
         x = int(self.winfo_screenwidth() / 2 - self.winfo_width() / 2)
@@ -481,26 +482,27 @@ class App(tk.Toplevel):
     # Execution de requête
     # ------------------------------------------------------------------------------------------
     def manager_thread_start(self):  # démarrer par la méthode execute_query
-        self.force_stop: bool = False
-        self.log_running: bool = True
+        self.log_stopped: bool = False
+        self.query.exec_ask_stop.clear()
+
         self.rows_number: int = 0
+        self.query.msg_list = []
         self.log_pos: int = 0
         self.output_file = ""
 
         print("Thread manager starting")
         self.lock_ui()
 
-        self.query.exec_ask_stop = False
-        self.exec_thread = Thread(target=self.exec_thread_start, daemon=True)  # thread execution requete
+        self.exec_thread = threading.Thread(target=self.exec_thread_start, daemon=True)  # thread execution requete
         self.exec_thread.start()
 
-        while self.exec_thread.is_alive() or self.log_running:
+        while self.exec_thread.is_alive() or not self.log_stopped:
             # si demande d'interruption et que l'execution n'est pas déjà finie
-            if self.force_stop and self.exec_thread.is_alive():
+            if self.force_stop.is_set() and self.exec_thread.is_alive():
                 self.exec_force_stop()
                 break
             self.exec_log()
-            if self.log_running:  # attendre uniquement si log pas fini
+            if not self.log_stopped:  # attendre uniquement si log pas fini
                 time.sleep(1)
 
         self.unlock_ui()
@@ -514,8 +516,8 @@ class App(tk.Toplevel):
         print("Thread execute ending")
 
     def exec_force_stop(self):
-        if self.query.exec_can_stop:
-            self.query.exec_ask_stop = True
+        if self.query.exec_can_stop.is_set():
+            self.query.exec_ask_stop.set()
             while self.exec_thread.is_alive():
                 time.sleep(1)
         else:
@@ -538,11 +540,11 @@ class App(tk.Toplevel):
 
         # quand l'execution est finie et qu'il n'y a plus de message à écrire
         if not self.exec_thread.is_alive() and not len(self.query.msg_list) > self.log_pos:
-            self.log_running = False
+            self.log_stopped = True
             return
 
     def exec_finish(self):
-        if self.force_stop:
+        if self.force_stop.is_set():
             messagebox.showwarning("Fin execution", "Execution interrompue !", parent=self)
         elif self.rows_number > 0:
             buttons = ("Ouvrir", "Enregistrer", "Annuler")
@@ -626,12 +628,13 @@ class App(tk.Toplevel):
 
         # si une requête est en cours d'execution alors la stopper
         if hasattr(self, "manager_thread") and self.manager_thread.is_alive():
-            self.force_stop = True
+            self.force_stop.set()
             return False
 
         self.output_msg("")
         if self.params_get_input():
-            self.manager_thread = Thread(target=self.manager_thread_start, daemon=True)
+            self.force_stop.clear()
+            self.manager_thread = threading.Thread(target=self.manager_thread_start, daemon=True)
             self.manager_thread.start()
         else:
             self.output_msg("Impossible d'executer, tant que des paramètres ne sont pas valides :\n", "1.0", "1.0")

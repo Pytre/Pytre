@@ -2,6 +2,7 @@ import re
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
 from pathlib import Path
+from threading import Event
 
 import pymssql
 
@@ -24,8 +25,8 @@ class Query:
 
         self.last_extracted_file = ""  # info du dernier fichier extrait
         self.msg_list: list[str] = []  # liste de msg à l'utilisateur pour interface graphique
-        self.exec_ask_stop: bool = False  # pour signaler que l'execution doit être stoppée
-        self.exec_can_stop: bool = False  # pour savoir si l'execution peut stopper proprement
+        self.exec_ask_stop: Event = Event()  # pour signaler que l'execution doit être stoppée
+        self.exec_can_stop: Event = Event()  # pour savoir si l'execution peut stopper proprement
 
         self.filename = filename
         self.file_content = self._init_file_content(encoding_format)
@@ -134,6 +135,7 @@ class Query:
         return True
 
     def execute_cmd(self, file_output: bool = True) -> bool | tuple:
+        self.msg_list = []
         self.last_extracted_file = ""
         self.update_values()
 
@@ -382,7 +384,6 @@ class _QueryExecute:
         self.print_date_format = PRINT_DATE_FORMAT
 
     def execute(self, extract_file):
-        self.parent.msg_list = []
         self.extract_file = extract_file
 
         if self.cmd_template == "":
@@ -391,13 +392,13 @@ class _QueryExecute:
         starting_date = datetime.now()
         self._broadcast(starting_date.strftime(self.print_date_format) + " - Connection à la base de données...")
 
-        self.parent.exec_can_stop = False
+        self.parent.exec_can_stop.clear()
         with pymssql.connect(**self.sql_server_params) as conn:
             with conn.cursor() as cursor:
                 self._broadcast(self._time_log() + " - Requête en cours d'execution...")
                 try:
                     cursor.execute(self.cmd_template, self.cmd_parameters)
-                    self.parent.exec_can_stop = True
+                    self.parent.exec_can_stop.set()
                 except pymssql._pymssql.ProgrammingError as err:
                     error_code = err.args[0]
                     error_msg = str(err.args[1])[2:-2]
@@ -468,7 +469,7 @@ class _QueryExecute:
                 self._file_write(buffer)
                 buffer.clear()
 
-            if self.parent.exec_ask_stop:
+            if self.parent.exec_ask_stop.is_set():
                 return 0, ""
 
         if self.extract_file != "" and len(buffer) > 1:  # si buffer (et pas que entête) alors écrire ce qui reste

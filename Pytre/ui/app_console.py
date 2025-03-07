@@ -30,7 +30,7 @@ class ConsoleWindow(tk.Toplevel):
 
     def _setup_ui(self):
         self.title(f"{APP_NAME} - Console output")
-        self.geometry("800x500")
+        self.geometry("850x550")
         self.resizable(True, True)
 
         self._setup_textbox()
@@ -70,8 +70,8 @@ class ConsoleWindow(tk.Toplevel):
     def redirect_stdout(self):
         self.old_stdout = sys.stdout
         self.old_stderr = sys.stderr
-        sys.stdout = TextRedirector(self.textbox, "stdout")
-        sys.stderr = TextRedirector(self.textbox, "stderr", "\n")
+        sys.stdout = TextRedirector(sys.stdout, self.textbox, "stdout")
+        sys.stderr = TextRedirector(sys.stderr, self.textbox, "stderr")
 
     def reset_stdout(self):
         sys.stdout = self.old_stdout
@@ -93,24 +93,44 @@ class ConsoleWindow(tk.Toplevel):
         for i in range(10):
             print(f"test stdout {i}")
             sys.stderr.write(f"et test stderr {i}")
+            print("final test\nwith multiple\nlines")
 
 
 class TextRedirector:
-    def __init__(self, textbox: tk.Text, tag: str = "stdout", char: str = ""):
+    def __init__(self, terminal, textbox: tk.Text, tag: str = "stdout"):
+        self.terminal = terminal
         self.textbox: tk.Text = textbox
-        self.char: str = char
         self.tag: str = tag
         self.timestamp_tag: str = tag + "_timestamp"
 
     def write(self, text: str):
+        # don't write empty line
+        if not text.strip():
+            return
+
+        # write to terminal only if it is not None
+        if self.terminal:
+            self.write_to_terminal(text + "\n")
+
+        self.write_to_textbox(text + "\n")
+
+    def write_to_terminal(self, text: str):
+        self.terminal.write(text)
+        self.terminal.flush()
+
+    def write_to_textbox(self, text: str):
         timestamp: str = ""
-        if not text == "\n":
-            timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3] + "_" + self.tag + ">"
+        timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3] + "_" + self.tag + ">"
+
+        padded_text = text[:-1].replace("\n", "\n" + len(timestamp) * " ") + text[-1]
 
         self.textbox["state"] = "normal"
-        self.textbox.insert("end", timestamp, self.timestamp_tag, text + self.char, self.tag)
+        self.textbox.insert("end", timestamp, self.timestamp_tag, padded_text, self.tag)
         self.textbox["state"] = "disabled"
         self.textbox.yview(tk.END)
+
+    def flush(self):
+        self.terminal.flush()
 
 
 if __name__ == "__main__":

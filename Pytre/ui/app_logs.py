@@ -23,6 +23,8 @@ class LogsWindow(tk.Toplevel):
         self.parent = parent
         self.focus_set() if self.parent else self.master.withdraw()
 
+        self.user_db: logs_user.UserDb = logs_user.UserDb()
+
         self.query_name: str = query_name
         self.saved_query_name: str = ""  # pour pouvoir refiltrer après tout montrer
         self.stats_mode: bool = False
@@ -232,7 +234,9 @@ class LogsWindow(tk.Toplevel):
 
         cols_to_update: dict = self.get_cols_to_update()
         rows_to_insert: list[logs_user.LogRecord | logs_user.LogStats] = []
-        rows_to_insert = logs_user.get_stats() if self.stats_mode else logs_user.get_last_records(self.query_name)
+        rows_to_insert = (
+            self.user_db.get_stats() if self.stats_mode else self.user_db.get_last_records(self.query_name)
+        )
 
         count: int = 0
         for rows in rows_to_insert:
@@ -255,7 +259,7 @@ class LogsWindow(tk.Toplevel):
                     value = self.duration_format(value)
                 elif col == "file":
                     nb_rows = getattr(rows, "nb_rows", "")
-                    value = "" if nb_rows == 0 or Path(value).exists() else "\U0000274C"
+                    value = "" if nb_rows == 0 or Path(value).exists() else "\U0000274c"
                 elif col in ("num", "nb_rows", "nb_run"):
                     value = format(value, ",").replace(",", " ")
 
@@ -323,7 +327,7 @@ class LogsWindow(tk.Toplevel):
         else:
             query = self.query_name
 
-        stats_lst = logs_user.get_stats(query)
+        stats_lst = self.user_db.get_stats(query)
         if stats_lst and len(stats_lst) == 1:
             stats: logs_user.LogStats = stats_lst[0]
             stats_txt = f"Nombre d'execution : {stats.nb_run}"

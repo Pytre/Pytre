@@ -12,6 +12,7 @@ from pathlib import Path
 
 
 CENTRAL_DB: Path = "Pytre_Central_Logs.db"
+LATEST_VERSION: int = 2  # latest version model of central database
 
 
 class CentralLogs:
@@ -27,9 +28,38 @@ class CentralLogs:
         self.temp_files: list[Path] = []
         self.stop_event: Event = Event()
 
+        self.central_version: int = -1
+        self.latest_version: int = LATEST_VERSION
+        self.update_already_run: bool = False
+
     def __del__(self):
         self.stop_sync(5)
         self.cleanup_temp_files()
+
+    def check_db(self, create: bool = True) -> bool:
+        result: bool = False
+        if not self.central_db.exists():
+            if create:
+                result = self.create_db()
+        else:
+            self.central_version = self.get_central_version()
+            result = self.update_db()
+
+        self.update_already_run = True
+        return result
+
+    def get_central_version(self) -> int:
+        # fetch current user version
+        try:
+            with sqlite3.connect(self.central_db) as conn:
+                cursor = conn.cursor()
+                cursor.execute("PRAGMA user_version;")
+                user_version = cursor.fetchone()[0]
+                cursor.close()
+                return user_version
+        except Exception as e:
+            print(f"Couldn't retrieve user_info pragma for central db: {e}")
+            return -1
 
     # ------------------------------------------------------------------------------------------
     # Database management
@@ -37,7 +67,7 @@ class CentralLogs:
     def create_db(self):
         try:
             with sqlite3.connect(f"file:{self.central_db}?mode=rwc", uri=True) as conn:
-                conn.execute("PRAGMA user_version = 1;")
+                conn.execute(f"PRAGMA user_version = {self.latest_version};")
                 conn.execute(
                     """
                         CREATE TABLE QUERIES_EXEC (
@@ -58,36 +88,73 @@ class CentralLogs:
                 conn.execute("CREATE INDEX IDX_START ON QUERIES_EXEC (START DESC);")
 
                 conn.commit()
+                self.central_version = self.latest_version
         except sqlite3.OperationalError as e:
             print(f"The central SQLite log database could not be created: {e}")
 
     def update_db(self) -> bool:
+        if self.update_already_run:
+            return True
+        if not self.central_version > -1:
+            return False
+        if not self.central_version < self.latest_version:
+            return True
+
+        for version in range(self.latest_version):
+            if self.central_version >= version + 1:
+                continue
+
+            update_func = getattr(self, f"update_db_{version}_to_{version + 1}")
+            if not update_func():
+                print(f"Aborting central database update, migration to {version + 1} failed")
+                return False
+
+        print(f"Central database migration to version {self.latest_version} completed")
+        return True
+
+    def update_db_0_to_1(self) -> bool:
         try:
+            new_version: int = 1
+
             with sqlite3.connect(f"file:{self.central_db}?mode=rw", uri=True) as conn:
-                cursor = conn.cursor()
-                cursor.execute("PRAGMA user_version;")
-                user_version: int = cursor.fetchone()[0]
-                cursor.close()
+                conn.execute(f"PRAGMA user_version = {new_version};")
+                conn.execute("ALTER TABLE QUERIES_EXEC ADD COLUMN SERVER_ID TEXT;")
+                conn.execute("DROP INDEX IF EXISTS IDX_SERVER_ID;")
+                conn.execute("CREATE INDEX IDX_SERVER_ID ON QUERIES_EXEC (SERVER_ID);")
+                conn.commit()
+                print("Added SERVER_ID column to QUERIES_EXEC table")
 
-                if user_version < 1:
-                    conn.execute("PRAGMA user_version = 1;")
-                    conn.execute("ALTER TABLE QUERIES_EXEC ADD COLUMN SERVER_ID TEXT;")
-                    conn.execute("DROP INDEX IF EXISTS IDX_SERVER_ID;")
-                    conn.execute("CREATE INDEX IDX_SERVER_ID ON QUERIES_EXEC (SERVER_ID);")
-                    conn.commit()
-                    print("Added SERVER_ID column to QUERIES_EXEC table")
-
+                print(f"Central database updated to version {new_version}")
+                self.central_version = new_version
                 return True
         except Exception as e:
-            print(f"Unexpected error in schema update: {e}")
+            print(f"Unexpected error in schema update to version {new_version}: {e}")
             return False
 
+    def update_db_1_to_2(self) -> bool:
+        try:
+            new_version: int = 2
+
+            with sqlite3.connect(self.central_db) as conn:
+                conn.execute(f"PRAGMA user_version = {new_version};")
+                conn.execute("ALTER TABLE QUERIES_EXEC DROP COLUMN END;")
+                conn.commit()
+                print(f"Central database updated to version {new_version}")
+                self.central_version = new_version
+                return True
+        except Exception as e:
+            print(f"Unexpected error in schema update to version {new_version}: {e}")
+            return False
+
+    # ------------------------------------------------------------------------------------------
+    # Database select and insert sql commands
+    # ------------------------------------------------------------------------------------------
     def sql_rows_get_unsynced(self) -> str:
         return f"""
             SELECT 
                 ROWID, SERVER_ID,
                 '{self.user_id}' AS USER_ID, '{self.user_name}' AS USER_NAME, 
-                QUERY, START, END, DURATION_SECS, NB_ROWS, PARAMETERS 
+                QUERY, START, DURATION_SECS, NB_ROWS, PARAMETERS 
             FROM
                 QUERIES_EXEC 
             WHERE
@@ -99,20 +166,22 @@ class CentralLogs:
 
     def sql_insert_into_central_db(self) -> str:
         return """
-            INSERT INTO QUERIES_EXEC (SERVER_ID, USER_ID, USER_NAME, QUERY, START, END, DURATION_SECS, NB_ROWS, PARAMETERS)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO QUERIES_EXEC (SERVER_ID, USER_ID, USER_NAME, QUERY, START, DURATION_SECS, NB_ROWS, PARAMETERS)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """
 
     # ------------------------------------------------------------------------------------------
     # Thread management
     # ------------------------------------------------------------------------------------------
     def trigger_sync(self, user_db: Path, user_id: str = "", user_name: str = ""):
-        if self.central_db and not self.central_db.exists():
-            self.create_db()
-
         if not self.central_db:
             print("Error: Central log database not specified")
             return
+
+        if not self.check_db():
+            print(f"Aborting sync, failed to check central database: {self.central_db}")
+            return
+
         if not user_db or not Path(user_db).exists():
             print(f"Error: User log database does not exist: {user_db}")
             return

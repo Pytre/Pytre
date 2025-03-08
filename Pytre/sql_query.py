@@ -16,6 +16,7 @@ from about import APP_NAME, APP_VERSION
 SETTINGS: settings.Settings = settings.Settings()
 PRINT_DATE_FORMAT: str = "%d/%m/%Y à %H:%M:%S"  # pour le format de la date pour les logs / output
 USER: settings.User = SETTINGS.curr_user
+USER_LOG: logs_user.UserDb = logs_user.UserDb()
 CENTRAL_LOGS: logs_central.FileDriven = logs_central.FileDriven(SETTINGS.logs_folder)
 
 
@@ -418,12 +419,12 @@ class _QueryExecute:
 
     def _execute_end(self, starting_date: datetime, ending_date: datetime, rows_count: int):
         params_for_log = self._params_for_log()
-        logs_user.insert_exec(
+        USER_LOG.insert_exec(
             self.parent.name, starting_date, ending_date, rows_count, params_for_log, self.extract_file
         )
 
         if SETTINGS.logs_are_on:
-            CENTRAL_LOGS.trigger_sync(logs_user.USER_DB, USER.username, USER.title)
+            CENTRAL_LOGS.trigger_sync(USER_LOG.user_db, USER.username, USER.title)
 
         self._broadcast(
             str("=") * 50

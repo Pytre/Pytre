@@ -578,11 +578,6 @@ class App(tk.Toplevel):
                 widget_entry["state"] = "disable"
 
     def unlock_ui(self):
-        if not hasattr(self, "counter_test"):
-            self.counter_test = 0
-        self.counter_test += 1
-        print(f"Unlock UI counter : {self.counter_test}")
-
         self.menu_query.entryconfig("Interrompre", label="Executer")
         self.menu_query.entryconfig("Recharger", state="normal")
 

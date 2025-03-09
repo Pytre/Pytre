@@ -463,7 +463,7 @@ class App(tk.Toplevel):
     # Définition des évènements générer par les traitements
     # ------------------------------------------------------------------------------------------
     def setup_events_binds(self):
-        self.queries_entry_filter.bind("<KeyRelease>", lambda e: self.queries_filter(self.queries_entry_filter.get()))
+        self.queries_entry_filter.bind("<KeyRelease>", lambda _: self.queries_filter(self.queries_entry_filter.get()))
 
         self.queries_tree.bind("<<TreeviewSelect>>", self.tree_selection_change)
 
@@ -473,6 +473,7 @@ class App(tk.Toplevel):
         )
         self.params_canvas.bind("<Leave>", lambda _: self.params_canvas.unbind_all("<MouseWheel>"))
 
+        self.bind("<Control-f>", lambda _: self.queries_filter_focus())
         self.protocol("WM_DELETE_WINDOW", self.app_exit)  # arrêter le programme quand fermeture de la fenêtre
 
         self.event_add("<<exec_finished>>", "None")
@@ -673,7 +674,21 @@ class App(tk.Toplevel):
     # ------------------------------------------------------------------------------------------
     # Mise à jour de l'interface et des variables d'instances quand évènement
     # ------------------------------------------------------------------------------------------
+    def queries_filter_focus(self):
+        self.queries_disable_filter = True
+        self.queries_entry_filter.focus()
+
     def queries_filter(self, text_filter: str = "", msg_filter: str = ""):
+        try:
+            if self.queries_disable_filter and text_filter == self.queries_previous_filter:
+                return
+        except AttributeError:
+            self.queries_disable_filter: bool
+            self.queries_previous_filter: str
+
+        self.queries_disable_filter = False
+        self.queries_previous_filter = text_filter
+
         for item in self.queries_tree.get_children():
             self.queries_tree.delete(item)
 

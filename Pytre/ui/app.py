@@ -173,8 +173,8 @@ class App(tk.Toplevel):
         self.setup_ui_left_frame()
         self.setup_ui_right_frame()
 
-        self.paned_window.add(self.left_frame, weight=0)
-        self.paned_window.add(self.right_frame, weight=1)
+        self.paned_window.add(self.left_frame, weight=1)
+        self.paned_window.add(self.right_frame, weight=2)
 
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(0, weight=1)

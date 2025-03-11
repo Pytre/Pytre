@@ -7,12 +7,12 @@ if not __package__:
 from settings import UserPrefsEnum, UserPrefs
 
 
-def save_as(parent, src_file: Path):
+def save_as(parent, src_file: Path) -> Path:
     if not src_file:
-        return
+        return None
     elif not src_file.exists():
         messagebox.showerror("Erreur", "Le fichier source n'existe pas", parent=parent)
-        return
+        return None
 
     user_prefs = UserPrefs()
     save_as_folder = UserPrefsEnum.save_as_folder
@@ -31,3 +31,6 @@ def save_as(parent, src_file: Path):
     if dest:
         Path(dest).write_bytes(src_file.read_bytes())
         user_prefs.set(save_as_folder, Path(dest).parent)
+        return Path(dest)
+
+    return None

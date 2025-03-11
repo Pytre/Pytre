@@ -545,22 +545,47 @@ class App(tk.Toplevel):
             return
 
     def exec_finish(self):
+        # si arrêt forcé
         if self.force_stop.is_set():
             messagebox.showwarning("Fin execution", "Execution interrompue !", parent=self)
-        elif self.rows_number > 0:
-            buttons = ("Ouvrir", "Enregistrer", "Annuler")
+            return
+
+        # si aucune ligne extraite
+        if self.rows_number == 0:
+            messagebox.showinfo("Fin execution", "Aucune donnée extraite !", parent=self)
+            return
+
+        # si des lignes ont été extraites proposer d'ouvrir ou enregistrer ailleurs le fichier
+        answer = MsgDialog.ask(
+            "Fin execution",
+            "Le fichier extrait a été enregisté.\nVoulez-vous l'ouvrir ou enregistrer une copie ailleurs ?",
+            buttons_txt=("Ouvrir", "Enregistrer", "Annuler"),
+            parent=self,
+        )
+
+        # Ouverture directe du fichier
+        if answer == "Ouvrir":
+            startfile(self.output_file)
+            return
+
+        # Enregistrement d'une copie
+        if answer == "Enregistrer":
+            file_copy = save_as(self, self.output_file)
+
+            if not file_copy:
+                return
+            if not Path(file_copy).exists():
+                messagebox.showerror("Fichier enregistrer sous", "Erreur copie fichier !", parent=self)
+                return
+
             answer = MsgDialog.ask(
-                "Fin execution",
-                "Le fichier extrait a été enregisté.\nVoulez-vous l'ouvrir ou enregistrer une copie ailleurs ?",
-                buttons,
+                "Fichier enregistrer sous",
+                "La copie du fichier extrait a bien été enregistée.\nVoulez-vous l'ouvrir ?",
+                buttons_txt=("Ouvrir", "Annuler"),
                 parent=self,
             )
             if answer == "Ouvrir":
-                startfile(self.output_file)
-            elif answer == "Enregistrer":
-                save_as(self, self.output_file)
-        else:
-            messagebox.showinfo("Fin execution", "Aucune donnée extraite !", parent=self)
+                startfile(file_copy)
 
     # ------------------------------------------------------------------------------------------
     # Verrouillage / Déverrouillage de l'UI

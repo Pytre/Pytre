@@ -302,7 +302,7 @@ class User:
         entries_dict = {}
         u_entry: Entry
         for u_entry in cls.kee.db.find_entries(username=r".*", group=cls.kee_grp, regex=True):
-            entries_dict[u_entry.username] = u_entry.upper()
+            entries_dict[u_entry.username] = u_entry.username.upper()
 
         cols_std = ["username", "title", "superuser", "grp_authorized", "msg_login"]
         cols_cust = cls.get_cust_attribs_list()

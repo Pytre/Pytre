@@ -691,7 +691,7 @@ class App(tk.Toplevel):
             pass
 
     def open_folder(self, folder: str):
-        if self.output_file:
+        if folder == SETTINGS.extract_folder and self.output_file:
             subprocess.Popen(f"explorer /select,{self.output_file}")
         else:
             subprocess.Popen(f"explorer {folder}")

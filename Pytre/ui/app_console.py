@@ -120,7 +120,7 @@ class TextRedirector:
 
     def write_to_textbox(self, text: str):
         timestamp: str = ""
-        timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3] + "_" + self.tag + ">"
+        timestamp = datetime.now().strftime("%H:%M:%S") + ">"
 
         padded_text = text[:-1].replace("\n", "\n" + len(timestamp) * " ") + text[-1]
 

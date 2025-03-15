@@ -4,7 +4,7 @@ from tkinter import ttk, Event, messagebox
 if not __package__:
     import syspath_insert  # noqa: F401  # disable unused-import warning
 
-from settings import Server
+from servers import Server
 from about import APP_NAME
 
 
@@ -95,7 +95,7 @@ class ServersWindow(tk.Toplevel):
     # ------------------------------------------------------------------------------------------
     # Autres traitements
     # ------------------------------------------------------------------------------------------
-    def toggle_password(self, w_caller: tk.Widget, w_target: tk.Widget, hide_char: str = "\U000025CF"):
+    def toggle_password(self, w_caller: tk.Widget, w_target: tk.Widget, hide_char: str = "\U000025cf"):
         if w_target["show"] == "":
             w_caller.config(text="Voir")
             w_target.config(show=hide_char)

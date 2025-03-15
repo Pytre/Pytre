@@ -26,6 +26,8 @@ from ui.app_about import AboutWindow
 from about import APP_NAME, APP_VERSION
 
 SETTINGS = sql_query.SETTINGS
+USER_PREFS = sql_query.USER_PREFS
+SERVER = sql_query.SERVER
 PRINT_DATE_FORMAT = sql_query.PRINT_DATE_FORMAT
 
 
@@ -35,7 +37,7 @@ class App(tk.Toplevel):
         self.focus_set()
         self.master.withdraw()
 
-        self.user: sql_query.settings.User = SETTINGS.curr_user
+        self.user: sql_query.users.User = sql_query.USER
         self.queries: list[sql_query.Query] = []
         self.query: sql_query.Query = sql_query.Query()
         self.params_widgets: dict[str, ttk.Widget] = {}
@@ -125,7 +127,7 @@ class App(tk.Toplevel):
         return True
 
     def extract_folder_cleaning(self):
-        extract_folder = SETTINGS.extract_folder
+        extract_folder = USER_PREFS.extract_folder
 
         files = old_files.old_files_list(extract_folder)  # liste des fichiers à supprimer
         files_nb = len(files)
@@ -187,7 +189,7 @@ class App(tk.Toplevel):
 
         self.menu_query = tk.Menu(menubar, tearoff=False)
         self.menu_query.add_command(label="Executer", state="disabled", command=self.execute_query)
-        self.menu_query.add_command(label="Dossier...", command=lambda: self.open_folder(SETTINGS.extract_folder))
+        self.menu_query.add_command(label="Dossier...", command=lambda: self.open_folder(USER_PREFS.extract_folder))
         self.menu_query.add_command(label="Journal...", command=lambda: self.open_logs(True))
         self.menu_query.add_command(label="Debug...", state="disabled", command=self.debug_query)
         self.menu_query.add_separator()
@@ -341,7 +343,7 @@ class App(tk.Toplevel):
         self.btn_log = ttk.Button(self.btn_frame, text="\U0001f56e", width=4, command=self.open_logs)
         self.btn_execute = ttk.Button(self.btn_frame, text="Executer", state="disable", command=self.execute_query)
         self.btn_queries_folder = ttk.Button(
-            self.btn_frame, text="Dossier", command=lambda: self.open_folder(SETTINGS.extract_folder)
+            self.btn_frame, text="Dossier", command=lambda: self.open_folder(USER_PREFS.extract_folder)
         )
         self.btn_debug = ttk.Button(self.btn_frame, text="Debug", state="disable", command=self.debug_query)
 
@@ -693,7 +695,7 @@ class App(tk.Toplevel):
             pass
 
     def open_folder(self, folder: str):
-        if folder == SETTINGS.extract_folder and self.output_file:
+        if folder == USER_PREFS.extract_folder and self.output_file:
             subprocess.Popen(f"explorer /select,{self.output_file}")
         else:
             subprocess.Popen(f"explorer {folder}")
@@ -852,7 +854,7 @@ class App(tk.Toplevel):
     def manage_servers(self):
         child = ServersWindow(self)
         self.wait_window(child)
-        SETTINGS.server.reload()
+        SERVER.reload()
 
     def manage_settings(self):
         child = SettingsWindow(self)

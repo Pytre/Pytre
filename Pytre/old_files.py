@@ -3,7 +3,7 @@ from datetime import datetime
 from dateutil.relativedelta import relativedelta
 
 from logs_user import USER_DB
-from settings import USER_SETTING_FILE
+from user_prefs import USER_SETTING_FILE
 
 
 def old_files_list(folder: Path) -> list[Path]:

@@ -8,6 +8,7 @@ Description : xxxxxx
 Hide : 0 / 1 / 2
 Debug : xxxxx
 Grp_Authorized : admin, compta, support
+Servers : db_1, db_2
 */
 
 Le code est utilisé dans la liste des requetes, si pas renseigné alors le nom du fichier est utilisé
@@ -23,6 +24,10 @@ Enfin si aucun groupe n'est donné ou si le paramètre n'existe pas dans l'entê
 
 Tous les utilisateurs appartiennent par défaut au groupe "all"
 Pour rattacher à un utilisateur à d'autres groupe il convient de lui ajouter un tag dans la base des settings
+
+Servers permet d'indiquer sur quels serveurs la requête peut-être executé
+Il est possible d'indiquer plusieurs serveurs en les séparant par des virgules
+Si aucun serveur n'est spécifié alors la requête est considéré comme fonctionnant sur le serveur défini par défaut
 
 D'autres infos peuvent être ajoutée (comme une note de version) mais ne sont pas utilisées par Pytre
 

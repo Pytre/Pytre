@@ -4,7 +4,7 @@ from tkinter import Event, ttk
 if not __package__:
     import syspath_insert  # noqa: F401  # disable unused-import warning
 
-from settings import Kee
+from kee import Kee
 from about import APP_NAME
 
 
@@ -100,7 +100,7 @@ class PasswordWindow(tk.Toplevel):
         self.listbox.bind("<Double-Button-1>", self.copy_to_entry)
         self.protocol("WM_DELETE_WINDOW", self.close)  # arrêter le programme quand fermeture de la fenêtre
 
-    def toggle_password(self, hide_char: str = "\U000025CF"):
+    def toggle_password(self, hide_char: str = "\U000025cf"):
         if self.entry["show"] == "":
             self.reveal.config(text="Voir")
             self.entry.config(show=hide_char)

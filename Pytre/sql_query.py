@@ -7,6 +7,9 @@ from threading import Event
 import pymssql
 
 import settings
+import user_prefs
+import users
+import servers
 import logs_user
 import logs_central
 from convert import Convert
@@ -15,7 +18,10 @@ from about import APP_NAME, APP_VERSION
 
 SETTINGS: settings.Settings = settings.Settings()
 PRINT_DATE_FORMAT: str = "%d/%m/%Y à %H:%M:%S"  # pour le format de la date pour les logs / output
-USER: settings.User = SETTINGS.curr_user
+USER_PREFS: user_prefs.UserPrefs = user_prefs.UserPrefs()
+USER: users.User = users.User()
+SERVERS: servers.Servers = servers.Servers()
+SERVER: servers.Server = servers.Server()
 USER_LOG: logs_user.UserDb = logs_user.UserDb()
 CENTRAL_LOGS: logs_central.FileDriven = logs_central.FileDriven(SETTINGS.logs_folder)
 
@@ -36,20 +42,20 @@ class Query:
         self.cmd_template = self._init_template_cmd()
         self.cmd_params = {}
 
-        self.infos = self._init_infos()
+        self.infos: dict = self._init_infos()
         self.params_obj: dict[str, _Param] = self._init_params()
 
-        self.name = self.infos.get("code", self.filename.stem)
+        self.name: str = self.infos.get("code", self.filename.stem)
 
         hide: str = self.infos.get("hide", "0")
         self.hide: int = int(hide) if hide.isdigit() else 0
-
         if self.hide:
             self.description = "(" + "*" * self.hide + ") " + self.infos.get("description", "")
         else:
             self.description = self.infos.get("description", "")
 
-        self.grp_authorized = self.infos.get("grp_authorized", [])
+        self.grp_authorized: list[str] = self.infos.get("grp_authorized", [])
+        self.servers_id: list[str] = self.infos.get("servers", [SERVERS.default_id])
 
     def _init_file_content(self, encoding_format: str = "utf-8") -> str:
         file_content = ""
@@ -77,7 +83,7 @@ class Query:
                 if regex_infos is not None:
                     info_key = regex_infos.group(1).lower()
 
-                    convert_to_list = ["grp_authorized"]
+                    convert_to_list = ["grp_authorized", "servers"]
                     if info_key in convert_to_list:
                         info_value = [item.lower().strip() for item in regex_infos.group(2).split(",")]
                     else:
@@ -145,10 +151,8 @@ class Query:
             self.query_execute.cmd_template = cmd_exec
             self.query_execute.cmd_parameters = cmd_params
             if file_output:
-                user_id = USER.attribs_cust.get("x3_id", "").upper()
-                query_name = f"{self.name}_{user_id}" if user_id else f"{self.name}"
                 file_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                extract_file = SETTINGS.extract_folder / (f"{query_name}_{file_stamp}.csv")
+                extract_file = USER_PREFS.extract_folder / (f"{self.name}_{file_stamp}.csv")
             else:
                 extract_file = ""
 
@@ -265,7 +269,7 @@ class _Param:
 
     def _calc_func(self, func: str, func_args: str) -> str:
         def user_info(attr: str) -> str:
-            if attr in USER.attribs_std:
+            if attr in USER.users.attribs_std:
                 info = getattr(USER, attr, "")
             else:
                 info = USER.attribs_cust.get(attr, "")
@@ -366,23 +370,27 @@ class _QueryExecute:
         self.cmd_template = ""
         self.cmd_parameters = {}
         self.extract_file = ""
-        self.sql_server_params = {
-            "server": SETTINGS.server.server,
-            "host": SETTINGS.server.host,
-            "user": SETTINGS.server.user,
-            "password": SETTINGS.server.password,
-            "database": SETTINGS.server.database,
-            "timeout": SETTINGS.server.timeout,
-            "login_timeout": SETTINGS.server.login_timeout,
-            "charset": SETTINGS.server.charset,
-            "as_dict": False,
-            "port": SETTINGS.server.port,
-            "read_only": True,
-            "appname": f"{APP_NAME}_{APP_VERSION}",
-        }
 
         self.field_separator = SETTINGS.field_separator
         self.print_date_format = PRINT_DATE_FORMAT
+
+        self.sql_server_params: dict = self.get_servers_params()
+
+    def get_servers_params(self) -> dict:
+        return {
+            "server": SERVER.server,
+            "host": SERVER.host,
+            "user": SERVER.user,
+            "password": SERVER.password,
+            "database": SERVER.database,
+            "timeout": SERVER.timeout,
+            "login_timeout": SERVER.login_timeout,
+            "charset": SERVER.charset,
+            "as_dict": False,
+            "port": SERVER.port,
+            "read_only": True,
+            "appname": f"{APP_NAME}_{APP_VERSION}",
+        }
 
     def execute(self, extract_file):
         self.extract_file = extract_file

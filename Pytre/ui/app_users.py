@@ -5,7 +5,7 @@ if not __package__:
     import syspath_insert  # noqa: F401  # disable unused-import warning
 
 from ui.InputDialog import InputDialog
-from settings import User
+from users import Users, User
 from about import APP_NAME
 
 
@@ -18,6 +18,7 @@ class UsersWindow(tk.Toplevel):
         self.detached_items: set[str] = set()
         self.filter_var: tk.StringVar
 
+        self.users: Users = Users()
         self.default_filter_cols = ["username", "title", "grp_authorized", "x3_id"]
         self.default_sort_col: str = "title"
         self.sort_info: dict[str, str | bool] = {"col": None, "reverse": None}
@@ -120,7 +121,13 @@ class UsersWindow(tk.Toplevel):
             "msg_login_cust": {"text": "Login Message", "minwidth": 100, "stretch": False},
         }
 
-        for attr in User.get_cust_attribs_list():
+        # if attribs_cust need to be initialized
+        if not self.users.attribs_cust:
+            cust_attribs = self.users.get_cust_attribs_list()
+        else:
+            cust_attribs = self.users.attribs_cust
+
+        for attr in cust_attribs:
             cols[attr] = {"text": attr, "minwidth": 60, "stretch": False}
 
         return cols
@@ -206,7 +213,7 @@ class UsersWindow(tk.Toplevel):
     def tree_refresh(self, sort_col: str = ""):
         sort_col = self.default_sort_col if sort_col == "" else sort_col
 
-        users: list[User] = User.users_get_all()
+        users: list[User] = self.users.get_all_users()
         cols = self._tree_cols()
 
         self.tree.delete(*self.tree.get_children())
@@ -214,11 +221,10 @@ class UsersWindow(tk.Toplevel):
         self.detached_items = set()
         self.groups = set()
 
-        cust_attribs: list = User.get_cust_attribs_list()
         for u in users:
             values: list = []
             for col in cols.keys():
-                if col in cust_attribs:
+                if col in self.users.attribs_cust:
                     value = u.attribs_cust.get(col, "")
                 else:
                     value = getattr(u, col, "")
@@ -367,7 +373,7 @@ class UsersWindow(tk.Toplevel):
         types = (("Fichier csv", "*.csv"), ("Tous les fichiers", "*.*"))
         filename = filedialog.askopenfilename(title=title, filetypes=types, parent=self)
 
-        result = User.csv_import(filename)
+        result = self.users.csv_import(filename)
         self.tree_refresh()
         if result:
             msg = "Fin de l'import des utilisateurs"
@@ -383,7 +389,7 @@ class UsersWindow(tk.Toplevel):
         if not filename:
             return
 
-        result = User.csv_export(filename, overwrite=True)
+        result = self.users.csv_export(filename, overwrite=True)
         if result:
             msg = "Fin de l'export des utilisateurs"
             messagebox.showinfo(title="Export", message=msg, parent=self, type=messagebox.OK)
@@ -396,6 +402,8 @@ class UserDialog(tk.Toplevel):
     def __init__(self, parent, user: User = None):
         super().__init__(master=parent)
         self.parent: UsersWindow = parent
+
+        self.users: Users = Users()
         self.user: User = user
 
         self.focus_set()
@@ -447,7 +455,7 @@ class UserDialog(tk.Toplevel):
             "admin": {"text": "Admin"},
             "msg_login_cust": {"text": "Login Message"},
         }
-        for attr in User.get_cust_attribs_list():
+        for attr in self.users.attribs_cust:
             self.entries[attr] = {"text": attr}
 
         num_row = 0
@@ -506,7 +514,7 @@ class UserDialog(tk.Toplevel):
     # ------------------------------------------------------------------------------------------
     def set_entries(self):
         for key, item in self.entries.items():
-            if key in User.get_cust_attribs_list():
+            if key in self.users.attribs_cust:
                 val = self.user.attribs_cust.get(key, "")
             else:
                 val = getattr(self.user, key, "")
@@ -541,7 +549,7 @@ class UserDialog(tk.Toplevel):
         if self.user:
             user = self.user
         else:
-            u_entry = User.find_user_entry(username)
+            u_entry = self.users.find_user_entry(username)
             if u_entry:
                 msg = "Utilisateur déjà existant !"
                 messagebox.showerror(title="Erreur ajout", message=msg, parent=self, type=messagebox.OK)
@@ -550,7 +558,7 @@ class UserDialog(tk.Toplevel):
 
         for key, item in self.entries.items():
             val = item["var"].get()
-            if key in User.get_cust_attribs_list():
+            if key in self.users.attribs_cust:
                 user.attribs_cust[key] = val
             else:
                 setattr(user, key, val)
@@ -586,6 +594,7 @@ class GroupsDialog(tk.Toplevel):
     def __init__(self, parent, usernames: list[str], remove_mode: bool = False):
         super().__init__(master=parent)
         self.parent: UsersWindow = parent
+        self.users: Users = Users()
         self.usernames: list[str] = usernames
 
         self.focus_set()
@@ -697,9 +706,9 @@ class GroupsDialog(tk.Toplevel):
             return
 
         if not self.remove_mode:
-            User.users_add_groups(self.usernames, groups)
+            self.users.users_add_groups(self.usernames, groups)
         else:
-            User.users_remove_groups(self.usernames, groups)
+            self.users.users_remove_groups(self.usernames, groups)
 
         self.close(refresh_tree=True)
 

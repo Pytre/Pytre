@@ -3,7 +3,7 @@ import subprocess
 import tkinter as tk
 import ctypes
 import threading
-from tkinter import Event, ttk, messagebox
+from tkinter import Event, ttk, messagebox, font
 from os import startfile
 from pathlib import Path
 from datetime import datetime
@@ -638,6 +638,8 @@ class App(tk.Toplevel):
         except ValueError as err:
             self.queries = {}
             self.queries_filter(msg_filter=err)
+        finally:
+            self.tree_autosize()
 
         if errors:
             self.output_msg("\n".join(errors))
@@ -731,6 +733,16 @@ class App(tk.Toplevel):
             ):
                 color = "none" if item.description[0:3] != "(*)" else "hidden"
                 self.queries_tree.insert("", tk.END, values=(item.name, item.description), iid=id(item), tags=color)
+
+    def tree_autosize(self):
+        cols_to_autosize = (0,)  # uniquement première colonne
+        tkfont = font.nametofont("TkTextFont")
+        for col in cols_to_autosize:
+            max_width = tkfont.measure(self.queries_tree.heading(col)["text"] + "    ")
+            for item in self.queries_tree.get_children(""):
+                item_width = tkfont.measure(self.queries_tree.set(item, col) + "    ")
+                max_width = max(max_width, item_width)
+            self.queries_tree.column(col, width=max_width)
 
     def tree_selection_change(self, _: Event):
         selected_iid = self.queries_tree.focus()

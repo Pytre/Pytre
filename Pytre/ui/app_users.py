@@ -188,7 +188,7 @@ class UsersWindow(tk.Toplevel):
         for col in cols:
             title = self._tree_cols()[col]["text"]
             if col == sort_col:
-                self.sort_symbols = ("\U000025B3", "\U000025BD")  # self pour que self.tree_autosize() en tienne compte
+                self.sort_symbols = ("\U000025b3", "\U000025bd")  # self pour que self.tree_autosize() en tienne compte
                 title = f"{title} {self.sort_symbols[0]}" if not reverse else f"{title} {self.sort_symbols[1]}"
             self.tree.heading(col, text=title)
 
@@ -228,7 +228,7 @@ class UsersWindow(tk.Toplevel):
                     self.groups.update(value)
                     value = "".join([f"[{item}]" for item in value])
                 if col == "admin":
-                    value = "\U0001F5F9" if value is True else "\U000000B7"
+                    value = "\U0001f5f9" if value is True else "\U000000b7"
                 values.append(value)
 
             try:
@@ -241,15 +241,13 @@ class UsersWindow(tk.Toplevel):
         self.tree_filter()
 
     def tree_autosize(self):
-        sort_max_width = max(
-            font.Font().measure(self.sort_symbols[0]),
-            font.Font().measure(self.sort_symbols[1]),
-        )
+        sort_max_width = max([font.Font().measure(item) for item in self.sort_symbols])
 
+        tkfont = font.nametofont("TkTextFont")
         for col in self.tree["columns"]:
-            max_width = font.Font().measure(self.tree.heading(col)["text"] + "  ") + sort_max_width
+            max_width = tkfont.measure(self.tree.heading(col)["text"] + "    ") + sort_max_width
             for item in self.tree.get_children(""):
-                item_width = font.Font().measure(self.tree.set(item, col))
+                item_width = tkfont.measure(self.tree.set(item, col) + "    ")
                 max_width = max(max_width, item_width)
             self.tree.column(col, width=max_width)
 

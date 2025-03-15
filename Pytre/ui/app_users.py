@@ -214,10 +214,11 @@ class UsersWindow(tk.Toplevel):
         self.detached_items = set()
         self.groups = set()
 
+        cust_attribs: list = User.get_cust_attribs_list()
         for u in users:
             values: list = []
             for col in cols.keys():
-                if col in User.get_cust_attribs_list():
+                if col in cust_attribs:
                     value = u.attribs_cust.get(col, "")
                 else:
                     value = getattr(u, col, "")

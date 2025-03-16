@@ -66,9 +66,10 @@ class AboutWindow(tk.Toplevel):
 
         logo_label = ttk.Label(self.top_frame, image=self.logo_img, justify="center")
         app_label = ttk.Label(self.top_frame, text=about.APP_NAME, font=("TkDefaultFont", 20, "bold"), anchor="sw")
+        app_version = about.APP_VERSION if not about.APP_STATUS else f"{about.APP_VERSION} {about.APP_STATUS}"
         version_label = ttk.Label(
             self.top_frame,
-            text=f"Version : {about.APP_VERSION} - Build {about.APP_BUILD}",
+            text=f"Version : {app_version} - Build {about.APP_BUILD}",
             font=("TkDefaultFont", 8, "normal"),
             anchor="ne",
         )

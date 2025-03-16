@@ -23,7 +23,7 @@ from ui.app_settings import SettingsWindow
 from ui.app_password import PasswordWindow
 from ui.app_console import ConsoleWindow
 from ui.app_about import AboutWindow
-from about import APP_NAME, APP_VERSION
+from about import APP_NAME, APP_VERSION, APP_STATUS
 
 SETTINGS = sql_query.SETTINGS
 USER_PREFS = sql_query.USER_PREFS
@@ -163,7 +163,8 @@ class App(tk.Toplevel):
     # Création de l'interface
     # ------------------------------------------------------------------------------------------
     def setup_ui(self):
-        self.title(f"{APP_NAME} - V.{APP_VERSION}")
+        app_version = APP_VERSION if not APP_STATUS else f"{APP_VERSION} ({APP_STATUS})"
+        self.title(f"{APP_NAME} - V.{app_version}")
         icon_file = SETTINGS.app_path / "res" / "app.ico"
         self.iconbitmap(default=icon_file)
 

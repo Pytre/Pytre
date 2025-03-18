@@ -38,12 +38,12 @@ class Query:
         self.filename = filename
         self.file_content = self._init_file_content(encoding_format)
 
+        self.infos: dict = self._init_infos()
+        self.cmd_params = {}
+        self.params_obj: dict[str, _Param] = self._init_params()
+
         self.raw_cmd = self._init_raw_cmd()
         self.cmd_template = self._init_template_cmd()
-        self.cmd_params = {}
-
-        self.infos: dict = self._init_infos()
-        self.params_obj: dict[str, _Param] = self._init_params()
 
         self.name: str = self.infos.get("code", self.filename.stem)
 
@@ -112,7 +112,14 @@ class Query:
         return raw_cmd
 
     def _init_template_cmd(self) -> str:
-        cmd_template = re.sub(r"(?<![\d\w#_\$@])(@[\d\w#_\$@]+)", r"%(\1)s", self.raw_cmd)
+        def replace_func(match: re.Match):
+            # replace only variables which are parameters
+            if match.group(0) in self.cmd_params.keys():
+                return f"%({match.group(0)})s"
+            else:
+                return match.group(0)
+
+        cmd_template = re.sub(r"(?<![\d\w#_\$@])(@[\d\w#_\$@]+)", replace_func, self.raw_cmd)
         return cmd_template
 
     def reset_values(self):
@@ -569,10 +576,7 @@ def get_queries(folder) -> list[Query]:
 
 if __name__ == "__main__":
     APP_PATH = SETTINGS.app_path
-    sql_scripts = Path(SETTINGS.queries_folder).glob("*.sql")
-    sql_script = ""
-    for sql_script in sql_scripts:
-        break
+    sql_script = list(Path(SETTINGS.queries_folder).glob("*.sql"))[0]
 
     my_query = Query(sql_script)
     my_query.update_values()

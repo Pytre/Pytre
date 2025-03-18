@@ -118,6 +118,7 @@ class UserDb:
                 conn.execute(
                     """
                         CREATE TABLE QUERIES_EXEC (
+                            SERVER_ID        TEXT,
                             QUERY            TEXT        NOT NULL,
                             START            TEXT        NOT NULL,
                             DURATION_SECS    INTEGER,
@@ -198,6 +199,7 @@ class UserDb:
     # ------------------------------------------------------------------------------------------
     def insert_exec(
         self,
+        server_id: str,
         query: str,
         start: datetime,
         end: datetime = None,
@@ -216,9 +218,9 @@ class UserDb:
             with sqlite3.connect(f"file:{self.user_db}?mode=rw", uri=True) as conn:
                 # insertion infos
                 conn.execute(
-                    """INSERT INTO QUERIES_EXEC (QUERY, START, DURATION_SECS, NB_ROWS, PARAMETERS, FILE)
-                        VALUES (?, ?, ?, ?, ?, ?);""",
-                    (query, log_start, log_duration, nb_rows, log_params, log_file),
+                    """INSERT INTO QUERIES_EXEC (SERVER_ID, QUERY, START, DURATION_SECS, NB_ROWS, PARAMETERS, FILE)
+                        VALUES (?, ?, ?, ?, ?, ?, ?);""",
+                    (server_id, query, log_start, log_duration, nb_rows, log_params, log_file),
                 )
 
                 # nettoyage pour ne garder que les requêtes les plus récentes

@@ -53,7 +53,9 @@ class Servers(metaclass=Singleton):
 
         self.servers_dict = {}
         for entry in self.kee_grp.entries:
-            if not entry.title == self.default_title:
+            # vérification si l'entrée défaut n'a pas des infos de connection
+            # si c'est le cas alors on est en ancienne version et on l'ajoute
+            if not entry.title == self.default_title or entry.custom_properties:
                 self.servers_dict[entry.title] = Server(entry=entry)
 
         return self.servers_dict
@@ -161,8 +163,8 @@ class Server:
 
 
 if __name__ == "__main__":
-    server = Server()
-    print(server)
+    # server = Server()
+    # print(server)
 
     servers = Servers()
     for _, server in servers.get_all_servers().items():

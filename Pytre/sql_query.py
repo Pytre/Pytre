@@ -148,15 +148,18 @@ class Query:
 
         return True
 
-    def execute_cmd(self, file_output: bool = True) -> bool | tuple:
+    def execute_cmd(self, file_output: bool = True, server_id: str = "") -> bool | tuple:
         self.msg_list = []
         self.last_extracted_file = ""
         self.update_values()
 
         if self.values_ok():
+            if not SERVERS.servers_dict:
+                SERVERS.get_all_servers()
+
+            server_id = server_id if server_id else self.servers_id[0]
             cmd_exec, cmd_params = self.get_infos_for_exec()
-            self.query_execute.cmd_template = cmd_exec
-            self.query_execute.cmd_parameters = cmd_params
+
             if file_output:
                 file_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 extract_file = USER_PREFS.extract_folder / (f"{self.name}_{file_stamp}.csv")
@@ -164,9 +167,11 @@ class Query:
                 extract_file = ""
 
             try:
-                result = self.query_execute.execute(extract_file)
+                result = self.query_execute.execute(server_id, cmd_exec, cmd_params, extract_file)
                 self.last_extracted_file = extract_file if file_output else ""
                 return result
+            except KeyError:
+                return False
             except pymssql._pymssql.OperationalError as err:
                 err_msg = str("=") * 50 + "\n"
                 err_msg += err.args[0][1].decode("utf-8") + "\n"
@@ -376,30 +381,49 @@ class _QueryExecute:
 
         self.cmd_template = ""
         self.cmd_parameters = {}
+        self.server_id = ""
         self.extract_file = ""
 
         self.field_separator = SETTINGS.field_separator
         self.print_date_format = PRINT_DATE_FORMAT
 
-        self.sql_server_params: dict = self.get_servers_params()
+        self.sql_server_params: dict = {}
 
-    def get_servers_params(self) -> dict:
-        return {
-            "server": SERVER.server,
-            "host": SERVER.host,
-            "user": SERVER.user,
-            "password": SERVER.password,
-            "database": SERVER.database,
-            "timeout": SERVER.timeout,
-            "login_timeout": SERVER.login_timeout,
-            "charset": SERVER.charset,
+    def set_servers_params(self, server_id) -> dict:
+        self.server_id = server_id
+
+        try:
+            server = SERVERS.servers_dict[self.server_id]
+        except KeyError:
+            self.sql_server_params = {}
+            error_msg = f"Infos de connection au serveur non trouvé, id : {self.server_id}"
+            self._broadcast(self._time_log() + f" - {error_msg}")
+            return {}
+
+        self.sql_server_params = {
+            "server": server.server,
+            "host": server.host,
+            "user": server.user,
+            "password": server.password,
+            "database": server.database,
+            "timeout": server.timeout,
+            "login_timeout": server.login_timeout,
+            "charset": server.charset,
             "as_dict": False,
-            "port": SERVER.port,
+            "port": server.port,
             "read_only": True,
             "appname": f"{APP_NAME}_{APP_VERSION}",
         }
 
-    def execute(self, extract_file):
+        return self.sql_server_params
+
+    def execute(self, server_id, cmd_template, cmd_parameters, extract_file):
+        self.set_servers_params(server_id)
+        if not self.sql_server_params:
+            return False
+
+        self.cmd_template = cmd_template
+        self.cmd_parameters = cmd_parameters
         self.extract_file = extract_file
 
         if self.cmd_template == "":
@@ -435,7 +459,13 @@ class _QueryExecute:
     def _execute_end(self, starting_date: datetime, ending_date: datetime, rows_count: int):
         params_for_log = self._params_for_log()
         USER_LOG.insert_exec(
-            self.parent.name, starting_date, ending_date, rows_count, params_for_log, self.extract_file
+            self.server_id,
+            self.parent.name,
+            starting_date,
+            ending_date,
+            rows_count,
+            params_for_log,
+            self.extract_file,
         )
 
         if SETTINGS.logs_are_on:

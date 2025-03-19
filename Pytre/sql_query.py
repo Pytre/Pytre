@@ -208,6 +208,31 @@ class Query:
 
         return cmd_debug
 
+    def get_params_for_debug(self, only_not_parameterized: bool = False) -> dict[int, int]:
+        """position et longueur des paramètres après remplacement par leurs valeurs"""
+        offset: int = 0
+        var_pos: dict[int, int] = {}
+
+        for match in re.finditer(r"(?<![\d\w#_\$@])(@!?[\d\w#_\$@]+)", self.raw_cmd):
+            param = match.group(0)
+            if param not in self.cmd_params.keys():
+                continue
+            if only_not_parameterized and not param[0:2] == "@!":
+                continue
+
+            value = self.cmd_params.get(param, "")
+            if isinstance(value, str) and not param[0:2] == "@!":
+                value = "'" + value.replace("'", "''") + "'"
+            else:
+                value = str(value)
+
+            start = offset + match.start()
+            end = offset + match.end() + len(value) - len(param)
+            var_pos[start] = end - start
+            offset += len(value) - len(param)
+
+        return var_pos
+
     def _broadcast(self, msg_to_broadcast: str) -> None:
         self.msg_list.append(msg_to_broadcast)
         print(msg_to_broadcast)

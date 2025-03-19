@@ -94,10 +94,11 @@ class DebugWindow(tk.Toplevel):
         self.output_to_textbox(self.tabs["template"]["textbox"], self.query.get_infos_for_exec()[0])
         self.output_to_textbox(self.tabs["params"]["textbox"], "\n".join(params_lst))
 
-        for tab in ["debug", "template", "params"]:
-            self.syntax_color(self.tabs[tab]["textbox"])
+        self.syntax_color(self.tabs["debug"]["textbox"], self.query.get_params_for_debug())
+        self.syntax_color(self.tabs["template"]["textbox"], self.query.get_params_for_debug(True))
+        self.syntax_color(self.tabs["params"]["textbox"])
 
-    def syntax_color(self, tbox: tk.Text):
+    def syntax_color(self, tbox: tk.Text, forced: dict[int, int] = dict()):
         tbox.tag_configure(TokenType.KEYWORD.value, foreground="blue")
         tbox.tag_configure(TokenType.PARAMETER.value, foreground="purple", background="gray90")
         tbox.tag_configure(TokenType.NUMBER.value, foreground="red")
@@ -111,6 +112,11 @@ class DebugWindow(tk.Toplevel):
                     start_pos = f"1.0 + {token.pos} chars"
                     end_pos = f"1.0 + {token.pos + token.length} chars"
                     tbox.tag_add(tag, start_pos, end_pos)
+                if token.pos in forced and not token.type == TokenType.COMMENT:
+                    start_pos = f"1.0 + {token.pos} chars"
+                    end_pos = f"1.0 + {token.pos + forced[token.pos]} chars"
+                    tbox.tag_remove(tag, start_pos, end_pos)
+                    tbox.tag_add(TokenType.PARAMETER.value, start_pos, end_pos)
 
     def output_to_textbox(self, ctrl: tk.Text, text: str = ""):
         ctrl["state"] = "normal"

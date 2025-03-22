@@ -262,6 +262,8 @@ class _Param:
         self.value_is_ok = False
         self.ui_control = ""
         self.authorized_values = {}
+        self.ctrl_pattern = ""
+        self.ctr_pattern_is_ok = False
 
         self._infos_from_comment()
 
@@ -278,12 +280,19 @@ class _Param:
         return [arg.strip() for arg in str_type_args]
 
     def _infos_from_comment(self) -> None:
-        comment = re.search(r"--\s*(.*?)(?=\||$)\|?(.*$)", self.sql_declare)
-        if comment[1]:
-            self.description = comment[1]
+        comment = re.search(r"--\s*(.+)", self.sql_declare)
+        if not comment:
+            return
 
-        if comment[2]:
-            infos = re.sub(r"(\(.*?\))|(,)", r"\1^^^", comment[2])
+        comment_infos = comment[1].split("|")
+
+        # libellé
+        if comment_infos[0]:
+            self.description = comment_infos[0]
+
+        # infos optionnel ou UI contrôle
+        if len(comment_infos) > 1 and comment_infos[1]:
+            infos = re.sub(r"(\(.*?\))|(,)", r"\1^^^", comment_infos[1])
             infos = [m.strip() for m in re.split(r"\^{3,6}", infos) if m.strip()]
 
             ui_funcs = ("entry", "list", "check")
@@ -303,6 +312,10 @@ class _Param:
                 elif info_func in ui_funcs or info_func == "":
                     self.ui_control = info_func
                     self._authorized_values(info_func, info_args)
+
+        # pattern regex pour ctrl valeur
+        if len(comment_infos) > 2 and comment_infos[2]:
+            self.ctrl_pattern = ("|").join(comment_infos[2:])
 
     def _calc_func(self, func: str, func_args: str) -> str:
         def user_info(attr: str) -> str:
@@ -373,6 +386,7 @@ class _Param:
 
     def update_value_cmd(self) -> str | int | float:
         self.value_is_ok = False
+        self.ctr_pattern_is_ok = False
         self.value_cmd = ""
         val_to_test = self.display_value
 
@@ -395,6 +409,9 @@ class _Param:
                 self.display_value = self.converter.to_display(self.type_name, self.value_cmd)
 
         self.value_is_ok = True
+
+        if not val_to_test or not self.ctrl_pattern or re.match(self.ctrl_pattern, val_to_test):
+            self.ctr_pattern_is_ok = True
 
         return self.value_cmd
 

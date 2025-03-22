@@ -36,18 +36,20 @@ Pour les paramètres créer un bloc DECLARE :
 -------------------------------------------
 
 DECLARE
-@1 as TYPE_VARIABLE = 'VAL_DEFAUT'	-- LIBELLE|PARAMETRES
+@1 as TYPE_VARIABLE = 'VAL_DEFAUT'	-- LIBELLE|PARAMETRES|REGEX_CTRL
 ;
 
 TYPE_VARIABLE => int, date, nvarchar(), etc...
 VAL_DEFAUT => valeur par défaut qui sera aussi utilisé dans Pytre
 
 Les infos supplémentaire de la variable sont récupérées dans le commentaire  de la ligne.
-Attention de bien utiliser "--" pour le commentaire
+Attention de bien utiliser "--" pour le commentaire.
+Le pipe ("|") est interdit sauf pour REGEX_CTRL.
 
 Le commentaire est splitté dans un premier temps en utilisant le pipe ("|") pour récupérer :
 		LIBELLE : pour le libellé du paramètre
-		PARAMETRES : pour les paramètres de la variable
+		PARAMETRES : optionnel, pour les paramètres de la variable
+		REGEX_CTRL : optionnel, pour indiquer un regex auquel la valeur doit correspondre
 
 Les paramètres ne sont pas obligatoire et il peut n'y en avoir aucun.
 Les types de paramètres possibles sont au nombre de 3. Pour en indiquer plusieurs il convient d'utiliser la virgule entre chaque paramètre.

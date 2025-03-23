@@ -206,7 +206,7 @@ class App(tk.Toplevel):
         if self.user.admin:
             menu_admin = tk.Menu(menubar, tearoff=False)
             menu_admin.add_command(label="Utilisateurs...", command=self.manage_users)
-            menu_admin.add_command(label="Serveur...", command=self.manage_servers)
+            menu_admin.add_command(label="Serveurs...", command=self.manage_servers)
             menu_admin.add_command(label="Paramètres généraux...", command=self.manage_settings)
             menu_admin.add_separator()
             menu_admin.add_command(label="Paramètres, mot de passe...", command=self.manage_password)

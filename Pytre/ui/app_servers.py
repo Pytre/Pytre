@@ -25,7 +25,8 @@ class ServersWindow(tk.Toplevel):
         self.type_server: tuple[str] = tuple([type.value for type in ServerType])
         self.groups: set[str] = set()
 
-        self.server = self.servers.servers_dict[self.servers.default_id]
+        self.server: Server = None
+        self.new_server: bool = False
 
         self._setup_ui()
         self._events_binds()
@@ -111,6 +112,8 @@ class ServersWindow(tk.Toplevel):
     def _setup_type(self):
         my_label = ttk.Label(self.entries_frame, text="type : ")
         self.type_box = ttk.Combobox(self.entries_frame, state="readonly", values=self.type_server)
+        if len(self.type_server) <= 1:
+            self.type_box["state"] = "disable"
 
         my_label.grid(row=0, column=0, padx=2, pady=2, sticky="nswe")
         self.type_box.grid(row=0, column=1, columnspan=2, padx=2, pady=2, sticky="nswe")
@@ -118,7 +121,7 @@ class ServersWindow(tk.Toplevel):
     def _setup_entries(self):
         self.entries = {}
         num_row = 1
-        for key in self.server.to_dict().keys():
+        for key in self.servers.cols_std + self.servers.cols_cust:
             if key in ("uuid", "type", "grp_authorized"):
                 continue
 
@@ -141,13 +144,6 @@ class ServersWindow(tk.Toplevel):
                 my_entry.grid(row=num_row, column=1, columnspan=2, padx=2, pady=2, sticky="nswe")
 
             num_row += 1
-
-        my_label = ttk.Label(self.entries_frame, text="Serveur par défaut : ")
-        self.default_cb_tkvar = tk.IntVar()
-        self.default_cb = ttk.Checkbutton(self.entries_frame, variable=self.default_cb_tkvar)
-
-        my_label.grid(row=num_row, column=0, padx=2, pady=2, sticky="nswe")
-        self.default_cb.grid(row=num_row, column=1, columnspan=2, padx=2, pady=2, sticky="nswe")
 
         self.entries_frame.columnconfigure(1, weight=1)
 
@@ -262,6 +258,10 @@ class ServersWindow(tk.Toplevel):
             self.tree.column(col, width=max_width)
 
     def tree_selection_change(self, _: Event):
+        if self.new_server and not self.tree.focus() == str(id(self.server)):
+            self.tree.delete(id(self.server))
+            self.new_server = False
+
         selected_iid = self.tree.focus()
         selected_values = self.tree.item(selected_iid, "values")
 
@@ -272,22 +272,14 @@ class ServersWindow(tk.Toplevel):
             if selected_iid == str(id(server)):
                 self.server = server
                 self.server_update()
-                self.new_server = False
                 break
 
     def server_update(self):
-        self.type_box.set(self.server.type)
+        self.type_box.set(ServerType[self.server.type].value)
 
         for key in self.entries.keys():
             val = getattr(self.server, key)
             self.entries[key]["var"].set(val)
-
-        if self.server.id == self.servers.default_id:
-            self.default_cb_tkvar.set(1)
-            self.default_cb["state"] = "disabled"
-        else:
-            self.default_cb_tkvar.set(0)
-            self.default_cb["state"] = "enabled"
 
         self.groups_set()
 
@@ -332,9 +324,12 @@ class ServersWindow(tk.Toplevel):
     # Autres traitements
     # ------------------------------------------------------------------------------------------
     def server_new(self):
-        self.tree.selection_set("")
-        self.tree.focus("")
-        self.server = Server(load_default=False)
+        self.server = Server()
+        iid = id(self.server)
+        self.tree.insert("", tk.END, values=("", ""), iid=iid)
+
+        self.tree.selection_set(iid)
+        self.tree.focus(iid)
         self.server_update()
         self.new_server = True
 
@@ -360,10 +355,6 @@ class ServersWindow(tk.Toplevel):
 
         self.server.grp_authorized = [self.listbox.get(line) for line in self.listbox.curselection()]
 
-        if self.default_cb_tkvar.get() == 1:
-            self.servers.set_default_id(self.server.id, False)
-            self.default_cb["state"] = "disabled"
-
         # enregistrement des infos
         try:
             result = self.server.save()
@@ -376,17 +367,20 @@ class ServersWindow(tk.Toplevel):
 
         # signalement de la fin de l'enregistrement
         if result:
+            self.new_server = False
+            self.reload_all()
             msg = "Modifications enregistrées"
             messagebox.showinfo(title="Mise à jour infos serveur", message=msg, parent=self, type=messagebox.OK)
-            self.reload_all()
         else:
             msg = "Problème lors de l'enregistrement !"
             messagebox.showerror(title="Mise à jour infos serveur", message=msg, parent=self, type=messagebox.OK)
 
     def server_remove(self):
+        curr_pos = self.tree.index(self.tree.focus())
         result = self.server.delete()
         if result:
             self.reload_all()
+            self.tree_select_pos(max(curr_pos - 1, 0))
             msg = "Suppression du serveur réussi"
             messagebox.showinfo(title="Suppression infos serveur", message=msg, parent=self, type=messagebox.OK)
         else:

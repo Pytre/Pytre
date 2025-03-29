@@ -27,7 +27,6 @@ from about import APP_NAME, APP_VERSION, APP_STATUS
 
 SETTINGS = sql_query.SETTINGS
 USER_PREFS = sql_query.USER_PREFS
-SERVER = sql_query.SERVER
 PRINT_DATE_FORMAT = sql_query.PRINT_DATE_FORMAT
 
 
@@ -868,7 +867,6 @@ class App(tk.Toplevel):
     def manage_servers(self):
         child = ServersWindow(self)
         self.wait_window(child)
-        SERVER.reload()
 
     def manage_settings(self):
         child = SettingsWindow(self)

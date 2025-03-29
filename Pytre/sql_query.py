@@ -21,7 +21,6 @@ PRINT_DATE_FORMAT: str = "%d/%m/%Y à %H:%M:%S"  # pour le format de la date pou
 USER_PREFS: user_prefs.UserPrefs = user_prefs.UserPrefs()
 USER: users.User = users.User()
 SERVERS: servers.Servers = servers.Servers()
-SERVER: servers.Server = servers.Server()
 USER_LOG: logs_user.UserDb = logs_user.UserDb()
 CENTRAL_LOGS: logs_central.FileDriven = logs_central.FileDriven(SETTINGS.logs_folder)
 
@@ -55,7 +54,8 @@ class Query:
             self.description = self.infos.get("description", "")
 
         self.grp_authorized: list[str] = self.infos.get("grp_authorized", [])
-        self.servers_id: list[str] = self.infos.get("servers", [SERVERS.default_id])
+        first_id = server[0].id if (server := list(SERVERS.servers_dict.values())) else ""
+        self.servers_id: list[str] = self.infos.get("servers", [first_id])
 
     def _init_file_content(self, encoding_format: str = "utf-8") -> str:
         file_content = ""

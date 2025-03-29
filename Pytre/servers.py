@@ -8,9 +8,6 @@ from pykeepass.group import Group
 from kee import Kee
 
 
-DEFAULT_TITLE: str = "Default"  # entry title to set default id to username
-
-
 class Singleton(type):
     _instances = {}
 
@@ -27,14 +24,12 @@ class Servers(metaclass=Singleton):
         self.kee_grp_name: str = "Serveurs"
         self.kee_grp: Group = None
 
-        self.default_title: str = DEFAULT_TITLE  # entry title to set default id to username
-        self.default_id: str = ""
         self.servers_dict: dict[str, Server] = {}
 
         self.cols_std = ["id", "description", "user", "password", "grp_authorized"]
         self.cols_cust = ["type", "charset", "database", "host", "port", "server", "login_timeout", "timeout"]
 
-        self.get_default_id()
+        self.get_all_servers()
 
     def open_db(self, reload: bool = False) -> bool:
         self.kee._open_db(reload)
@@ -43,57 +38,12 @@ class Servers(metaclass=Singleton):
         self.kee_grp = self.kee.db.find_groups(name=self.kee_grp_name, first=True)
         return True
 
-    def get_default_id(self, reload=False) -> str:
-        if not self.open_db(reload):
-            return ""
-
-        s_entry: Entry = self.kee.db.find_entries(path=[self.kee_grp_name, self.default_title])
-
-        # if default entry does not exist, create it with no default server
-        if not s_entry:
-            self.kee.db.add_entry(self.kee_grp, self.default_title, "", "")
-            self.kee.db.save()
-            self.default_id = ""
-        # if default entry exists but hold info to connect to server then migrate
-        elif s_entry.custom_properties:
-            self.default_id = self.migrate_to_multiservers()
-        # if default entry point to an entry that doesn't exists then pick first defined server or create one
-        elif not self.kee.db.find_entries(path=[self.kee_grp_name, s_entry.username]):
-            servers = [entry for entry in self.kee_grp.entries if entry.custom_properties]
-            if not servers:
-                servers = [self.kee.db.add_entry(self.kee_grp, s_entry.username, "", "")]
-            s_entry.username = servers[0].title
-            self.kee.db.save()
-            self.default_id = s_entry.username
-        else:
-            self.default_id = s_entry.username
-
-        return self.default_id
-
-    def set_default_id(self, default_id: str, save=True) -> bool:
-        s_entry: Entry = self.kee.db.find_entries(path=[self.kee_grp_name, self.default_title])
-
-        if not s_entry or s_entry.custom_properties:
-            print("Error, couldn't set default id")
-            return False
-
-        if default_id == s_entry.username:  # pas de changement
-            return True
-
-        s_entry.username = default_id
-        self.default_id = default_id
-        if save:
-            self.kee.save_db()
-
-        return True
-
     def get_all_servers(self, reload: bool = False) -> dict:
         self.open_db(reload)
 
         self.servers_dict = {}
         for entry in self.kee_grp.entries:
-            if entry.custom_properties:
-                self.servers_dict[entry.title] = Server(entry=entry)
+            self.servers_dict[entry.title] = Server(entry=entry, servers=self)
 
         return self.servers_dict
 
@@ -103,21 +53,6 @@ class Servers(metaclass=Singleton):
                 return entry
 
         return None
-
-    def migrate_to_multiservers(self) -> str:
-        entry: Entry = self.kee.db.find_entries(path=[self.kee_grp_name, self.default_title])
-
-        # if no custom properties for default title then migration already happened
-        if not entry.custom_properties:
-            return ""
-
-        entry.title = entry.custom_properties.get("database")
-        self.kee.db.add_entry(self.kee_grp, self.default_title, entry.title, "")
-        self.default_id = entry.title
-
-        self.kee.db.save()
-
-        return entry.title
 
     def csv_import(self, filename: Path, delimiter: str = ";") -> bool:
         self.open_db(True)
@@ -198,20 +133,20 @@ class Servers(metaclass=Singleton):
 
 
 class ServerType(Enum):
-    mssql = "mssql"
+    mssql = "SQL Server"
     # postgre = "PostgreSQL"
 
 
 class Server:
-    def __init__(self, entry: Entry = None, load_default: bool = True):
-        self.servers: Servers = Servers()
+    def __init__(self, entry: Entry = None, servers: Servers = None):
+        self.servers: Servers = servers or Servers()
 
         self.uuid: str = ""
         self.id: str = ""
         self.description: str = ""
         self.user: str = ""
         self.password: str = ""
-        self.type: str = ""
+        self.type: str = list(ServerType)[0].name
         self.charset: str = "UTF-8"
         self.database: str = ""
         self.host: str = ""
@@ -221,14 +156,8 @@ class Server:
         self.timeout: int = 300
         self.grp_authorized: list[str] = []
 
-        if not self.servers.default_id:
-            self.servers.get_default_id()
-
         if entry:
             self._load_from_entry(entry)
-        elif load_default:
-            self.id = self.servers.default_id
-            self.load()
 
     def to_dict(self) -> dict:
         return {
@@ -253,14 +182,6 @@ class Server:
 
     def __str__(self) -> str:
         return str(self.to_dict())
-
-    def load(self):
-        if not self.servers.open_db():
-            return
-
-        s_entry: Entry = self.servers.kee.db.find_entries(path=[self.servers.kee_grp_name, self.id])
-        if s_entry:
-            self._load_from_entry(s_entry)
 
     def _load_from_entry(self, s_entry: Entry):
         self.uuid = s_entry.uuid
@@ -295,8 +216,6 @@ class Server:
         self.servers.open_db(True)
 
         # contrôle
-        if self.id == self.servers.default_title:
-            raise ValueError(f"{self.id} est interdit comme identifiant")
         if [s for s in self.servers.get_all_servers().values() if s.id == self.id and not s.uuid == self.uuid]:
             raise ValueError(f"{self.id} est déjà utilisé comme identifiant")
 
@@ -337,14 +256,13 @@ class Server:
 
         s_entry.delete()
         self.servers.kee.save_db()
-        self.servers.get_default_id()  # si l'entrée qui vient d'être effacée été l'id par défaut
 
         return True
 
 
 if __name__ == "__main__":
-    # server = Server()
-    # print(server)
+    server = Server()
+    print(server)
 
     servers = Servers()
     for _, server in servers.get_all_servers().items():

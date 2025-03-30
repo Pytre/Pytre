@@ -31,7 +31,7 @@ class ServersWindow(tk.Toplevel):
         self._setup_ui()
         self._events_binds()
 
-        self.tree_refresh()
+        self.reload_all()
 
     # ------------------------------------------------------------------------------------------
     # Création de l'interface

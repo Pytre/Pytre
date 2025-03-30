@@ -21,6 +21,7 @@ class PasswordWindow(tk.Toplevel):
             self.transient(self.parent)
 
         self.kee: Kee = Kee()
+        self.kee._open_db(True)
         self.history: list[str] = self.kee.pwd_history()
 
         self._setup_ui()

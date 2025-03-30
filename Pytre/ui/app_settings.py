@@ -20,6 +20,7 @@ class SettingsWindow(tk.Toplevel):
             self.master.withdraw()
 
         self.settings = Settings()
+        self.settings.reload()
 
         self._setup_ui()
         self._events_binds()

@@ -9,16 +9,7 @@ from pykeepass.entry import Entry
 from pykeepass.group import Group
 
 from kee import Kee
-
-
-class Singleton(type):
-    _instances = {}
-
-    def __call__(cls, *args, **kwargs):
-        if cls not in cls._instances:
-            cls._instances[cls] = super(Singleton, cls).__call__(*args, **kwargs)
-
-        return cls._instances[cls]
+from singleton_metaclass import Singleton
 
 
 class Users(metaclass=Singleton):
@@ -378,8 +369,12 @@ class User:
         return True
 
 
+class CurrentUser(User, metaclass=Singleton):
+    pass
+
+
 if __name__ == "__main__":
-    user = User()
+    user = CurrentUser()
 
     print(f"{'='*50}\nSettings / Utilisateur courant\n{'='*50}")
     for key, val in user.to_dict().items():

@@ -10,12 +10,14 @@ from datetime import datetime
 from threading import Thread, Event
 from pathlib import Path
 
+from singleton_metaclass import Singleton
+
 
 CENTRAL_DB: Path = "Pytre_Central_Logs.db"
 LATEST_VERSION: int = 2  # latest version model of central database
 
 
-class CentralLogs:
+class CentralLogs(metaclass=Singleton):
     def __init__(self, logs_folder: Path = "."):
         self.sync_thread = None
         self.logs_folder: Path = Path(logs_folder)

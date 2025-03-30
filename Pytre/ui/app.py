@@ -13,6 +13,9 @@ if not __package__:
 
 import old_files
 import sql_query
+import settings
+import users
+import user_prefs
 from ui.save_as import save_as
 from ui.MsgDialog import MsgDialog
 from ui.app_logs import LogsWindow
@@ -25,10 +28,6 @@ from ui.app_console import ConsoleWindow
 from ui.app_about import AboutWindow
 from about import APP_NAME, APP_VERSION, APP_STATUS
 
-SETTINGS = sql_query.SETTINGS
-USER_PREFS = sql_query.USER_PREFS
-PRINT_DATE_FORMAT = sql_query.PRINT_DATE_FORMAT
-
 
 class App(tk.Toplevel):
     def __init__(self):
@@ -36,12 +35,17 @@ class App(tk.Toplevel):
         self.focus_set()
         self.master.withdraw()
 
-        self.user: sql_query.users.User = sql_query.USER
+        self.user: users.CurrentUser = users.CurrentUser()
+        self.prefs: user_prefs.UserPrefs = user_prefs.UserPrefs()
+        self.app_settings: settings.Settings = settings.Settings()
+
         self.queries: list[sql_query.Query] = []
         self.query: sql_query.Query = sql_query.Query()
         self.params_widgets: dict[str, ttk.Widget] = {}
         self.output_file: Path = ""
         self.force_stop: threading.Event = threading.Event()
+
+        self.date_format = sql_query.PRINT_DATE_FORMAT
 
         self.setup_style()
         self.setup_ui()
@@ -92,7 +96,7 @@ class App(tk.Toplevel):
         return False
 
     def check_min_version(self) -> bool:
-        queries_folder = Path(SETTINGS.queries_folder)
+        queries_folder = Path(self.app_settings.queries_folder)
         if not queries_folder.is_dir():
             messagebox.showerror(
                 "Répertoire inexistant",
@@ -101,23 +105,23 @@ class App(tk.Toplevel):
             )
             return False
 
-        if not self.version_used_gte_mini(SETTINGS.settings_version, SETTINGS.min_version_settings):
+        if not self.version_used_gte_mini(self.app_settings.settings_version, self.app_settings.min_version_settings):
             messagebox.showerror(
                 "Version settings.db",
                 "Le fichier settings.db utilisé n'est pas à jour."
-                f"\n\n- Version utilisée : {SETTINGS.settings_version}"
-                f"\n- Version mini : {SETTINGS.min_version_settings}"
+                f"\n\n- Version utilisée : {self.app_settings.settings_version}"
+                f"\n- Version mini : {self.app_settings.min_version_settings}"
                 "\n\nMerci d'utiliser le fichier des settings à jour",
                 parent=self,
             )
             return False
 
-        if not self.version_used_gte_mini(APP_VERSION, SETTINGS.min_version_pytre):
+        if not self.version_used_gte_mini(APP_VERSION, self.app_settings.min_version_pytre):
             messagebox.showerror(
                 f"Version {APP_NAME}",
                 f"Votre version de {APP_NAME} n'est pas à jour."
                 f"\n\n- Version utilisée : {APP_VERSION}"
-                f"\n- Version mini : {SETTINGS.min_version_pytre}"
+                f"\n- Version mini : {self.app_settings.min_version_pytre}"
                 "\n\nMerci d'utiliser une version à jour",
                 parent=self,
             )
@@ -126,7 +130,7 @@ class App(tk.Toplevel):
         return True
 
     def extract_folder_cleaning(self):
-        extract_folder = USER_PREFS.extract_folder
+        extract_folder = self.prefs.extract_folder
 
         files = old_files.old_files_list(extract_folder)  # liste des fichiers à supprimer
         files_nb = len(files)
@@ -164,7 +168,7 @@ class App(tk.Toplevel):
     def setup_ui(self):
         app_version = APP_VERSION if not APP_STATUS else f"{APP_VERSION} ({APP_STATUS})"
         self.title(f"{APP_NAME} - V.{app_version}")
-        icon_file = SETTINGS.app_path / "res" / "app.ico"
+        icon_file = self.app_settings.app_path / "res" / "app.ico"
         self.iconbitmap(default=icon_file)
 
         self.minsize(width=975, height=700)
@@ -189,14 +193,14 @@ class App(tk.Toplevel):
 
         self.menu_query = tk.Menu(menubar, tearoff=False)
         self.menu_query.add_command(label="Executer", state="disabled", command=self.execute_query)
-        self.menu_query.add_command(label="Dossier...", command=lambda: self.open_folder(USER_PREFS.extract_folder))
+        self.menu_query.add_command(label="Dossier...", command=lambda: self.open_folder(self.prefs.extract_folder))
         self.menu_query.add_command(label="Journal...", command=lambda: self.open_logs(True))
         self.menu_query.add_command(label="Debug...", state="disabled", command=self.debug_query)
         self.menu_query.add_separator()
         self.menu_query.add_command(label="Recharger", command=lambda: self.refresh_queries())
         if self.user.admin:
             self.menu_query.add_command(
-                label="Paramètrage...", command=lambda: self.open_folder(SETTINGS.queries_folder)
+                label="Paramètrage...", command=lambda: self.open_folder(self.app_settings.queries_folder)
             )
         self.menu_query.add_separator()
         self.menu_query.add_command(label="Quitter", command=self.app_exit)
@@ -343,7 +347,7 @@ class App(tk.Toplevel):
         self.btn_log = ttk.Button(self.btn_frame, text="\U0001f56e", width=4, command=self.open_logs)
         self.btn_execute = ttk.Button(self.btn_frame, text="Executer", state="disable", command=self.execute_query)
         self.btn_queries_folder = ttk.Button(
-            self.btn_frame, text="Dossier", command=lambda: self.open_folder(USER_PREFS.extract_folder)
+            self.btn_frame, text="Dossier", command=lambda: self.open_folder(self.prefs.extract_folder)
         )
         self.btn_debug = ttk.Button(self.btn_frame, text="Debug", state="disable", command=self.debug_query)
 
@@ -528,7 +532,7 @@ class App(tk.Toplevel):
             ctypes.windll.kernel32.TerminateThread(thread_handle, 0)  # Windows API pour terminer le thread
             ctypes.windll.kernel32.CloseHandle(thread_handle)  # fermeture du handle pour éviter les leaks
 
-        msg = "\n" + datetime.now().strftime(PRINT_DATE_FORMAT) + " - Requête interrompue"
+        msg = "\n" + datetime.now().strftime(self.date_format) + " - Requête interrompue"
         self.output_msg(msg, "end")
 
     def exec_log(self):
@@ -632,7 +636,7 @@ class App(tk.Toplevel):
 
         try:
             if self.check_min_version():
-                queries_folder = SETTINGS.queries_folder
+                queries_folder = self.app_settings.queries_folder
                 self.queries, errors = sql_query.get_queries(queries_folder)
             else:
                 self.queries, errors = [], []
@@ -688,7 +692,8 @@ class App(tk.Toplevel):
         return self.query.values_ok()
 
     def app_exit(self, event: Event = None):
-        sql_query.CENTRAL_LOGS.stop_sync()
+        central_logs = sql_query.CENTRAL_LOGS_CLASS()
+        central_logs.stop_sync()
         self.quit()
 
     def output_msg(self, txt_message: str, start_pos: str = "1.0", end_pos: str = "end"):
@@ -701,7 +706,7 @@ class App(tk.Toplevel):
             pass
 
     def open_folder(self, folder: str):
-        if folder == USER_PREFS.extract_folder and self.output_file:
+        if folder == self.prefs.extract_folder and self.output_file:
             subprocess.Popen(f"explorer /select,{self.output_file}")
         else:
             subprocess.Popen(f"explorer {folder}")
@@ -871,7 +876,7 @@ class App(tk.Toplevel):
     def manage_settings(self):
         child = SettingsWindow(self)
         self.wait_window(child)
-        SETTINGS.reload()
+        self.app_settings.reload()
 
     def manage_password(self):
         PasswordWindow(self)

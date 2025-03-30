@@ -8,6 +8,7 @@ from pykeepass import PyKeePass
 from pykeepass.exceptions import CredentialsError
 from pykeepass.entry import Entry
 
+from singleton_metaclass import Singleton
 from ui.InputDialog import InputDialog
 from credentials import crypted_file_pwd_get, crypted_file_pwd_history, crypted_file_pwd_change
 
@@ -27,16 +28,6 @@ def get_app_path() -> Path:
         application_path = os.path.dirname(os.path.abspath(__file__))
 
     return Path(application_path)
-
-
-class Singleton(type):
-    _instances = {}
-
-    def __call__(cls, *args, **kwargs):
-        if cls not in cls._instances:
-            cls._instances[cls] = super(Singleton, cls).__call__(*args, **kwargs)
-
-        return cls._instances[cls]
 
 
 class Kee(metaclass=Singleton):

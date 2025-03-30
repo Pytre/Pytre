@@ -2,6 +2,7 @@ import json
 from enum import Enum
 from pathlib import Path
 
+from singleton_metaclass import Singleton
 
 USER_FOLDER: Path = Path.home() / "Pytre"
 USER_SETTING_FILE: Path = USER_FOLDER / "Pytre_Settings.json"
@@ -11,7 +12,7 @@ class UserPrefsEnum(Enum):
     save_as_folder = "save_as_folder"
 
 
-class UserPrefs:
+class UserPrefs(metaclass=Singleton):
     def __init__(self):
         self.file: Path = USER_SETTING_FILE
         self.extract_folder = self._init_extract_folder()

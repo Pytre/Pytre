@@ -5,9 +5,10 @@ from pykeepass.entry import Entry
 from pykeepass.group import Group
 
 from kee import Kee, get_app_path
+from singleton_metaclass import Singleton
 
 
-class Settings:
+class Settings(metaclass=Singleton):
     kee: Kee = Kee()
     kee_grp_name: str = "Paramètres"
     kee_grp: Group = None

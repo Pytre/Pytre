@@ -4,6 +4,7 @@ from datetime import datetime
 from pathlib import Path
 
 import user_prefs
+from singleton_metaclass import Singleton
 
 USER_DB: Path = user_prefs.USER_FOLDER / "Pytre_Logs.db"
 LATEST_VERSION: int = 2  # latest version model of user database
@@ -75,7 +76,7 @@ class LogStats:
         )
 
 
-class UserDb:
+class UserDb(metaclass=Singleton):
     def __init__(self, user_db: Path = USER_DB, log_max: int = LOG_MAX):
         self.user_db: Path = Path(user_db)
         self.log_max = log_max

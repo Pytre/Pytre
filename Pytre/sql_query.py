@@ -16,13 +16,8 @@ from convert import Convert
 from about import APP_NAME, APP_VERSION
 
 
-SETTINGS: settings.Settings = settings.Settings()
 PRINT_DATE_FORMAT: str = "%d/%m/%Y à %H:%M:%S"  # pour le format de la date pour les logs / output
-USER_PREFS: user_prefs.UserPrefs = user_prefs.UserPrefs()
-USER: users.User = users.User()
-SERVERS: servers.Servers = servers.Servers()
-USER_LOG: logs_user.UserDb = logs_user.UserDb()
-CENTRAL_LOGS: logs_central.FileDriven = logs_central.FileDriven(SETTINGS.logs_folder)
+CENTRAL_LOGS_CLASS = logs_central.FileDriven
 
 
 class Query:
@@ -54,8 +49,8 @@ class Query:
             self.description = self.infos.get("description", "")
 
         self.grp_authorized: list[str] = self.infos.get("grp_authorized", [])
-        first_id = server[0].id if (server := list(SERVERS.servers_dict.values())) else ""
-        self.servers_id: list[str] = self.infos.get("servers", [first_id])
+        all_servers_id = list(servers.Servers().servers_dict.keys())
+        self.servers_id: list[str] = self.infos.get("servers", all_servers_id)
 
     def _init_file_content(self, encoding_format: str = "utf-8") -> str:
         file_content = ""
@@ -154,15 +149,13 @@ class Query:
         self.update_values()
 
         if self.values_ok():
-            if not SERVERS.servers_dict:
-                SERVERS.get_all_servers()
-
-            server_id = server_id if server_id else self.servers_id[0]
+            server_id = server_id or (self.servers_id[0] if self.servers_id else "")
             cmd_exec, cmd_params = self.get_infos_for_exec()
 
             if file_output:
                 file_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                extract_file = USER_PREFS.extract_folder / (f"{self.name}_{file_stamp}.csv")
+                prefs: user_prefs.UserPrefs = user_prefs.UserPrefs()
+                extract_file = prefs.extract_folder / (f"{self.name}_{file_stamp}.csv")
             else:
                 extract_file = ""
 
@@ -240,10 +233,11 @@ class Query:
 
 class _Param:
     def __init__(self, sql_declare: str):
+        app_settings: settings.Settings = settings.Settings()
         self.converter = Convert(
-            date_txt_format=SETTINGS.date_format,
-            field_separator=SETTINGS.field_separator,
-            decimal_separator=SETTINGS.decimal_separator,
+            date_txt_format=app_settings.date_format,
+            field_separator=app_settings.field_separator,
+            decimal_separator=app_settings.decimal_separator,
         )  # objet pour conversions string en valeurs et l'inverse
         self.sql_declare = sql_declare
         self.set_default()
@@ -319,10 +313,11 @@ class _Param:
 
     def _calc_func(self, func: str, func_args: str) -> str:
         def user_info(attr: str) -> str:
-            if attr in USER.users.attribs_std:
-                info = getattr(USER, attr, "")
+            user: users.CurrentUser = users.CurrentUser()
+            if attr in user.users.attribs_std:
+                info = getattr(user, attr, "")
             else:
-                info = USER.attribs_cust.get(attr, "")
+                info = user.attribs_cust.get(attr, "")
 
             return info
 
@@ -426,7 +421,8 @@ class _QueryExecute:
         self.server_id = ""
         self.extract_file = ""
 
-        self.field_separator = SETTINGS.field_separator
+        self.app_settings: settings.Settings = settings.Settings()
+        self.field_separator = self.app_settings.field_separator
         self.print_date_format = PRINT_DATE_FORMAT
 
         self.sql_server_params: dict = {}
@@ -435,7 +431,7 @@ class _QueryExecute:
         self.server_id = server_id
 
         try:
-            server = SERVERS.servers_dict[self.server_id]
+            server = servers.Servers().servers_dict[self.server_id]
         except KeyError:
             self.sql_server_params = {}
             error_msg = f"Infos de connection au serveur non trouvé, id : {self.server_id}"
@@ -499,8 +495,10 @@ class _QueryExecute:
         return rows_count, execute_output
 
     def _execute_end(self, starting_date: datetime, ending_date: datetime, rows_count: int):
+        user_log: logs_user.UserDb = logs_user.UserDb()
+
         params_for_log = self._params_for_log()
-        USER_LOG.insert_exec(
+        user_log.insert_exec(
             self.server_id,
             self.parent.name,
             starting_date,
@@ -510,8 +508,10 @@ class _QueryExecute:
             self.extract_file,
         )
 
-        if SETTINGS.logs_are_on:
-            CENTRAL_LOGS.trigger_sync(USER_LOG.user_db, USER.username, USER.title)
+        if self.app_settings.logs_are_on:
+            user: users.CurrentUser = users.CurrentUser()
+            central_logs: CENTRAL_LOGS_CLASS = CENTRAL_LOGS_CLASS(self.app_settings.logs_folder)
+            central_logs.trigger_sync(user_log.user_db, user.username, user.title)
 
         self._broadcast(
             str("=") * 50
@@ -617,6 +617,7 @@ def get_queries(folder) -> list[Query]:
     if not Path(folder).is_dir():
         raise ValueError(f"Erreur : le répertoire {folder} n'a pas été trouvé ou n'est pas accessible !")
 
+    user: users.CurrentUser = users.CurrentUser()
     queries: list[Query] = []
     errors: list[str] = []
     for file in Path(folder).iterdir():
@@ -635,10 +636,10 @@ def get_queries(folder) -> list[Query]:
                 continue  # si erreur, ne pas bloquer et ignorer la requête
 
             user_is_authorized = False
-            if my_query.grp_authorized == [] or set(USER.grp_authorized) & set(my_query.grp_authorized):
+            if my_query.grp_authorized == [] or set(user.grp_authorized) & set(my_query.grp_authorized):
                 user_is_authorized = True
 
-            if (USER.admin and my_query.hide != 2) or (user_is_authorized and my_query.hide == 0):
+            if (user.admin and my_query.hide != 2) or (user_is_authorized and my_query.hide == 0):
                 queries.append(my_query)
 
     queries.sort(key=lambda k: k.name)
@@ -647,8 +648,9 @@ def get_queries(folder) -> list[Query]:
 
 
 if __name__ == "__main__":
-    APP_PATH = SETTINGS.app_path
-    sql_script = list(Path(SETTINGS.queries_folder).glob("*.sql"))[0]
+    app_settings: settings.Settings = settings.Settings()
+    APP_PATH = app_settings.app_path
+    sql_script = list(Path(app_settings.queries_folder).glob("*.sql"))[0]
 
     my_query = Query(sql_script)
     my_query.update_values()

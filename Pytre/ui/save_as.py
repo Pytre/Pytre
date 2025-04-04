@@ -15,7 +15,7 @@ def save_as(parent, src_file: Path) -> Path:
         return None
 
     user_prefs = UserPrefs()
-    save_as_folder = UserPrefsEnum.save_as_folder.value
+    save_as_folder = UserPrefsEnum.save_as_folder
 
     filetypes = [("Csv Files", "*.csv"), ("Tous", "*.*")]
     initialdir = user_prefs.get(save_as_folder)

@@ -596,10 +596,10 @@ class App(tk.Toplevel):
             answer = MsgDialog.ask(
                 "Fichier enregistrer sous",
                 "La copie du fichier extrait a bien été enregistée.\nVoulez-vous l'ouvrir ?",
-                buttons_txt=("Ouvrir", "Annuler"),
+                buttons_txt=("Oui", "Non"),
                 parent=self,
             )
-            if answer == "Ouvrir":
+            if answer == "Oui":
                 startfile(file_copy)
 
     # ------------------------------------------------------------------------------------------

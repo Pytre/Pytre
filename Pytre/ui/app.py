@@ -203,6 +203,7 @@ class App(tk.Toplevel):
         self.menu_query.add_separator()
         self.menu_query.add_command(label="Recharger", command=lambda: self.refresh_queries(notify=True))
         if self.user.admin:
+            self.menu_query.add_command(label="Liste orphelines...", command=self.orphan_queries)
             self.menu_query.add_command(
                 label="Paramètrage...", command=lambda: self.open_folder(self.app_settings.queries_folder)
             )
@@ -751,6 +752,15 @@ class App(tk.Toplevel):
             subprocess.Popen(f"explorer /select,{self.output_file}")
         else:
             subprocess.Popen(f"explorer {folder}")
+
+    def orphan_queries(self):
+        orphans = sql_query.orphan_queries(self.app_settings.queries_folder)
+        if not orphans:
+            self.output_msg("Aucune requête orpheline !")
+        else:
+            self.output_msg("Liste des requêtes orphelines :\n")
+            for orphan in orphans:
+                self.output_msg(f"{orphan.name}\n", "end")
 
     # ------------------------------------------------------------------------------------------
     # Mise à jour de l'interface et des variables d'instances quand évènement

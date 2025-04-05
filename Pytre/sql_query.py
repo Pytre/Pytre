@@ -643,13 +643,13 @@ def get_queries(folder: Path) -> list[Query]:
 
 
 def filter_queries(queries: list[Query], server_id: str, user: users.CurrentUser = users.CurrentUser()) -> list[Query]:
-    filtered_queries: list[Query] = []
+    filtered: list[Query] = []
 
     # check if user is authorized for server
     all_servers: servers.Servers = servers.Servers()
     server: servers.Server = all_servers.servers_dict.get(server_id, None)
     if not user.admin and not (server.grp_authorized == [] or set(user.grp_authorized) & set(server.grp_authorized)):
-        return filtered_queries
+        return filtered
 
     # check which query user can see
     for query in queries:
@@ -667,9 +667,33 @@ def filter_queries(queries: list[Query], server_id: str, user: users.CurrentUser
 
         # finally check hidden property to determine if query must be listed
         if query.hide == 0 or (user.admin and query.hide != 2):
-            filtered_queries.append(query)
+            filtered.append(query)
 
-    return filtered_queries
+    return filtered
+
+
+def orphan_queries(folder: Path) -> list[Path]:
+    if not Path(folder).is_dir():
+        raise ValueError(f"Erreur : le répertoire {folder} n'a pas été trouvé ou n'est pas accessible !")
+
+    orphan_files: list[Path] = []
+
+    all_servers: servers.Servers = servers.Servers()
+    all_ids = all_servers.servers_dict.keys()
+
+    files = list(Path(folder).glob("*.sql"))
+    for file in files:
+        try:
+            query = Query(Path(file))
+            if not set(query.servers_id) & set(all_ids):
+                orphan_files.append(Path(file))
+                print(f"Aucun serveur existant pour : {Path(file).name}")
+        except Exception as e:
+            error = f"Erreur chrgmt '{Path(file).name}' : {e.__class__.__name__}, {e}"
+            print(error)
+            continue  # si erreur, ne pas bloquer et ignorer la requête
+
+    return orphan_files
 
 
 if __name__ == "__main__":
@@ -682,4 +706,6 @@ if __name__ == "__main__":
     print(my_query.get_infos_for_exec())
     print(my_query.get_cmd_for_debug())
     print(my_query.cmd_params)
-    my_query.execute_cmd(file_output=True)
+    # my_query.execute_cmd(file_output=True)
+
+    orphan_queries(settings.Settings().queries_folder)

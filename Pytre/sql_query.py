@@ -613,38 +613,63 @@ class _QueryExecute:
         return params
 
 
-def get_queries(folder) -> list[Query]:
+def get_queries(folder: Path) -> list[Query]:
     if not Path(folder).is_dir():
         raise ValueError(f"Erreur : le répertoire {folder} n'a pas été trouvé ou n'est pas accessible !")
 
-    user: users.CurrentUser = users.CurrentUser()
     queries: list[Query] = []
     errors: list[str] = []
-    for file in Path(folder).iterdir():
-        if file.is_file() and file.suffix == ".sql":
-            try:
-                my_query = Query(file)
-            except ValueError as e:
-                error = f"Erreur chrgmt '{file.name}' : ValueError, {e}"
-                errors.append(error)
-                print(error)
-                continue
-            except Exception as e:
-                error = f"Erreur chrgmt '{file.name}' : {e.__class__.__name__}, {e}"
-                errors.append(error)
-                print(error)
-                continue  # si erreur, ne pas bloquer et ignorer la requête
 
-            user_is_authorized = False
-            if my_query.grp_authorized == [] or set(user.grp_authorized) & set(my_query.grp_authorized):
-                user_is_authorized = True
+    files = list(Path(folder).glob("*.sql"))
+    for file in files:
+        try:
+            my_query = Query(Path(file))
+        except ValueError as e:
+            error = f"Erreur chrgmt '{Path(file).name}' : ValueError, {e}"
+            errors.append(error)
+            print(error)
+            continue
+        except Exception as e:
+            error = f"Erreur chrgmt '{Path(file).name}' : {e.__class__.__name__}, {e}"
+            errors.append(error)
+            print(error)
+            continue  # si erreur, ne pas bloquer et ignorer la requête
 
-            if (user.admin and my_query.hide != 2) or (user_is_authorized and my_query.hide == 0):
-                queries.append(my_query)
+        queries.append(my_query)
 
     queries.sort(key=lambda k: k.name)
 
     return queries, errors
+
+
+def filter_queries(queries: list[Query], server_id: str, user: users.CurrentUser = users.CurrentUser()) -> list[Query]:
+    filtered_queries: list[Query] = []
+
+    # check if user is authorized for server
+    all_servers: servers.Servers = servers.Servers()
+    server: servers.Server = all_servers.servers_dict.get(server_id, None)
+    if not user.admin and not (server.grp_authorized == [] or set(user.grp_authorized) & set(server.grp_authorized)):
+        return filtered_queries
+
+    # check which query user can see
+    for query in queries:
+        # ignore query if it's not for server_id
+        if server_id not in query.servers_id:
+            continue
+
+        # ignore query if user not allowed to access it
+        if (
+            not user.admin
+            and not query.grp_authorized == []
+            and not set(user.grp_authorized) & set(query.grp_authorized)
+        ):
+            continue
+
+        # finally check hidden property to determine if query must be listed
+        if query.hide == 0 or (user.admin and query.hide != 2):
+            filtered_queries.append(query)
+
+    return filtered_queries
 
 
 if __name__ == "__main__":

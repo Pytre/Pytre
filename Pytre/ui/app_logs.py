@@ -43,9 +43,9 @@ class LogsWindow(tk.Toplevel):
     def _setup_ui(self):
         self.title(f"{APP_NAME} - Extractions")
         if self.parent:
-            self.geometry(f"540x650+{self.parent.winfo_x() + 100}+{self.parent.winfo_y() + 25}")
+            self.geometry(f"640x750+{self.parent.winfo_x() + 130}+{self.parent.winfo_y() - 20}")
         else:
-            self.geometry("540x650+100+75")
+            self.geometry("640x750+100+75")
 
         self.resizable(True, True)
 
@@ -100,7 +100,7 @@ class LogsWindow(tk.Toplevel):
         self._setup_ui_tree()
         self._setup_ui_params()
 
-        self.top_frame.add(self.tree_frame, weight=0)
+        self.top_frame.add(self.tree_frame, weight=2)
         self.top_frame.add(self.params_frame, weight=1)
 
         self.top_frame.grid_rowconfigure(0, weight=1)
@@ -109,6 +109,7 @@ class LogsWindow(tk.Toplevel):
     def _tree_cols_grp(self) -> dict:
         common = {
             "num": {"attr": "", "text": "Num", "width": 45, "anchor": "e", "stretch": False},
+            "server": {"attr": "server", "text": "Serveur", "width": 100, "stretch": False},
             "query": {"attr": "query", "text": "Requête", "width": 125, "stretch": False},
         }
         queries = {
@@ -123,11 +124,11 @@ class LogsWindow(tk.Toplevel):
             "parameters": {"attr": "parameters", "text": "", "width": 40, "stretch": False},
         }
         stats = {
-            "nb_run": {"attr": "nb_run", "text": "Nb", "width": 45, "anchor": "e", "stretch": True},
+            "nb_run": {"attr": "nb_run", "text": "Nb", "width": 45, "anchor": "e", "stretch": False},
             "min_run": {"attr": "min_run", "text": "Min", "width": 75, "anchor": "e", "stretch": False},
             "max_run": {"attr": "max_run", "text": "Max", "width": 75, "anchor": "e", "stretch": False},
             "last_date": {"attr": "last_run", "text": "Date", "width": 75, "anchor": "e", "stretch": False},
-            "last_time": {"attr": "last_run", "text": "Heure", "width": 70, "anchor": "e", "stretch": False},
+            "last_time": {"attr": "last_run", "text": "Heure", "width": 70, "anchor": "e", "stretch": True},
         }
 
         cols_grp = {
@@ -156,8 +157,8 @@ class LogsWindow(tk.Toplevel):
         for col, attr in cols.items():
             self.tree.heading(col, text=attr["text"], command=lambda c=col: self.tree_header_click(c))
             self.tree.column(col, width=attr["width"], stretch=attr["stretch"])
-            if attr.get("anchor", ""):
-                self.tree.column(col, anchor="e")
+            if val := attr.get("anchor", ""):
+                self.tree.column(col, anchor=val)
 
         xbar = ttk.Scrollbar(self.tree_frame, orient=tk.HORIZONTAL, command=self.tree.xview)
         self.tree.configure(xscroll=xbar.set)
@@ -172,7 +173,7 @@ class LogsWindow(tk.Toplevel):
         self.tree_frame.grid_columnconfigure(0, weight=1)
 
     def _setup_ui_params(self):
-        self.textbox = tk.Text(self.params_frame, width=400, wrap="none", state=tk.DISABLED)
+        self.textbox = tk.Text(self.params_frame, height=14, width=400, wrap="none", state=tk.DISABLED)
         x_scrollbar = ttk.Scrollbar(self.params_frame, orient="horizontal", command=self.textbox.xview)
         y_scrollbar = ttk.Scrollbar(self.params_frame, orient="vertical", command=self.textbox.yview)
 

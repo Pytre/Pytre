@@ -29,12 +29,14 @@ class Servers(metaclass=Singleton):
         self.kee_grp = self.kee.db.find_groups(name=self.kee_grp_name, first=True)
         return True
 
-    def get_all_servers(self, reload: bool = False) -> dict:
+    def get_all_servers(self, reload: bool = False, grp_filter: list[str] = None) -> dict:
         self.open_db(reload)
 
         self.servers_dict = {}
         for entry in self.kee_grp.entries:
-            self.servers_dict[entry.title] = Server(entry=entry, servers=self)
+            server = Server(entry=entry, servers=self)
+            if grp_filter is None or not server.grp_authorized or set(server.grp_authorized) & set(grp_filter):
+                self.servers_dict[entry.title] = Server(entry=entry, servers=self)
 
         return self.servers_dict
 

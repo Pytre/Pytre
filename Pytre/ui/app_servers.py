@@ -151,7 +151,7 @@ class ServersWindow(tk.Toplevel):
         self.groups_frame.columnconfigure(0, weight=1)
         self.groups_frame.rowconfigure(1, weight=1)
 
-        title_label = ttk.Label(self.groups_frame, text="Groupes :")
+        title_label = ttk.Label(self.groups_frame, text="Restriction groupes :")
         self.new_grp = ttk.Button(self.groups_frame, text="+", width=3, command=self.group_add)
 
         self.listbox = tk.Listbox(self.groups_frame, selectmode=tk.MULTIPLE, activestyle="none", relief="groove")
@@ -169,7 +169,7 @@ class ServersWindow(tk.Toplevel):
         self.btn_new = ttk.Button(self.buttons_frame, text="Nouveau", command=self.server_new)
         self.btn_save = ttk.Button(self.buttons_frame, text="Enregistrer", command=self.server_save)
         self.btn_remove = ttk.Button(self.buttons_frame, text="Supprimer", command=self.server_remove)
-        self.btn_cancel = ttk.Button(self.buttons_frame, text="Quitter", command=self.app_exit)
+        self.btn_cancel = ttk.Button(self.buttons_frame, text="Fermer", command=self.app_exit)
 
         self.btn_new.grid(row=0, column=1, padx=2, pady=2, sticky="nse")
         self.btn_save.grid(row=0, column=2, padx=2, pady=2, sticky="nse")
@@ -292,7 +292,7 @@ class ServersWindow(tk.Toplevel):
             w_target.config(show="")
 
     def groups_set(self):
-        self.groups = {"all"}
+        self.groups = set()
         for _, server in self.servers.servers_dict.items():
             groups = server.grp_authorized
             self.groups.update(groups)

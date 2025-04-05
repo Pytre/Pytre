@@ -10,6 +10,7 @@ USER_SETTING_FILE: Path = USER_FOLDER / "Pytre_Settings.json"
 
 class UserPrefsEnum(Enum):
     save_as_folder = "save_as_folder"
+    last_server = "last_server_id"
 
 
 class UserPrefs(metaclass=Singleton):

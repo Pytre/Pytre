@@ -16,6 +16,7 @@ import sql_query
 import settings
 import users
 import user_prefs
+import servers
 from ui.save_as import save_as
 from ui.MsgDialog import MsgDialog
 from ui.app_logs import LogsWindow
@@ -38,7 +39,10 @@ class App(tk.Toplevel):
         self.user: users.CurrentUser = users.CurrentUser()
         self.prefs: user_prefs.UserPrefs = user_prefs.UserPrefs()
         self.app_settings: settings.Settings = settings.Settings()
+        self.servers: servers.Servers = servers.Servers()
+        self.server_id: str = ""
 
+        self.queries_all: list[sql_query.Query] = []
         self.queries: list[sql_query.Query] = []
         self.query: sql_query.Query = sql_query.Query()
         self.params_widgets: dict[str, ttk.Widget] = {}
@@ -197,7 +201,7 @@ class App(tk.Toplevel):
         self.menu_query.add_command(label="Journal...", command=lambda: self.open_logs(True))
         self.menu_query.add_command(label="Debug...", state="disabled", command=self.debug_query)
         self.menu_query.add_separator()
-        self.menu_query.add_command(label="Recharger", command=lambda: self.refresh_queries())
+        self.menu_query.add_command(label="Recharger", command=lambda: self.refresh_queries(notify=True))
         if self.user.admin:
             self.menu_query.add_command(
                 label="Paramètrage...", command=lambda: self.open_folder(self.app_settings.queries_folder)
@@ -229,12 +233,14 @@ class App(tk.Toplevel):
         self.left_frame = ttk.Frame(self.paned_window, padding=1, borderwidth=2)
         self.left_frame.grid(row=0, column=0, padx=0, pady=0, sticky="nswe")
 
-        self.queries_filter_text = tk.StringVar()
+        self.servers_label = ttk.Label(self.left_frame, text="Serveur :", justify=tk.LEFT)
+        self.servers_cb = ttk.Combobox(self.left_frame, width=15, state="readonly")
 
+        self.queries_filter_text = tk.StringVar()
         self.queries_label_filter = ttk.Label(self.left_frame, text="Filtre :", justify=tk.LEFT)
-        self.queries_entry_filter = ttk.Entry(self.left_frame, textvariable=self.queries_filter_text, width=30)
+        self.queries_entry_filter = ttk.Entry(self.left_frame, textvariable=self.queries_filter_text, width=20)
         self.queries_btn_refresh = ttk.Button(
-            self.left_frame, text="Recharger", command=lambda: self.refresh_queries()
+            self.left_frame, text="Recharger", command=lambda: self.refresh_queries(notify=True)
         )
 
         self.queries_tree = ttk.Treeview(self.left_frame, columns=(1, 2), show="headings", selectmode="browse")
@@ -242,7 +248,6 @@ class App(tk.Toplevel):
         self.queries_tree.heading(2, text="Description")
         self.queries_tree.column(1, width=100, stretch=False)
         self.queries_tree.column(2, width=250, stretch=True)
-        self.queries_filter()
 
         self.queries_tree_scrollbar_y = ttk.Scrollbar(
             self.left_frame, orient="vertical", command=self.queries_tree.yview
@@ -250,15 +255,18 @@ class App(tk.Toplevel):
         self.queries_tree["yscrollcommand"] = self.queries_tree_scrollbar_y.set
 
         # placement des éléments dans la frame
-        self.queries_label_filter.grid(row=0, column=0, padx=2, pady=2, sticky="nswe")
-        self.queries_entry_filter.grid(row=0, column=1, columnspan=3, padx=2, pady=2, sticky="nswe")
-        self.queries_btn_refresh.grid(row=0, column=4, columnspan=2, padx=2, pady=2, sticky="nswe")
-        self.queries_tree.grid(row=1, column=0, columnspan=6, padx=2, pady=2, sticky="nswe")
-        self.queries_tree_scrollbar_y.grid(row=1, column=5, sticky="nse")
+        self.servers_label.grid(row=0, column=0, padx=2, pady=2, sticky="nswe")
+        self.servers_cb.grid(row=0, column=1, padx=2, pady=2, sticky="nswe")
+        self.queries_label_filter.grid(row=0, column=2, padx=2, pady=2, sticky="nswe")
+        self.queries_entry_filter.grid(row=0, column=3, columnspan=3, padx=2, pady=2, sticky="nswe")
+        self.queries_btn_refresh.grid(row=0, column=6, columnspan=2, padx=2, pady=2, sticky="nswe")
+        self.queries_tree.grid(row=1, column=0, columnspan=8, padx=2, pady=2, sticky="nswe")
+        self.queries_tree_scrollbar_y.grid(row=1, column=7, sticky="nse")
 
         # paramètrage poids lignes et colonnes
         self.left_frame.rowconfigure(1, weight=1)
         self.left_frame.columnconfigure(1, weight=1)
+        self.left_frame.columnconfigure(3, weight=5)
 
     def setup_ui_right_frame(self):
         self.right_frame = ttk.Frame(self.paned_window, padding=0, borderwidth=2)
@@ -469,8 +477,8 @@ class App(tk.Toplevel):
     # Définition des évènements générer par les traitements
     # ------------------------------------------------------------------------------------------
     def setup_events_binds(self):
+        self.servers_cb.bind("<<ComboboxSelected>>", lambda _: self.queries_filter())
         self.queries_entry_filter.bind("<KeyRelease>", lambda _: self.queries_filter(self.queries_entry_filter.get()))
-
         self.queries_tree.bind("<<TreeviewSelect>>", self.tree_selection_change)
 
         self.params_canvas.bind("<Configure>", self.params_resize)
@@ -518,7 +526,7 @@ class App(tk.Toplevel):
 
     def exec_thread_start(self):  # démarrer par la méthode thread_manage_start
         print("Thread execute starting")
-        result = self.query.execute_cmd(file_output=True)
+        result = self.query.execute_cmd(file_output=True, server_id=self.server_id)
         self.rows_number, self.output_file = result if isinstance(result, tuple) else (0, "")
         print("Thread execute ending")
 
@@ -601,6 +609,7 @@ class App(tk.Toplevel):
         self.menu_query.entryconfig("Recharger", state="disable")
 
         self.btn_execute["text"] = "Interrompre"
+        self.servers_cb["state"] = "disable"
         self.queries_entry_filter["state"] = "disable"
         self.queries_btn_refresh["state"] = "disable"
         self.queries_tree["selectmode"] = "none"
@@ -614,6 +623,7 @@ class App(tk.Toplevel):
         self.menu_query.entryconfig("Recharger", state="normal")
 
         self.btn_execute["text"] = "Executer"
+        self.servers_cb["state"] = "readonly"
         self.queries_entry_filter["state"] = "enable"
         self.queries_btn_refresh["state"] = "enable"
         self.queries_tree["selectmode"] = "browse"
@@ -625,7 +635,7 @@ class App(tk.Toplevel):
     # ------------------------------------------------------------------------------------------
     # Traitements
     # ------------------------------------------------------------------------------------------
-    def refresh_queries(self):
+    def refresh_queries(self, reload_servers: bool = False, notify: bool = False):
         if not self.is_authorized:
             return
 
@@ -636,19 +646,49 @@ class App(tk.Toplevel):
 
         try:
             if self.check_min_version():
+                self.refresh_servers(reload_servers)
                 queries_folder = self.app_settings.queries_folder
-                self.queries, errors = sql_query.get_queries(queries_folder)
+                self.queries_all, errors = sql_query.get_queries(queries_folder)
             else:
-                self.queries, errors = [], []
+                self.queries_all, self.queries, errors = [], [], []
             self.queries_filter()  # rénitialiser l'UI en simulant un filtre sur aucun élément
         except ValueError as err:
-            self.queries = {}
+            self.queries_all, self.queries = [], []
             self.queries_filter(msg_filter=err)
         finally:
             self.tree_autosize()
 
         if errors:
             self.output_msg("\n".join(errors))
+
+        if notify:
+            messagebox.showinfo("Rechargement", "Ok requêtes rechargées", parent=self)
+
+    def refresh_servers(self, reload_servers: bool = False):
+        grp_authorized = self.user.grp_authorized if not self.user.admin else None
+        servers_dict: dict = self.servers.get_all_servers(reload_servers, grp_authorized)
+        servers_name = [v.description or k for k, v in servers_dict.items()]
+        servers_id = list(servers_dict.keys())
+
+        self.servers_cb["values"] = tuple(servers_name)
+        if servers_dict:
+            if self.servers_cb.current() == -1:
+                self.server_id = self.prefs.get(user_prefs.UserPrefsEnum.last_server)
+
+            pos = servers_id.index(self.server_id) if self.server_id in servers_id else 0
+            self.server_id = servers_id[pos]
+            self.servers_cb.set(servers_name[pos])
+
+        if len(self.servers.servers_dict) <= 1:
+            # if one server or less hide servers selection
+            self.servers_label.grid_remove()
+            self.servers_cb.grid_remove()
+            self.left_frame.columnconfigure(1, weight=0)
+        elif not self.servers_cb.grid_remove():
+            # display servers selection if hidden and more than one server
+            self.servers_label.grid()
+            self.servers_cb.grid()
+            self.left_frame.columnconfigure(1, weight=1)
 
     def execute_query(self):
         if self.query is None:
@@ -694,6 +734,7 @@ class App(tk.Toplevel):
     def app_exit(self, event: Event = None):
         central_logs = sql_query.CENTRAL_LOGS_CLASS()
         central_logs.stop_sync()
+        self.prefs.set(user_prefs.UserPrefsEnum.last_server, self.server_id)
         self.quit()
 
     def output_msg(self, txt_message: str, start_pos: str = "1.0", end_pos: str = "end"):
@@ -736,8 +777,12 @@ class App(tk.Toplevel):
         self.query = None
         self.output_msg(msg_filter)
 
-        self.queries_tree.tag_configure("hidden", foreground="gray")
+        servers_id = list(self.servers.servers_dict.keys())
+        cb_current = self.servers_cb.current()
+        self.server_id = servers_id[cb_current] if cb_current > -1 else ""
+        self.queries = sql_query.filter_queries(self.queries_all, self.server_id, self.user)
 
+        self.queries_tree.tag_configure("hidden", foreground="gray")
         for item in self.queries:
             if (
                 text_filter == ""

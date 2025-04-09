@@ -2,11 +2,14 @@ import csv
 from pathlib import Path
 from enum import Enum
 
+import pymssql
+import psycopg2
 from pykeepass.entry import Entry
 from pykeepass.group import Group
 
 from kee import Kee
 from singleton_metaclass import Singleton
+from about import APP_NAME, APP_VERSION
 
 
 class Servers(metaclass=Singleton):
@@ -122,7 +125,7 @@ class Servers(metaclass=Singleton):
 
 class ServerType(Enum):
     mssql = "SQL Server"
-    # postgre = "PostgreSQL"
+    postgre = "PostgreSQL"
 
 
 class Server:
@@ -134,8 +137,8 @@ class Server:
         self.description: str = ""
         self.user: str = ""
         self.password: str = ""
-        self.type: str = list(ServerType)[0].name
-        self.charset: str = "UTF-8"
+        self.type: str = ServerType.mssql.name
+        self.charset: str = ""
         self.database: str = ""
         self.host: str = ""
         self.port: str = "1433"  # string attendu et pas int
@@ -171,6 +174,59 @@ class Server:
     def __str__(self) -> str:
         return str(self.to_dict())
 
+    def get_connection(self) -> pymssql.Connection | psycopg2.extensions.connection:
+        if self.type == ServerType.mssql.name:
+            return self._conn_mssql()
+        elif self.type == ServerType.postgre.name:
+            return self._conn_postgre()
+
+    def _conn_mssql(self) -> pymssql.Connection:
+        conn_params = {
+            "server": self.server,
+            "host": self.host,
+            "user": self.user,
+            "password": self.password,
+            "database": self.database,
+            "timeout": self.timeout,
+            "login_timeout": self.login_timeout,
+            "charset": self.charset,
+            "as_dict": False,
+            "port": self.port,
+            "read_only": True,
+            "appname": f"{APP_NAME}_{APP_VERSION}",
+        }
+        try:
+            conn: pymssql.Connection = pymssql.connect(**conn_params)
+        except pymssql._pymssql.OperationalError as err:
+            raise pymssql._pymssql.OperationalError(err.args[0])
+
+        return conn
+
+    def _conn_postgre(self) -> psycopg2.extensions.connection:
+        conn_params = {
+            "hostaddr": self.server,
+            "host": self.host,
+            "user": self.user,
+            "password": self.password,
+            "dbname": self.database,
+            "connect_timeout": self.login_timeout,
+            "client_encoding": self.charset,
+            "port": self.port,
+            "application_name": f"{APP_NAME}_{APP_VERSION}",
+        }
+        try:
+            conn: psycopg2.extensions.connection = psycopg2.connect(**conn_params)
+            cursor = conn.cursor()
+            cursor.execute("SET statement_timeout = %s", (self.timeout,))
+            cursor.execute("SET default_transaction_read_only = on")
+            cursor.close()
+        except psycopg2.OperationalError as err:
+            raise psycopg2.OperationalError(err.args)
+        except UnicodeDecodeError as err:
+            raise psycopg2.OperationalError((err.args[1].decode(err.args[0], errors="replace"),))
+
+        return conn
+
     def _load_from_entry(self, s_entry: Entry):
         self.uuid = s_entry.uuid
         self.id = s_entry.title
@@ -195,6 +251,14 @@ class Server:
         for tag in tags:
             group = tag.lower().strip()
             self.grp_authorized.append(group)
+
+        # modify charset if not set, depending on server type
+        if self.charset:
+            pass
+        elif self.type == ServerType.mssql.name:
+            self.charset: str = "UTF-8"
+        elif self.type == ServerType.postgre.name:
+            self.charset: str = "UTF8"
 
     def reload(self) -> None:
         self.servers.open_db(True)
@@ -249,9 +313,9 @@ class Server:
 
 
 if __name__ == "__main__":
-    server = Server()
-    print(server)
+    self = Server()
+    print(self)
 
     servers = Servers()
-    for _, server in servers.get_all_servers().items():
-        print(server)
+    for _, self in servers.get_all_servers().items():
+        print(self)

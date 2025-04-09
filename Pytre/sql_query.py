@@ -5,6 +5,7 @@ from pathlib import Path
 from threading import Event
 
 import pymssql
+import psycopg2
 
 import settings
 import user_prefs
@@ -13,7 +14,6 @@ import servers
 import logs_user
 import logs_central
 from convert import Convert
-from about import APP_NAME, APP_VERSION
 
 
 PRINT_DATE_FORMAT: str = "%d/%m/%Y à %H:%M:%S"  # pour le format de la date pour les logs / output
@@ -167,8 +167,16 @@ class Query:
                 return False
             except pymssql._pymssql.OperationalError as err:
                 err_msg = str("=") * 50 + "\n"
-                err_msg += err.args[0][1].decode("utf-8") + "\n"
+                err_msg += err.args[0][1].decode("utf-8", errors="replace") + "\n"
                 self._broadcast(err_msg)
+                return False
+            except psycopg2.OperationalError as err:
+                err_msg = str("=") * 50 + "\n"
+                err_msg += "".join(err.args[0]) + "\n"
+                self._broadcast(err_msg)
+                return False
+            except Exception as err:
+                self._broadcast(f"Erreur inattendue : {err}")
                 return False
         else:
             err_msg = "\nImpossible d'executer des paramètres sont invalides"
@@ -418,46 +426,25 @@ class _QueryExecute:
 
         self.cmd_template = ""
         self.cmd_parameters = {}
-        self.server_id = ""
+        self.server: servers.Server = None
         self.extract_file = ""
 
         self.app_settings: settings.Settings = settings.Settings()
         self.field_separator = self.app_settings.field_separator
         self.print_date_format = PRINT_DATE_FORMAT
 
-        self.sql_server_params: dict = {}
-
-    def set_servers_params(self, server_id) -> dict:
-        self.server_id = server_id
-
+    def get_server(self, server_id) -> servers.Server:
         try:
-            server = servers.Servers().servers_dict[self.server_id]
+            self.server = servers.Servers().servers_dict[server_id]
         except KeyError:
-            self.sql_server_params = {}
-            error_msg = f"Infos de connection au serveur non trouvé, id : {self.server_id}"
+            error_msg = f"Infos du serveur non trouvé, id : {server_id}"
             self._broadcast(self._time_log() + f" - {error_msg}")
-            return {}
+            return None
 
-        self.sql_server_params = {
-            "server": server.server,
-            "host": server.host,
-            "user": server.user,
-            "password": server.password,
-            "database": server.database,
-            "timeout": server.timeout,
-            "login_timeout": server.login_timeout,
-            "charset": server.charset,
-            "as_dict": False,
-            "port": server.port,
-            "read_only": True,
-            "appname": f"{APP_NAME}_{APP_VERSION}",
-        }
-
-        return self.sql_server_params
+        return self.server
 
     def execute(self, server_id, cmd_template, cmd_parameters, extract_file):
-        self.set_servers_params(server_id)
-        if not self.sql_server_params:
+        if not self.get_server(server_id):
             return False
 
         self.cmd_template = cmd_template
@@ -471,19 +458,19 @@ class _QueryExecute:
         self._broadcast(starting_date.strftime(self.print_date_format) + " - Connection à la base de données...")
 
         self.parent.exec_can_stop.clear()
-        with pymssql.connect(**self.sql_server_params) as conn:
+        with self.server.get_connection() as conn:
             with conn.cursor() as cursor:
                 self._broadcast(self._time_log() + " - Requête en cours d'execution...")
                 try:
                     cursor.execute(self.cmd_template, self.cmd_parameters)
                     self.parent.exec_can_stop.set()
-                except pymssql._pymssql.ProgrammingError as err:
+                except (pymssql._pymssql.ProgrammingError, psycopg2.ProgrammingError) as err:
                     error_code = err.args[0]
                     error_msg = str(err.args[1])[2:-2]
                     self._broadcast(self._time_log() + f" - Erreur {error_code} : {error_msg}")
                     return False
                 except Exception as err:
-                    self._broadcast(self._time_log() + f" - Erreur : {err}")
+                    self._broadcast(self._time_log() + f" - Erreur d'execution inattendue :\n{', '.join(err.args)}")
                     return False
 
                 self._broadcast(self._time_log() + " - Début récupération des lignes...")
@@ -499,7 +486,7 @@ class _QueryExecute:
 
         params_for_log = self._params_for_log()
         user_log.insert_exec(
-            self.server_id,
+            self.server.id,
             self.parent.name,
             starting_date,
             ending_date,
@@ -590,12 +577,8 @@ class _QueryExecute:
 
     def _file_write(self, list_to_write: list[str], encoding_format: str = "latin-1") -> None:  # Ecrire texte
         filename = self.extract_file
-        try:
-            with open(filename, mode="a", encoding=encoding_format) as f:
-                f.write("\n".join(list_to_write) + "\n")  # écriture du buffer
-        except UnicodeEncodeError:
-            with open(filename, mode="a", encoding="utf-8") as f:
-                f.write("\n".join(list_to_write) + "\n")  # écriture du buffer
+        with open(filename, mode="a", encoding=encoding_format, errors="replace") as f:
+            f.write("\n".join(list_to_write) + "\n")  # écriture du buffer
 
     def _time_log(self) -> str:
         return datetime.now().strftime(self.print_date_format)
@@ -706,6 +689,6 @@ if __name__ == "__main__":
     print(my_query.get_infos_for_exec())
     print(my_query.get_cmd_for_debug())
     print(my_query.cmd_params)
-    # my_query.execute_cmd(file_output=True)
+    my_query.execute_cmd(file_output=True)
 
     orphan_queries(settings.Settings().queries_folder)

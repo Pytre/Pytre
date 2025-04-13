@@ -67,11 +67,6 @@ class Servers(metaclass=Singleton):
                     if missing_cols:
                         raise KeyError(f"Colonnes manquantes : {', '.join(missing_cols)}")
 
-                # contrôle si id pas interdit
-                if csv_row["id"].upper() == self.default_title:
-                    print(f"Serveur non importé, id interdit : {csv_row['id']}")
-                    continue
-
                 # récup entry si déjà ou existant ou création d'une nouvelle
                 s_entry: Entry
                 s_entry = [s for s in self.kee_grp.entries if csv_row["id"].upper() == s.title.upper()]

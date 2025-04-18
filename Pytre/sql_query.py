@@ -566,6 +566,10 @@ class _QueryExecute:
         for j in range(len(record)):  # récup champs et conversion valeur récupérée en texte pour export
             value = record[j]
             value_txt = self.converter.from_result(value)
+            try:
+                value_txt = value_txt.encode(self.server.charset).decode("utf-8")
+            except UnicodeDecodeError:
+                pass
             line_buffer += value_txt
             if j != len(record) - 1:
                 line_buffer += self.field_separator
@@ -575,7 +579,7 @@ class _QueryExecute:
     def _broadcast(self, msg_to_display: str) -> None:
         self.parent._broadcast(msg_to_display)
 
-    def _file_write(self, list_to_write: list[str], encoding_format: str = "latin-1") -> None:  # Ecrire texte
+    def _file_write(self, list_to_write: list[str], encoding_format: str = "windows-1252") -> None:  # Ecrire texte
         filename = self.extract_file
         with open(filename, mode="a", encoding=encoding_format, errors="replace") as f:
             f.write("\n".join(list_to_write) + "\n")  # écriture du buffer

@@ -235,13 +235,13 @@ class App(tk.Toplevel):
         self.left_frame.grid(row=0, column=0, padx=0, pady=0, sticky="nswe")
 
         self.servers_label = ttk.Label(self.left_frame, text="Serveur :", justify=tk.LEFT)
-        self.servers_cb = ttk.Combobox(self.left_frame, width=15, state="readonly")
+        self.servers_cb = ttk.Combobox(self.left_frame, width=20, state="readonly")
 
         self.queries_filter_text = tk.StringVar()
         self.queries_label_filter = ttk.Label(self.left_frame, text="Filtre :", justify=tk.LEFT)
-        self.queries_entry_filter = ttk.Entry(self.left_frame, textvariable=self.queries_filter_text, width=20)
+        self.queries_entry_filter = ttk.Entry(self.left_frame, textvariable=self.queries_filter_text, width=25)
         self.queries_btn_refresh = ttk.Button(
-            self.left_frame, text="Recharger", command=lambda: self.refresh_queries(notify=True)
+            self.left_frame, text="\U00002b6e", width=4, command=lambda: self.refresh_queries(notify=True)
         )
 
         self.queries_tree = ttk.Treeview(self.left_frame, columns=(1, 2), show="headings", selectmode="browse")

@@ -100,10 +100,6 @@ class Servers(metaclass=Singleton):
         self.open_db(True)
         s_entry: Entry | None
         for s_entry in self.kee_grp.entries:
-            # ignorer l'info du serveur par défaut
-            if s_entry.title == self.default_title:
-                continue
-
             row = [s_entry.title, s_entry.notes, s_entry.username, s_entry.password]
 
             for item in self.cols_cust:

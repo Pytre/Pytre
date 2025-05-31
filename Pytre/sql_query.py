@@ -1,4 +1,5 @@
 import re
+import csv
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
 from pathlib import Path
@@ -519,15 +520,13 @@ class _QueryExecute:
         buffer_block_size = 50000  # nombre de lignes pour déclencher écriture dans fichier
         buffer = []
 
-        line_header = self.field_separator.join(
-            [colname[0] for colname in cursor.description]
-        )  # ligne des entêtes de colonnes
-        buffer.append(line_header)  # stockage des entêtes de colonne dans le buffer
+        row_headers = [colname[0] for colname in cursor.description]  # ligne des entêtes de colonnes
+        buffer.append(row_headers)  # stockage des entêtes de colonne dans le buffer
 
         row_number = None
         for row_number, record in enumerate(cursor):  # parcours résultats
-            line_buffer = self._sql_record_to_text(record)
-            buffer.append(line_buffer)
+            row_content = self._sql_record_to_text(record)
+            buffer.append(row_content)
             if (
                 self.extract_file != "" and row_number != 0 and (row_number + 1) % buffer_block_size == 0
             ):  # écriture dans le fichier par blocs
@@ -560,8 +559,8 @@ class _QueryExecute:
         else:
             return row_number, buffer
 
-    def _sql_record_to_text(self, record):
-        line_buffer = ""
+    def _sql_record_to_text(self, record) -> list:
+        row_buffer = []
 
         for j in range(len(record)):  # récup champs et conversion valeur récupérée en texte pour export
             value = record[j]
@@ -570,19 +569,18 @@ class _QueryExecute:
                 value_txt = value_txt.encode(self.server.charset).decode("utf-8")
             except UnicodeDecodeError:
                 pass
-            line_buffer += value_txt
-            if j != len(record) - 1:
-                line_buffer += self.field_separator
+            row_buffer.append(value_txt)
 
-        return line_buffer
+        return row_buffer
 
     def _broadcast(self, msg_to_display: str) -> None:
         self.parent._broadcast(msg_to_display)
 
-    def _file_write(self, list_to_write: list[str], encoding_format: str = "windows-1252") -> None:  # Ecrire texte
+    def _file_write(self, rows: list[list[str]]) -> None:
         filename = self.extract_file
-        with open(filename, mode="a", encoding=encoding_format, errors="replace") as f:
-            f.write("\n".join(list_to_write) + "\n")  # écriture du buffer
+        with open(filename, mode="a", encoding="windows-1252", errors="replace", newline="") as f:
+            csv_writer = csv.writer(f, delimiter=self.field_separator, quotechar='"', quoting=csv.QUOTE_MINIMAL)
+            csv_writer.writerows(rows)
 
     def _time_log(self) -> str:
         return datetime.now().strftime(self.print_date_format)

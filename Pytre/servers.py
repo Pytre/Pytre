@@ -213,7 +213,7 @@ class Server:
         try:
             conn: psycopg2.extensions.connection = psycopg2.connect(**conn_params)
             cursor = conn.cursor()
-            cursor.execute("SET statement_timeout = %s", (self.timeout,))
+            cursor.execute("SET statement_timeout = %s", (self.timeout * 1000,))  # needs to be milliseconds
             cursor.execute("SET default_transaction_read_only = on")
             cursor.close()
         except psycopg2.OperationalError as err:

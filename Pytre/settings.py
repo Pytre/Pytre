@@ -10,7 +10,6 @@ from singleton_metaclass import Singleton
 
 class Settings(metaclass=Singleton):
     kee: Kee = Kee()
-    kee_grp_name: str = "Paramètres"
     kee_grp: Group = None
     logs_are_on: bool = False  # indicateur si logs centraux
     logs_folder: Path = Path("")  # répertoire où stocker les logs centraux
@@ -20,7 +19,7 @@ class Settings(metaclass=Singleton):
         cls.kee._open_db(reload)
         if cls.kee.is_ko:
             return False
-        cls.kee_grp = cls.kee.db.find_groups(name=cls.kee_grp_name, first=True)
+        cls.kee_grp = cls.kee.grp_settings
         return True
 
     @classmethod

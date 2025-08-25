@@ -7,6 +7,7 @@ from tkinter import messagebox
 from pykeepass import PyKeePass
 from pykeepass.exceptions import CredentialsError
 from pykeepass.entry import Entry
+from pykeepass.group import Group
 
 from singleton_metaclass import Singleton
 from ui.InputDialog import InputDialog
@@ -39,6 +40,13 @@ class Kee(metaclass=Singleton):
         self.is_ko: bool = False
         self.opening_count: int = 0
 
+        self.grp_name_settings: str = "Paramètres"
+        self.grp_settings: Group = None
+        self.grp_name_servers: str = "Serveurs"
+        self.grp_servers: Group = None
+        self.grp_name_users: str = "Utilisateurs"
+        self.grp_users: Group = None
+
         if not self.pwd:
             self.pwd = self.pwd_get()
         if not self.is_open and not self.is_ko:
@@ -61,6 +69,10 @@ class Kee(metaclass=Singleton):
             self.db.reload()
             self.opening_count += 1
             print(f"Opening count : {self.opening_count}")
+
+        self.grp_settings = self.db.find_groups(name=self.grp_name_settings, first=True)
+        self.grp_servers = self.db.find_groups(name=self.grp_name_servers, first=True)
+        self.grp_users = self.db.find_groups(name=self.grp_name_users, first=True)
 
     def save_db(self):
         try:

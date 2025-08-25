@@ -15,21 +15,24 @@ from about import APP_NAME, APP_VERSION
 class Servers(metaclass=Singleton):
     def __init__(self):
         self.kee: Kee = Kee()
-        self.kee_grp_name: str = "Serveurs"
         self.kee_grp: Group = None
+        self.kee_users_grp: Group = None
 
         self.servers_dict: dict[str, Server] = {}
+        self.groups: set[str] = set()
 
         self.cols_std = ["id", "description", "user", "password", "grp_authorized"]
         self.cols_cust = ["type", "charset", "database", "host", "port", "server", "login_timeout", "timeout"]
 
         self.get_all_servers()
+        self.get_all_groups()
 
     def open_db(self, reload: bool = False) -> bool:
         self.kee._open_db(reload)
         if self.kee.is_ko:
             return False
-        self.kee_grp = self.kee.db.find_groups(name=self.kee_grp_name, first=True)
+        self.kee_grp = self.kee.grp_servers
+        self.kee_users_grp = self.kee.grp_users
         return True
 
     def get_all_servers(self, reload: bool = False, grp_filter: list[str] = None) -> dict:
@@ -42,6 +45,16 @@ class Servers(metaclass=Singleton):
                 self.servers_dict[entry.title] = Server(entry=entry, servers=self)
 
         return self.servers_dict
+
+    def get_all_groups(self, reload: bool = False) -> set:
+        self.open_db(reload)
+
+        self.groups = set()
+        for entry in self.kee_grp.entries + self.kee_users_grp.entries:
+            tags = set(map(lambda val: val.lower().strip(), entry.tags)) if entry.tags else []
+            self.groups.update(tags) if tags else None
+
+        return self.groups
 
     def find_server_entry(self, server_id: str) -> Entry | None:
         for entry in self.kee_grp.entries:
@@ -309,9 +322,12 @@ class Server:
 
 
 if __name__ == "__main__":
-    self = Server()
-    print(self)
-
     servers = Servers()
+
+    print("--------------")
+    print("Servers list :")
     for _, self in servers.get_all_servers().items():
         print(self)
+    print("--------------")
+
+    print(f"Groups list : {servers.groups}")

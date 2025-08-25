@@ -292,13 +292,9 @@ class ServersWindow(tk.Toplevel):
             w_target.config(show="")
 
     def groups_set(self):
-        self.groups = set()
-        for _, server in self.servers.servers_dict.items():
-            groups = server.grp_authorized
-            self.groups.update(groups)
+        self.groups = self.servers.groups
 
         self.listbox.delete(0, tk.END)
-
         for group in sorted(self.groups):
             self.listbox.insert(tk.END, group)
 

@@ -15,16 +15,22 @@ from singleton_metaclass import Singleton
 class Users(metaclass=Singleton):
     def __init__(self):
         self.kee: Kee = Kee()
-        self.kee_grp_name: str = "Utilisateurs"
         self.kee_grp: Group = None
+        self.kee_servers_grp: Group = None
+
+        self.groups: set[str] = set()
+
         self.attribs_std: tuple[str] = ("username", "title", "admin", "msg_login")
         self.attribs_cust: list[str] = list()  # liste des attributs spéciaux
+
+        self.get_all_groups()
 
     def open_db(self, reload: bool = False) -> bool:
         self.kee._open_db(reload)
         if self.kee.is_ko:
             return False
-        self.kee_grp = self.kee.db.find_groups(name=self.kee_grp_name, first=True)
+        self.kee_grp = self.kee.grp_users
+        self.kee_servers_grp = self.kee.grp_servers
         return True
 
     def users_admin_exists(self, reload: bool = False) -> bool:
@@ -52,6 +58,16 @@ class Users(metaclass=Singleton):
         self.attribs_cust = sorted(attribs_set)
 
         return u_list
+
+    def get_all_groups(self, reload: bool = False) -> set:
+        self.open_db(reload)
+
+        self.groups = set()
+        for entry in self.kee_grp.entries + self.kee_servers_grp.entries:
+            tags = set(map(lambda val: val.lower().strip(), entry.tags)) if entry.tags else []
+            self.groups.update(tags) if tags else None
+
+        return self.groups
 
     def get_cust_attribs_list(self) -> list[str]:
         self.open_db(False)
@@ -379,3 +395,6 @@ if __name__ == "__main__":
     print(f"{'='*50}\nSettings / Utilisateur courant\n{'='*50}")
     for key, val in user.to_dict().items():
         print(f"- {key}: {val}")
+
+    users = Users()
+    print(f"Groups list : {users.groups}")

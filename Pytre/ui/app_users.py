@@ -219,7 +219,8 @@ class UsersWindow(tk.Toplevel):
         self.tree.delete(*self.tree.get_children())
         self.tree.delete(*self.detached_items)
         self.detached_items = set()
-        self.groups = set()
+        # self.groups = set()
+        self.groups = self.users.groups
 
         for u in users:
             values: list = []
@@ -232,7 +233,7 @@ class UsersWindow(tk.Toplevel):
                 if col == "grp_authorized":
                     value.remove("all")
                     value.sort()
-                    self.groups.update(value)
+                    # self.groups.update(value)
                     value = "".join([f"[{item}]" for item in value])
                 if col == "admin":
                     value = "\U0001f5f9" if value is True else "\U000000b7"

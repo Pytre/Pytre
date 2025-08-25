@@ -240,7 +240,7 @@ class UsersWindow(tk.Toplevel):
                 values.append(value)
 
             try:
-                self.tree.insert("", tk.END, iid=u.username, values=values)
+                self.tree.insert("", tk.END, iid=u.uuid, values=values)
             except Exception as e:
                 messagebox.showerror("Erreur chargement liste", e)
 
@@ -303,7 +303,7 @@ class UsersWindow(tk.Toplevel):
     def user_modify(self):
         items = self.tree.selection()
         if items:
-            user: User = User(username=items[0])
+            user: User = self.users.find_user_by_uuid(items[0])
             UserDialog(self, user)
 
     def user_delete(self):
@@ -315,8 +315,8 @@ class UsersWindow(tk.Toplevel):
         nb_ok, errors = 0, []
         for item in items:
             try:
-                user = User(username=item)
-                if user.exists:
+                user: User = self.users.find_user_by_uuid(item)
+                if user and user.exists:
                     user.delete()
                 self.tree.delete(item)
                 nb_ok += 1
@@ -329,7 +329,10 @@ class UsersWindow(tk.Toplevel):
         if len(items) == 0:
             return False
         elif len(items) == 1:
-            msg = f"Confirmation de la suppression de :\n{items[0]}"
+            item_vals = self.tree.item(items[0], "values")
+            username_pos = list(self._tree_cols()).index("username")
+            username = item_vals[username_pos]
+            msg = f"Confirmation de la suppression de :\n{username}"
         else:
             msg = f"Confirmation de la suppression de {len(items)} utilisateurs"
 
@@ -469,8 +472,6 @@ class UserDialog(tk.Toplevel):
             else:
                 my_tk_var = tk.StringVar()
                 my_entry = ttk.Entry(self.entries_frame, textvariable=my_tk_var)
-                if self.user and key == "username":
-                    my_entry.config(state="disabled")
 
             new_key = {"w_label": my_label, "w_entry": my_entry, "var": my_tk_var}
             item.update(new_key)
@@ -545,18 +546,12 @@ class UserDialog(tk.Toplevel):
             self.listbox.selection_set(pos)
 
     def user_save(self):
-        username = self.entries["username"]["var"].get()
-
         if self.user:
             user = self.user
         else:
-            u_entry = self.users.find_user_entry(username)
-            if u_entry:
-                msg = "Utilisateur déjà existant !"
-                messagebox.showerror(title="Erreur ajout", message=msg, parent=self, type=messagebox.OK)
-                return
             user: User = User(detect_user=False)
 
+        # mise à jour des infos de l'utilisateur
         for key, item in self.entries.items():
             val = item["var"].get()
             if key in self.users.attribs_cust:
@@ -566,8 +561,16 @@ class UserDialog(tk.Toplevel):
 
         user.grp_authorized = [self.listbox.get(line) for line in self.listbox.curselection()]
 
-        user.save()
-        self.close(refresh_tree=True)
+        # enregistrement des infos
+        try:
+            user.save()
+            self.close(refresh_tree=True)
+        except Exception as e:
+            msg = "Erreur inattendue lors de l'enregistrement :\n"
+            messagebox.showerror(
+                title="Enregistrement utilisateur", message=msg + str(e), parent=self, type=messagebox.OK
+            )
+            return
 
     def close(self, _: Event = None, refresh_tree: bool = False):
         self.parent.wm_attributes("-disabled", False)

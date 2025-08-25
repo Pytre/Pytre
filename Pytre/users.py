@@ -1,7 +1,10 @@
+from __future__ import annotations
+
 import os
 import getpass
 
 import csv
+from uuid import UUID
 from pathlib import Path
 from tkinter import messagebox
 
@@ -231,12 +234,16 @@ class Users(metaclass=Singleton):
         domain_and_name = f"{domain}\\{name}" if domain else name
         return domain_and_name
 
-    def find_user_entry(self, username: str) -> Entry | None:
+    def find_entry_by_username(self, username: str) -> Entry | None:
         for entry in self.kee_grp.entries:
             if entry.username and username.upper() == entry.username.upper():
                 return entry
 
         return None
+
+    def find_user_by_uuid(self, uuid: str) -> User | None:
+        entry: Entry = self.kee.db.find_entries(uuid=UUID(uuid), first=True)
+        return User(entry=entry) if entry else None
 
 
 class User:
@@ -248,6 +255,7 @@ class User:
 
         self.users: Users = Users()
 
+        self.uuid: str = ""
         self.username: str = ""
         self.exists: bool = False
         self.is_authorized: bool = False
@@ -276,6 +284,7 @@ class User:
 
     def to_dict(self) -> dict:
         attribs = {
+            "uuid": self.uuid,
             "id": self.username,
             "exist_in_settings": self.exists,
             "is_authorized": self.is_authorized,
@@ -300,7 +309,7 @@ class User:
         if not self.users.open_db():
             return
 
-        u_entry: Entry = self.users.find_user_entry(self.username)
+        u_entry: Entry = self.users.find_entry_by_username(self.username)
         if u_entry:
             self._load_from_entry(u_entry)
 
@@ -312,6 +321,7 @@ class User:
         self.is_authorized = True
 
         # récup propriétés
+        self.uuid = str(u_entry.uuid)
         self.username = u_entry.username
         self.title = u_entry.title
         for property in u_entry.custom_properties:
@@ -349,13 +359,19 @@ class User:
 
         self.users.open_db(True)
 
-        u_entry: Entry = self.users.find_user_entry(self.username)
-        if u_entry:
-            u_entry.username = self.username
-            u_entry.title = self.title
-        else:
-            u_entry: Entry = self.users.kee.db.add_entry(self.users.kee_grp, self.title, self.username, password="")
+        # contrôle
+        if [u for u in self.users.get_all_users() if u.username == self.username and not u.uuid == self.uuid]:
+            raise ValueError(f"{self.username} est déjà utilisé comme identifiant")
 
+        # récupération d'une entrée pour la sauvegarde
+        u_entry: Entry = self.users.kee.db.find_entries(uuid=UUID(self.uuid), first=True) if self.uuid else None
+        if not u_entry:
+            u_entry: Entry = self.users.kee.db.add_entry(self.users.kee_grp, "", "", "")
+            self.uuid = str(u_entry.uuid)
+
+        # mise à jour de l'entrée
+        u_entry.username = self.username
+        u_entry.title = self.title
         admin_val = "true" if self.admin else "false"
         u_entry.set_custom_property("superuser", admin_val)
         u_entry.set_custom_property("msg_login", self.msg_login_cust)
@@ -375,7 +391,7 @@ class User:
     def delete(self) -> bool:
         self.users.open_db()
 
-        u_entry: Entry = self.users.find_user_entry(self.username)
+        u_entry: Entry = self.users.kee.db.find_entries(uuid=UUID(self.uuid), first=True)
         if u_entry is None:
             raise LookupError("User not found")
 

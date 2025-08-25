@@ -1,4 +1,5 @@
 import csv
+from uuid import UUID
 from pathlib import Path
 from enum import Enum
 
@@ -55,13 +56,6 @@ class Servers(metaclass=Singleton):
             self.groups.update(tags) if tags else None
 
         return self.groups
-
-    def find_server_entry(self, server_id: str) -> Entry | None:
-        for entry in self.kee_grp.entries:
-            if entry.title and server_id.upper() == entry.title.upper():
-                return entry
-
-        return None
 
     def csv_import(self, filename: Path, delimiter: str = ";") -> bool:
         self.open_db(True)
@@ -237,7 +231,7 @@ class Server:
         return conn
 
     def _load_from_entry(self, s_entry: Entry):
-        self.uuid = s_entry.uuid
+        self.uuid = str(s_entry.uuid)
         self.id = s_entry.title
         self.description = val if (val := s_entry.notes) is not None else ""
 
@@ -274,6 +268,9 @@ class Server:
         self.load()
 
     def save(self) -> bool:
+        if not self.id or self.id == "":
+            raise ValueError("Server must have an id")
+
         self.servers.open_db(True)
 
         # contrôle
@@ -281,10 +278,10 @@ class Server:
             raise ValueError(f"{self.id} est déjà utilisé comme identifiant")
 
         # récupération d'une entrée pour la sauvegarde
-        entry: Entry = self.servers.kee.db.find_entries(uuid=self.uuid, first=True) if self.uuid else None
+        entry: Entry = self.servers.kee.db.find_entries(uuid=UUID(self.uuid), first=True) if self.uuid else None
         if not entry:
             entry: Entry = self.servers.kee.db.add_entry(self.servers.kee_grp, "", "", "")
-            self.uuid = entry.uuid
+            self.uuid = str(entry.uuid)
 
         # mise à jour de l'entrée
         entry.title = self.id
@@ -311,7 +308,7 @@ class Server:
     def delete(self) -> bool:
         self.servers.open_db()
 
-        s_entry: Entry = self.servers.kee.db.find_entries(title=self.id, uuid=self.uuid, first=True)
+        s_entry: Entry = self.servers.kee.db.find_entries(uuid=UUID(self.uuid), first=True)
         if s_entry is None:
             raise LookupError("Server not found")
 

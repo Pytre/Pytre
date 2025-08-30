@@ -120,7 +120,7 @@ class MsgDialog(tk.Toplevel):
     def on_click(self, button_text):
         if button_text is None:
             widget_with_focus = self.focus_displayof()
-            if not widget_with_focus in self.buttons_widgets:
+            if widget_with_focus not in self.buttons_widgets:
                 return
             elif button_text is None:
                 button_text = widget_with_focus["text"]

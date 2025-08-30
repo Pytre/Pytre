@@ -1,6 +1,11 @@
 import tkinter as tk
 from tkinter import Event, ttk, font
 
+if not __package__:
+    import syspath_insert  # noqa: F401  # disable unused-import warning
+
+import utils
+
 
 class InputDialog(tk.Toplevel):
     @classmethod
@@ -17,7 +22,7 @@ class InputDialog(tk.Toplevel):
             self.master.withdraw()
         else:
             self.focus_set()
-            self.parent.wm_attributes("-disabled", True)
+            utils.ui_disable_parent(self, self.parent)
             self.transient(self.parent)
 
         self.answer = None
@@ -62,17 +67,7 @@ class InputDialog(tk.Toplevel):
         self.entry.focus_set()
 
     def _setup_position(self, parent: tk.Toplevel | None):
-        self.update_idletasks()
-
-        parent_x = parent.winfo_x() if parent else 0
-        parent_y = parent.winfo_y() if parent else 0
-        parent_width = parent.winfo_width() if parent else self.winfo_screenwidth()
-        parent_height = parent.winfo_height() if parent else self.winfo_screenheight()
-
-        x = int(parent_x + parent_width / 2 - self.winfo_width() / 2)
-        y = int(parent_y + parent_height / 2 - self.winfo_height() / 2)
-
-        self.geometry(f"+{x}+{y}")
+        utils.ui_center(self, parent)
 
     def _setup_buttons(self):
         self.buttons_frame.columnconfigure(0, weight=1)
@@ -93,7 +88,7 @@ class InputDialog(tk.Toplevel):
 
     def close(self, _: Event = None):
         if self.parent:
-            self.parent.wm_attributes("-disabled", False)
+            utils.ui_undisable_parent(self, self.parent)
             self.parent.focus_set()
             self.destroy()  # doit se faire après avoir rendu le focus
         else:

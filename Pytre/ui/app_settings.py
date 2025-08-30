@@ -4,6 +4,7 @@ from tkinter import ttk, Event, messagebox
 if not __package__:
     import syspath_insert  # noqa: F401  # disable unused-import warning
 
+import utils
 from settings import Settings
 from about import APP_NAME
 
@@ -14,7 +15,7 @@ class SettingsWindow(tk.Toplevel):
         self.parent = parent
         if self.parent:
             self.focus_set()
-            self.parent.wm_attributes("-disabled", True)
+            utils.ui_disable_parent(self, self.parent)
             self.transient(self.parent)
         else:
             self.master.withdraw()
@@ -133,7 +134,7 @@ class SettingsWindow(tk.Toplevel):
 
     def app_exit(self, _: Event = None):
         if self.parent:
-            self.parent.wm_attributes("-disabled", False)
+            utils.ui_undisable_parent(self, self.parent)
 
         self.destroy()
 

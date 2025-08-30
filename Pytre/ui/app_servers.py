@@ -4,6 +4,7 @@ from tkinter import ttk, Event, filedialog, messagebox, font
 if not __package__:
     import syspath_insert  # noqa: F401  # disable unused-import warning
 
+import utils
 from ui.InputDialog import InputDialog
 from servers import Servers, Server, ServerType
 from about import APP_NAME
@@ -15,7 +16,7 @@ class ServersWindow(tk.Toplevel):
         self.parent = parent
         if self.parent:
             self.focus_set()
-            self.parent.wm_attributes("-disabled", True)
+            utils.ui_disable_parent(self, self.parent)
             self.transient(self.parent)
         else:
             self.master.withdraw()
@@ -42,7 +43,7 @@ class ServersWindow(tk.Toplevel):
         self.minsize(width=400, height=100)
         if self.parent:
             self.geometry(f"+{self.parent.winfo_x() + 100}+{self.parent.winfo_y() + 50}")
-        else:
+        elif utils.get_system() == "Windows":
             self.geometry("+200+150")
         self.resizable(True, True)
 
@@ -414,7 +415,7 @@ class ServersWindow(tk.Toplevel):
 
     def app_exit(self, _: Event = None):
         if self.parent:
-            self.parent.wm_attributes("-disabled", False)
+            utils.ui_undisable_parent(self, self.parent)
 
         self.destroy()
 

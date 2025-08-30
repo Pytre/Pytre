@@ -4,7 +4,7 @@ import tkinter as tk
 import ctypes
 import threading
 from tkinter import Event, ttk, messagebox, font
-from os import startfile
+
 from pathlib import Path
 from datetime import datetime
 
@@ -17,6 +17,7 @@ import settings
 import users
 import user_prefs
 import servers
+import utils
 from ui.save_as import save_as
 from ui.MsgDialog import MsgDialog
 from ui.app_logs import LogsWindow
@@ -172,8 +173,10 @@ class App(tk.Toplevel):
     def setup_ui(self):
         app_version = APP_VERSION if not APP_STATUS else f"{APP_VERSION} ({APP_STATUS})"
         self.title(f"{APP_NAME} - V.{app_version}")
-        icon_file = self.app_settings.app_path / "res" / "app.ico"
-        self.iconbitmap(default=icon_file)
+
+        icon_file = self.app_settings.app_path / "res" / "app.png"
+        icon_img = tk.PhotoImage(file=icon_file)
+        self.iconphoto(True, icon_img)
 
         self.minsize(width=975, height=700)
         self.resizable(True, True)
@@ -372,12 +375,13 @@ class App(tk.Toplevel):
             self.btn_frame.columnconfigure(column, weight=my_weight)
 
     def setup_ui_position(self):
-        self.update_idletasks()
+        if not utils.get_system() == "Windows":
+            # récup avant que l'UI soit affichée de la hauteur
+            # qui correspond à la barre de titre et au menu
+            decoration_height = self.winfo_reqheight()
+            self.geometry(f"{1025}x{750 - decoration_height}")
 
-        x = int(self.winfo_screenwidth() / 2 - self.winfo_width() / 2)
-        y = int(self.winfo_screenheight() / 2 - self.winfo_height() / 1.8)
-
-        self.geometry(f"+{x}+{y}")
+        utils.ui_center(self)
 
     # ------------------------------------------------------------------------------------------
     # Gestion de l'interface pour la frame de saisie des paramètres
@@ -532,14 +536,26 @@ class App(tk.Toplevel):
         print("Thread execute ending")
 
     def exec_force_stop(self):
+        system = utils.platform.system()
+
         if self.query.exec_can_stop.is_set():
             self.query.exec_ask_stop.set()
             while self.exec_thread.is_alive():
                 time.sleep(1)
-        else:
+        elif system == "Windows":
             thread_handle = ctypes.windll.kernel32.OpenThread(0x0001, False, self.exec_thread.ident)
             ctypes.windll.kernel32.TerminateThread(thread_handle, 0)  # Windows API pour terminer le thread
             ctypes.windll.kernel32.CloseHandle(thread_handle)  # fermeture du handle pour éviter les leaks
+        elif system == "Linux":
+            msg = "\n" + datetime.now().strftime(self.date_format) + " - Interruption non implémentée pour Linux"
+            self.output_msg(msg, "end")
+            self.force_stop.clear()
+            return
+        else:
+            msg = "\n" + datetime.now().strftime(self.date_format) + f" - Interruption non implémentée pour {system}"
+            self.output_msg(msg, "end")
+            self.force_stop.clear()
+            return
 
         msg = "\n" + datetime.now().strftime(self.date_format) + " - Requête interrompue"
         self.output_msg(msg, "end")
@@ -580,7 +596,7 @@ class App(tk.Toplevel):
 
         # Ouverture directe du fichier
         if answer == "Ouvrir":
-            startfile(self.output_file)
+            utils.startfile(self.output_file)
             return
 
         # Enregistrement d'une copie
@@ -600,7 +616,7 @@ class App(tk.Toplevel):
                 parent=self,
             )
             if answer == "Oui":
-                startfile(file_copy)
+                utils.startfile(file_copy)
 
     # ------------------------------------------------------------------------------------------
     # Verrouillage / Déverrouillage de l'UI
@@ -748,7 +764,9 @@ class App(tk.Toplevel):
             pass
 
     def open_folder(self, folder: str):
-        if folder == self.prefs.extract_folder and self.output_file:
+        if utils.get_system() == "Linux":
+            utils.startfile(folder)  # difficult to select open and select a file for Linux
+        elif folder == self.prefs.extract_folder and self.output_file:
             subprocess.Popen(f"explorer /select,{self.output_file}")
         else:
             subprocess.Popen(f"explorer {folder}")

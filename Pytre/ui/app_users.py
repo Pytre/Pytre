@@ -4,6 +4,7 @@ from tkinter import ttk, Event, font, messagebox, filedialog
 if not __package__:
     import syspath_insert  # noqa: F401  # disable unused-import warning
 
+import utils
 from ui.InputDialog import InputDialog
 from users import Users, User
 from about import APP_NAME
@@ -34,7 +35,11 @@ class UsersWindow(tk.Toplevel):
     # ------------------------------------------------------------------------------------------
     def _setup_ui(self):
         self.title(f"{APP_NAME} - Gestion des utilisateurs")
-        self.geometry("1200x800+100+75")
+        self.geometry("1200x800")
+        if self.parent:
+            utils.ui_center(self, self.parent)
+        elif utils.platform == "Windows":
+            self.geometry("+100+75")
         self.resizable(True, True)
 
         self.ctrl_frame = ttk.Frame(self, padding=1, borderwidth=2)
@@ -411,7 +416,8 @@ class UserDialog(tk.Toplevel):
         self.user: User = user
 
         self.focus_set()
-        self.parent.wm_attributes("-disabled", True)
+        self.update_idletasks()  # needed to update correctly on Linux
+        utils.ui_disable_parent(self, self.parent)
         self.transient(self.parent)
 
         self._setup_ui()
@@ -573,7 +579,7 @@ class UserDialog(tk.Toplevel):
             return
 
     def close(self, _: Event = None, refresh_tree: bool = False):
-        self.parent.wm_attributes("-disabled", False)
+        utils.ui_undisable_parent(self, self.parent)
 
         if refresh_tree:
             self.parent.tree_refresh()
@@ -602,7 +608,7 @@ class GroupsDialog(tk.Toplevel):
         self.usernames: list[str] = usernames
 
         self.focus_set()
-        self.parent.wm_attributes("-disabled", True)
+        utils.ui_disable_parent(self, self.parent)
         self.transient(self.parent)
 
         self.remove_mode: bool = remove_mode
@@ -717,7 +723,7 @@ class GroupsDialog(tk.Toplevel):
         self.close(refresh_tree=True)
 
     def close(self, _: Event = None, refresh_tree: bool = False):
-        self.parent.wm_attributes("-disabled", False)
+        utils.ui_undisable_parent(self, self.parent)
 
         if refresh_tree:
             self.parent.tree_refresh()

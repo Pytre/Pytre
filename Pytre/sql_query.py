@@ -55,15 +55,30 @@ class Query:
 
     def _init_file_content(self, encoding_format: str = "utf-8") -> str:
         file_content = ""
-        try:
-            with open(self.filename, mode="r", encoding=encoding_format) as f:
-                file_content = f.read()
-        except FileNotFoundError:
-            pass
-        except UnicodeDecodeError:
-            alternative_encoding_format = "ansi" if encoding_format == "utf-8" else "utf-8"
-            with open(self.filename, mode="r", encoding=alternative_encoding_format) as f:
-                file_content = f.read()
+
+        # if filename has not been set then immediatly return without error
+        if self.filename.name == "dummy":
+            return file_content
+
+        # set alternative encoding to try if failing to decode
+        encodings: list = ["utf-8", "cp1252", "ansi"]
+        encodings.remove(encoding_format) if encoding_format in encodings else None
+        encodings.insert(0, encoding_format)
+
+        # test all possible decoding formats
+        decoded: bool = False
+        for encoding in encodings:
+            try:
+                with open(self.filename, mode="r", encoding=encoding) as f:
+                    file_content = f.read()
+                decoded = True
+                break
+            except (UnicodeDecodeError, LookupError):  # LookupError if format doesn't exist (eg : ansi on linux)
+                pass
+
+        # if all try failed raise an exception
+        if not decoded:
+            raise TypeError(f"couldn't decode file using {', '.join(encodings)}")
 
         return file_content
 
@@ -598,7 +613,7 @@ class _QueryExecute:
         return params
 
 
-def get_queries(folder: Path) -> list[Query]:
+def get_queries(folder: Path) -> tuple[list[Query], list[str]]:
     if not Path(folder).is_dir():
         raise ValueError(f"Erreur : le répertoire {folder} n'a pas été trouvé ou n'est pas accessible !")
 
@@ -684,7 +699,11 @@ def orphan_queries(folder: Path) -> list[Path]:
 if __name__ == "__main__":
     app_settings: settings.Settings = settings.Settings()
     APP_PATH = app_settings.app_path
+
+    # queries, errors = get_queries(Path(app_settings.queries_folder))
+
     sql_script = list(Path(app_settings.queries_folder).glob("*.sql"))[0]
+    sql_script = Path(app_settings.queries_folder) / "ZCOMP.sql"
 
     my_query = Query(sql_script)
     my_query.update_values()

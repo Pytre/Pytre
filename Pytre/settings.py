@@ -1,5 +1,5 @@
 import json
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 from pykeepass.entry import Entry
 from pykeepass.group import Group
@@ -93,6 +93,8 @@ class Settings(metaclass=Singleton):
             value = getattr(self, attr_name)
             if kee_title in ("LOGS_ARE_ON",):
                 value = "true" if value else "false"
+            elif kee_title in ("QUERIES_FOLDER", "LOGS_FOLDER"):
+                value = PureWindowsPath(value).as_posix()  # always save path as posix for OSes compatibility
 
             info.username = value
 

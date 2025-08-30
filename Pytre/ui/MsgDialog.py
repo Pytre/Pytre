@@ -4,6 +4,7 @@ from tkinter import Event, ttk, font
 if not __package__:
     import syspath_insert  # noqa: F401  # disable unused-import warning
 
+import utils
 from settings import get_app_path
 
 
@@ -22,7 +23,7 @@ class MsgDialog(tk.Toplevel):
             self.master.withdraw()
         else:
             self.focus_set()
-            self.parent.wm_attributes("-disabled", True)
+            utils.ui_disable_parent(self, self.parent)
             self.transient(self.parent)
 
         self.buttons_txt = buttons_txt
@@ -55,17 +56,7 @@ class MsgDialog(tk.Toplevel):
         self._setup_buttons()
 
     def _setup_position(self, parent: tk.Toplevel | None):
-        self.update_idletasks()
-
-        parent_x = parent.winfo_x() if parent else 0
-        parent_y = parent.winfo_y() if parent else 0
-        parent_width = parent.winfo_width() if parent else self.winfo_screenwidth()
-        parent_height = parent.winfo_height() if parent else self.winfo_screenheight()
-
-        x = int(parent_x + parent_width / 2 - self.winfo_width() / 2)
-        y = int(parent_y + parent_height / 2 - self.winfo_height() / 2)
-
-        self.geometry(f"+{x}+{y}")
+        utils.ui_center(self, parent)
 
     def _setup_msg(self, msg):
         icon_file = get_app_path() / "res" / "msg_question.png"
@@ -130,7 +121,7 @@ class MsgDialog(tk.Toplevel):
 
     def close(self, _: Event = None):
         if self.parent:
-            self.parent.wm_attributes("-disabled", False)
+            utils.ui_undisable_parent(self, self.parent)
             self.parent.focus_set()
             self.destroy()  # doit se faire après avoir rendu le focus
         else:

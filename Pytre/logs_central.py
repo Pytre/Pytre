@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import sqlite3
 import time
 import uuid
@@ -731,6 +733,16 @@ class FileDriven(CentralLogs):
         except Exception as e:
             print(f"Error reading active folder, using default: {e}")
             return 0, self.export_folders[0]
+
+
+def get_default_class():
+    return FileDriven
+
+
+def write_to_central_log(logs_folder: Path, user_db: Path, user_name: str, user_title: str):
+    default_class = get_default_class()
+    central_logs: CentralLogs = default_class(logs_folder)
+    central_logs.trigger_sync(user_db, user_name, user_title)
 
 
 if __name__ == "__main__":

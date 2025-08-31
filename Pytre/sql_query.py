@@ -1,9 +1,12 @@
+import builtins
 import re
 import csv
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
 from pathlib import Path
-from threading import Event
+from threading import Thread
+from multiprocessing import Process, Queue, Event as proc_get_event
+from multiprocessing.synchronize import Event as ProcEvent
 
 import pymssql
 import psycopg2
@@ -13,12 +16,10 @@ import user_prefs
 import users
 import servers
 import logs_user
-import logs_central
 from convert import Convert
 
 
 PRINT_DATE_FORMAT: str = "%d/%m/%Y à %H:%M:%S"  # pour le format de la date pour les logs / output
-CENTRAL_LOGS_CLASS = logs_central.FileDriven
 
 
 class Query:
@@ -26,9 +27,10 @@ class Query:
         self.query_execute = _QueryExecute(self)
 
         self.last_extracted_file = ""  # info du dernier fichier extrait
-        self.msg_list: list[str] = []  # liste de msg à l'utilisateur pour interface graphique
-        self.exec_ask_stop: Event = Event()  # pour signaler que l'execution doit être stoppée
-        self.exec_can_stop: Event = Event()  # pour savoir si l'execution peut stopper proprement
+
+        self.queue: Queue = Queue()  # pour transmettre les messages à l'UI
+        self.force_stop: ProcEvent = proc_get_event()  # pour signaler que l'execution doit être stoppée
+        self.can_stop: ProcEvent = proc_get_event()  # pour savoir si l'execution peut stopper proprement
 
         self.filename = filename
         self.file_content = self._init_file_content(encoding_format)
@@ -44,6 +46,8 @@ class Query:
 
         hide: str = self.infos.get("hide", "0")
         self.hide: int = int(hide) if hide.isdigit() else 0
+
+        self.description: str = ""
         if self.hide:
             self.description = "(" + "*" * self.hide + ") " + self.infos.get("description", "")
         else:
@@ -160,7 +164,6 @@ class Query:
         return True
 
     def execute_cmd(self, file_output: bool = True, server_id: str = "") -> bool | tuple:
-        self.msg_list = []
         self.last_extracted_file = ""
         self.update_values()
 
@@ -183,12 +186,18 @@ class Query:
                 return False
             except pymssql._pymssql.OperationalError as err:
                 err_msg = str("=") * 50 + "\n"
-                err_msg += err.args[0][1].decode("utf-8", errors="replace") + "\n"
+                err_msg += err.args[0][1].decode("utf-8", errors="replace")
+                if not err_msg[-1] == "\n":
+                    err_msg += "\n"
+                err_msg += str("=") * 50
                 self._broadcast(err_msg)
                 return False
             except psycopg2.OperationalError as err:
                 err_msg = str("=") * 50 + "\n"
-                err_msg += "".join(err.args[0]) + "\n"
+                err_msg += "".join(err.args[0])
+                if not err_msg[-1] == "\n":
+                    err_msg += "\n"
+                err_msg += str("=") * 50
                 self._broadcast(err_msg)
                 return False
             except Exception as err:
@@ -251,8 +260,52 @@ class Query:
         return var_pos
 
     def _broadcast(self, msg_to_broadcast: str) -> None:
-        self.msg_list.append(msg_to_broadcast)
+        msg_type: str = "msg_output"
+        self.queue.put((msg_type, msg_to_broadcast))
         print(msg_to_broadcast)
+
+    def serialize(self) -> dict:
+        display_params: dict[str, str] = {}
+        param: _Param
+        for key, param in self.params_obj.items():
+            display_params[key] = param.display_value
+
+        return {
+            "filename": str(self.filename),
+            "file_content": self.file_content,
+            "cmd_params": self.cmd_params,
+            "display_params": display_params,
+            "infos": self.infos,
+            "raw_cmd": self.raw_cmd,
+            "cmd_template": self.cmd_template,
+            "name": self.name,
+            "hide": self.hide,
+            "description": self.description,
+            "grp_authorized": self.grp_authorized,
+            "servers_id": self.servers_id,
+        }
+
+    @classmethod
+    def deserialize(cls, data: dict) -> "Query":
+        query: Query = cls()
+        query.filename = Path(data["filename"])
+        query.file_content = data["file_content"]
+        query.infos = data["infos"]
+        query.raw_cmd = data["raw_cmd"]
+        query.cmd_template = data["cmd_template"]
+        query.name = data["name"]
+        query.hide = data["hide"]
+        query.description = data["description"]
+        query.grp_authorized = data["grp_authorized"]
+        query.servers_id = data["servers_id"]
+
+        query.params_obj = query._init_params()
+        for key, val in data["display_params"].items():
+            param_obj: _Param = query.params_obj[key]
+            param_obj.display_value = val
+            query.update_values(key)
+
+        return query
 
 
 class _Param:
@@ -467,19 +520,19 @@ class _QueryExecute:
         self.cmd_parameters = cmd_parameters
         self.extract_file = extract_file
 
-        if self.cmd_template == "":
+        if self.cmd_template == "" or self.parent.force_stop.is_set():
             return False
 
         starting_date = datetime.now()
         self._broadcast(starting_date.strftime(self.print_date_format) + " - Connection à la base de données...")
 
-        self.parent.exec_can_stop.clear()
+        self.parent.can_stop.clear()
         with self.server.get_connection() as conn:
             with conn.cursor() as cursor:
                 self._broadcast(self._time_log() + " - Requête en cours d'execution...")
                 try:
                     cursor.execute(self.cmd_template, self.cmd_parameters)
-                    self.parent.exec_can_stop.set()
+                    self.parent.can_stop.set()
                 except (pymssql._pymssql.ProgrammingError, psycopg2.ProgrammingError) as err:
                     error_code = err.args[0]
                     error_msg = str(err.args[1])[2:-2]
@@ -498,8 +551,8 @@ class _QueryExecute:
         return rows_count, execute_output
 
     def _execute_end(self, starting_date: datetime, ending_date: datetime, rows_count: int):
+        # writing user log
         user_log: logs_user.UserDb = logs_user.UserDb()
-
         params_for_log = self._params_for_log()
         user_log.insert_exec(
             self.server.id,
@@ -511,11 +564,18 @@ class _QueryExecute:
             self.extract_file,
         )
 
+        # if on, launch central log
         if self.app_settings.logs_are_on:
             user: users.CurrentUser = users.CurrentUser()
-            central_logs: CENTRAL_LOGS_CLASS = CENTRAL_LOGS_CLASS(self.app_settings.logs_folder)
-            central_logs.trigger_sync(user_log.user_db, user.username, user.title)
+            log_infos: dict = {
+                "logs_folder": self.app_settings.logs_folder,
+                "user_db": user_log.user_db,
+                "user_name": user.username,
+                "user_title": user.title,
+            }
+            self.parent.queue.put(("central_log", log_infos))
 
+        # notify end result
         self._broadcast(
             str("=") * 50
             + "\nLigne(s) extraite(s) : "
@@ -558,7 +618,7 @@ class _QueryExecute:
                 self._file_write(buffer)
                 buffer.clear()
 
-            if self.parent.exec_ask_stop.is_set():
+            if self.parent.force_stop.is_set():
                 return 0, ""
 
         if self.extract_file != "" and len(buffer) > 1:  # si buffer (et pas que entête) alors écrire ce qui reste
@@ -611,6 +671,103 @@ class _QueryExecute:
             }
 
         return params
+
+
+class QueryWorker:
+    def __init__(self, queue_result: Queue, force_stop: ProcEvent, can_stop: ProcEvent):
+        self.process: Process = None
+        self.queue_task: Queue = Queue()
+
+        self.queue_result: Queue = queue_result
+        self.force_stop: ProcEvent = force_stop
+        self.can_stop: ProcEvent = can_stop
+
+        self.creating_worker: bool = False
+
+        self.create_worker()
+
+    def create_worker(self):
+        def create():
+            args = (self.queue_task, self.queue_result, self.force_stop, self.can_stop)
+            self.process = Process(target=self._worker, args=args, daemon=True)
+            self.process.start()
+
+            if self.queue_result.get():
+                print("Worker ready")
+
+            self.creating_worker = False
+
+        if not self.process or not self.process.is_alive():
+            self.creating_worker = True
+            print("Worker initializing")
+            Thread(target=create, daemon=True).start()
+
+    def kill_and_restart(self):
+        print("Task has been asked to stop")
+
+        if self.can_stop.is_set():
+            print("Task, stopping normally")
+            self.force_stop.set()
+            self.process.join()
+
+        if self.process.is_alive():
+            print("Task, stopping by terminating process")
+            self.process.terminate()  # SIGTERM
+            self.process.join(timeout=2.0)
+
+        if self.process.is_alive():
+            print("Task, stopping by killing process")
+            self.process.kill()  # SIGKILL
+            self.process.join()
+
+        print("Task stopped")
+
+        self.create_worker()
+
+    def input_task(self, server_id: str, query_data):
+        self.queue_task.put(("start", server_id, query_data))
+
+    def _worker(self, queue_task: Queue, queue_result: Queue, force_stop: ProcEvent, can_stop: ProcEvent):
+        original_print = builtins.print  # backup current print function
+        builtins.print = (
+            lambda *args, **kwargs: None
+        )  # disable print, not working in frozen environment for subprocess
+
+        self.queue_task: Queue = queue_task
+        self.queue_result: Queue = queue_result
+        self.force_stop: ProcEvent = force_stop
+        self.can_stop: ProcEvent = can_stop
+
+        self.queue_result.put(True)
+
+        try:
+            while True:
+                msg_type, self.server_id, self.query_data = self.queue_task.get()
+                if msg_type == "stop":
+                    break
+                elif msg_type == "start":
+                    self._task()
+        finally:
+            builtins.print = original_print  # restore original print function
+
+    def _task(self):
+        try:
+            self.queue_result.put(("msg_print", "Query task starting"))
+
+            query: Query = Query.deserialize(self.query_data)
+            query.queue = self.queue_result
+            query.force_stop = self.force_stop
+            query.can_stop = self.can_stop
+
+            result = query.execute_cmd(True, self.server_id)
+            rows_number, output_file = result if isinstance(result, tuple) else (0, "")
+            self.queue_result.put(("result", (rows_number, output_file)))
+
+            self.queue_result.put(("msg_print", "Query task ending"))
+        except Exception as e:
+            self.queue_result.put(("error", str(e)))
+        finally:
+            self.queue_result.put(("done", None))
 
 
 def get_queries(folder: Path) -> tuple[list[Query], list[str]]:

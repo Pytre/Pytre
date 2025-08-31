@@ -1,9 +1,10 @@
-import time
 import subprocess
 import tkinter as tk
-import ctypes
-import threading
-from tkinter import Event, ttk, messagebox, font
+from time import sleep
+from threading import Thread
+from multiprocessing import Queue, Event as proc_get_event
+from multiprocessing.synchronize import Event as ProcEvent
+from tkinter import Event as tkEvent, ttk, messagebox, font
 
 from pathlib import Path
 from datetime import datetime
@@ -18,6 +19,11 @@ import users
 import user_prefs
 import servers
 import utils
+import logs_central
+
+# from logs_central import CentralLogs, write_to_central_log, DEFAULT_CLASS as LOG_CLASS
+from about import APP_NAME, APP_VERSION, APP_STATUS
+
 from ui.save_as import save_as
 from ui.MsgDialog import MsgDialog
 from ui.app_logs import LogsWindow
@@ -28,7 +34,6 @@ from ui.app_settings import SettingsWindow
 from ui.app_password import PasswordWindow
 from ui.app_console import ConsoleWindow
 from ui.app_about import AboutWindow
-from about import APP_NAME, APP_VERSION, APP_STATUS
 
 
 class App(tk.Toplevel):
@@ -48,7 +53,12 @@ class App(tk.Toplevel):
         self.query: sql_query.Query = sql_query.Query()
         self.params_widgets: dict[str, ttk.Widget] = {}
         self.output_file: Path = ""
-        self.force_stop: threading.Event = threading.Event()
+
+        self.process_running: bool = False
+        self.queue: Queue = Queue()
+        self.can_stop: ProcEvent = proc_get_event()
+        self.force_stop: ProcEvent = proc_get_event()
+        self.query_worker: sql_query.QueryWorker = sql_query.QueryWorker(self.queue, self.force_stop, self.can_stop)
 
         self.date_format = sql_query.PRINT_DATE_FORMAT
 
@@ -440,6 +450,7 @@ class App(tk.Toplevel):
                 my_widgets["entry"].bind("<FocusIn>", self.param_focus_event)
                 my_widgets["entry"].bind("<FocusOut>", self.param_input_event)
                 my_widgets["entry"].bind("<Return>", self.param_input_event)
+                my_widgets["entry"].bind("<KP_Enter>", self.param_input_event)
 
             my_widgets["check"] = ttk.Label(
                 self.params_inner, text="", width=3, relief="groove", justify=tk.LEFT, background="red"
@@ -495,87 +506,94 @@ class App(tk.Toplevel):
         self.bind("<Control-f>", lambda _: self.queries_filter_focus())
         self.protocol("WM_DELETE_WINDOW", self.app_exit)  # arrêter le programme quand fermeture de la fenêtre
 
-        self.event_add("<<exec_finished>>", "None")
-        self.bind("<<exec_finished>>", lambda _: self.exec_finish())
-
     # ------------------------------------------------------------------------------------------
     # Execution de requête
     # ------------------------------------------------------------------------------------------
-    def manager_thread_start(self):  # démarrer par la méthode execute_query
-        self.log_stopped: bool = False
-        self.query.exec_ask_stop.clear()
+    def worker_check(self) -> bool:
+        wait_counter: int = 0
+        while self.query_worker.creating_worker:
+            if wait_counter == 0:
+                self.output_msg("En attente de la création d'un nouveau sous processus...")
+            elif wait_counter == 10:
+                self.output_msg(
+                    "Echec ! Le sous processus ne semble pas disponible...\n" + "Lancement de la requête annulée !"
+                )
+                return False
+
+            sleep(1)
+            wait_counter += 1
+
+        return True
+
+    def exec_start(self):
+        if not self.worker_check():
+            return
 
         self.rows_number: int = 0
-        self.query.msg_list = []
-        self.log_pos: int = 0
         self.output_file = ""
+        self.can_stop.set()
+        self.force_stop.clear()
 
-        print("Thread manager starting")
+        print("UI - Execution starting")
+        self.process_running = True
         self.lock_ui()
 
-        self.exec_thread = threading.Thread(target=self.exec_thread_start, daemon=True)  # thread execution requete
-        self.exec_thread.start()
+        serialized_query = self.query.serialize()
+        self.query_worker.input_task(self.server_id, serialized_query)
+        self.exec_check_queue()
 
-        while self.exec_thread.is_alive() or not self.log_stopped:
-            # si demande d'interruption et que l'execution n'est pas déjà finie
-            if self.force_stop.is_set() and self.exec_thread.is_alive():
-                self.exec_force_stop()
-                break
-            self.exec_log()
-            if not self.log_stopped:  # attendre uniquement si log pas fini
-                time.sleep(1)
+    def exec_check_queue(self):
+        done: bool = False
+        try:
+            while not self.queue.empty():
+                msg_type, data = self.queue.get_nowait()
+                if msg_type == "msg_print":
+                    print(data)
+                elif msg_type == "msg_output":
+                    print(data)
+                    # si output pas vide, rajout retour à la ligne
+                    if self.output_textbox.get("1.0", "end-1c"):
+                        data = "\n" + data
+                    self.output_msg(data, "end")
+                elif msg_type == "result":
+                    self.rows_number, self.output_file = data
+                elif msg_type == "error":
+                    msg = f"Erreur non gérée :\n{data}"
+                    print(msg)
+                    self.output_msg(msg, "end")
+                elif msg_type == "central_log":
+                    logs_central.write_to_central_log(**data)
+                elif msg_type == "done":
+                    done = True
+        except Exception as e:
+            print(f"Error reading queue: {e}")
+            done = True
 
-        self.unlock_ui()
-        self.event_generate("<<exec_finished>>")  # pour lancer exec_finish à partir du thread principal
-        print("Thread manager ending")
+        # si traitemnent fini ou erreur alors passer aux étapes de fin
+        if done:
+            self.exec_finish()
+            return
 
-    def exec_thread_start(self):  # démarrer par la méthode thread_manage_start
-        print("Thread execute starting")
-        result = self.query.execute_cmd(file_output=True, server_id=self.server_id)
-        self.rows_number, self.output_file = result if isinstance(result, tuple) else (0, "")
-        print("Thread execute ending")
+        # si demande d'interruption et que l'execution n'est pas déjà finie
+        if self.force_stop.is_set() and self.process_running:
+            self.exec_force_stop()
+            self.exec_finish()
+
+        # auto relance toutes les x ms
+        self.after(100, self.exec_check_queue)
 
     def exec_force_stop(self):
-        system = utils.platform.system()
-
-        if self.query.exec_can_stop.is_set():
-            self.query.exec_ask_stop.set()
-            while self.exec_thread.is_alive():
-                time.sleep(1)
-        elif system == "Windows":
-            thread_handle = ctypes.windll.kernel32.OpenThread(0x0001, False, self.exec_thread.ident)
-            ctypes.windll.kernel32.TerminateThread(thread_handle, 0)  # Windows API pour terminer le thread
-            ctypes.windll.kernel32.CloseHandle(thread_handle)  # fermeture du handle pour éviter les leaks
-        elif system == "Linux":
-            msg = "\n" + datetime.now().strftime(self.date_format) + " - Interruption non implémentée pour Linux"
-            self.output_msg(msg, "end")
-            self.force_stop.clear()
-            return
-        else:
-            msg = "\n" + datetime.now().strftime(self.date_format) + f" - Interruption non implémentée pour {system}"
-            self.output_msg(msg, "end")
-            self.force_stop.clear()
-            return
-
-        msg = "\n" + datetime.now().strftime(self.date_format) + " - Requête interrompue"
+        self.query_worker.kill_and_restart()
+        msg = datetime.now().strftime(self.date_format) + " - Requête interrompue"
+        if not self.output_textbox.index("end-1c").split(".")[1] == "0":  # si on est pas en début de ligne
+            msg = "\n" + msg
         self.output_msg(msg, "end")
 
-    def exec_log(self):
-        # affichage / logging des événements
-        my_msg_list = self.query.msg_list  # pour figer la liste actuelle
-        if len(my_msg_list) > self.log_pos:
-            msg_to_print = "\n" + "\n".join(my_msg_list[self.log_pos :])
-            if self.log_pos == 0:
-                msg_to_print = msg_to_print[1:]
-            self.output_msg(msg_to_print, "end")
-            self.log_pos = len(my_msg_list)
-
-        # quand l'execution est finie et qu'il n'y a plus de message à écrire
-        if not self.exec_thread.is_alive() and not len(self.query.msg_list) > self.log_pos:
-            self.log_stopped = True
-            return
-
     def exec_finish(self):
+        self.unlock_ui()
+        self.process_running = False
+        print("UI - Execution ending")
+
         # si arrêt forcé
         if self.force_stop.is_set():
             messagebox.showwarning("Fin execution", "Execution interrompue !", parent=self)
@@ -713,15 +731,13 @@ class App(tk.Toplevel):
             return False
 
         # si une requête est en cours d'execution alors la stopper
-        if hasattr(self, "manager_thread") and self.manager_thread.is_alive():
+        if self.query_worker.process and self.process_running:
             self.force_stop.set()
             return False
 
         self.output_msg("")
         if self.params_get_input():
-            self.force_stop.clear()
-            self.manager_thread = threading.Thread(target=self.manager_thread_start, daemon=True)
-            self.manager_thread.start()
+            self.exec_start()
         else:
             self.output_msg("Impossible d'executer, tant que des paramètres ne sont pas valides :\n", "1.0", "1.0")
 
@@ -748,10 +764,13 @@ class App(tk.Toplevel):
 
         return self.query.values_ok()
 
-    def app_exit(self, event: Event = None):
-        central_logs = sql_query.CENTRAL_LOGS_CLASS()
-        central_logs.stop_sync()
+    def app_exit(self, event: tkEvent = None):
+        if self.app_settings.logs_are_on:
+            logs: logs_central.CentralLogs = logs_central.get_default_class()()
+            logs.stop_sync()
+
         self.prefs.set(user_prefs.UserPrefsEnum.last_server, self.server_id)
+
         self.quit()
 
     def output_msg(self, txt_message: str, start_pos: str = "1.0", end_pos: str = "end"):
@@ -830,7 +849,7 @@ class App(tk.Toplevel):
                 max_width = max(max_width, item_width)
             self.queries_tree.column(col, width=max_width)
 
-    def tree_selection_change(self, _: Event):
+    def tree_selection_change(self, _: tkEvent):
         selected_iid = self.queries_tree.focus()
         selected_values = self.queries_tree.item(selected_iid, "values")
 
@@ -857,7 +876,7 @@ class App(tk.Toplevel):
         self.params_canvas.yview_moveto(0)
         self.params_resize()
 
-    def param_focus_event(self, event: Event):
+    def param_focus_event(self, event: tkEvent):
         widget = event.widget
 
         if widget.widgetName == "ttk::entry":
@@ -865,7 +884,7 @@ class App(tk.Toplevel):
             widget.icursor("end")
             widget.select_range("0", "end")
 
-    def param_input_event(self, event: Event):
+    def param_input_event(self, event: tkEvent):
         widget = event.widget
 
         key = ""
@@ -911,7 +930,7 @@ class App(tk.Toplevel):
 
         self.params_widgets[key]["check"]["background"] = color
 
-    def params_resize(self, _: Event = None):
+    def params_resize(self, _: tkEvent = None):
         self.update_idletasks()
 
         size_width = max(self.params_canvas.winfo_width(), self.params_inner.winfo_reqwidth())
@@ -920,7 +939,7 @@ class App(tk.Toplevel):
 
         self.params_canvas.configure(scrollregion=self.params_canvas.bbox("all"))
 
-    def params_scrolling(self, event: Event):
+    def params_scrolling(self, event: tkEvent):
         self.params_canvas.yview_scroll(int(-1 * event.delta / 120), "units")
 
     # ------------------------------------------------------------------------------------------

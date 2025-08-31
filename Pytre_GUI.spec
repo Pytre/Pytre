@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_all
 
-datas = [('pytre/res', 'res')]
+datas = [('Pytre/res', 'res')]
 binaries = []
 hiddenimports = ['pymssql', 'uuid']
 
@@ -17,8 +17,8 @@ binaries += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 block_cipher = None
 
-a = Analysis(['pytre/__main__.py'],
-             pathex=['pytre'],
+a = Analysis(['Pytre/__main__.py'],
+             pathex=['Pytre'],
              binaries=binaries,
              datas=datas,
              hiddenimports=hiddenimports,

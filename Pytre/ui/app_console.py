@@ -7,6 +7,7 @@ if not __package__:
     import syspath_insert  # noqa: F401  # disable unused-import warning
 
 from about import APP_NAME
+from ui.app_theme import set_theme, get_system
 
 
 class ConsoleWindow(tk.Toplevel):
@@ -21,6 +22,7 @@ class ConsoleWindow(tk.Toplevel):
         else:
             self.focus_set()
 
+        set_theme(self)
         self._setup_ui()
         self._events_binds()
 
@@ -42,9 +44,10 @@ class ConsoleWindow(tk.Toplevel):
 
     def _set_position(self):
         self.update_idletasks()
-        x = int(self.winfo_screenwidth() / 2 - self.winfo_width() / 2)
-        y = int(self.winfo_screenheight() / 2 - self.winfo_height() / 1.8)
-        self.geometry(f"+{x}+{y}")
+        if get_system() == "Windows":
+            x = int(self.winfo_screenwidth() / 2 - self.winfo_width() / 2)
+            y = int(self.winfo_screenheight() / 2 - self.winfo_height() / 1.8)
+            self.geometry(f"+{x}+{y}")
 
     def _setup_textbox(self):
         self.textbox = tk.Text(self, wrap=tk.CHAR, state=tk.DISABLED, bg="#141414", fg="#F2F2F2")

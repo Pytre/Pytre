@@ -5,6 +5,7 @@ if not __package__:
     import syspath_insert  # noqa: F401  # disable unused-import warning
 
 import utils
+from ui.app_theme import set_theme
 
 
 class InputDialog(tk.Toplevel):
@@ -27,6 +28,7 @@ class InputDialog(tk.Toplevel):
 
         self.answer = None
 
+        set_theme(self)
         self._setup_ui(title, prompt)
         self._setup_position(self.parent)
         self._events_binds()

@@ -1,6 +1,6 @@
 import tkinter as tk
 import webbrowser
-from tkinter import ttk, Event
+from tkinter import ttk, Event, font
 
 if not __package__:
     import syspath_insert  # noqa: F401  # disable unused-import warning
@@ -8,12 +8,13 @@ if not __package__:
 import utils
 import about
 from settings import get_app_path
+from ui.app_theme import set_theme
 
 
 class AboutWindow(tk.Toplevel):
-    def __init__(self, parent=None):
+    def __init__(self, parent: tk.Toplevel = None):
         super().__init__()
-        self.parent = parent
+        self.parent: tk.Toplevel = parent
         if self.parent:
             self.focus_set()
             utils.ui_disable_parent(self, self.parent)
@@ -21,6 +22,7 @@ class AboutWindow(tk.Toplevel):
         else:
             self.master.withdraw()
 
+        set_theme(self)
         self._setup_ui()
         self._events_binds()
 
@@ -52,11 +54,11 @@ class AboutWindow(tk.Toplevel):
         if self.parent:
             x = int(self.parent.winfo_x() + self.parent.winfo_width() / 2 - 400 / 2)
             y = int(self.parent.winfo_y() + self.parent.winfo_height() / 2 - 350 / 2)
-        else:
+            self.geometry(f"+{x}+{y}")
+        elif utils.get_system() == "Windows":
             x = int(self.winfo_screenwidth() / 2 - 400 / 2)
             y = int(self.winfo_screenheight() / 2 - 350 / 1.8)
-
-        self.geometry(f"+{x}+{y}")
+            self.geometry(f"+{x}+{y}")
 
     def _setup_top_frame(self):
         self.top_frame.rowconfigure(0, weight=1)
@@ -100,8 +102,13 @@ class AboutWindow(tk.Toplevel):
         self.license_frame.rowconfigure(0, weight=1)
         self.license_frame.columnconfigure(0, weight=1)
 
-        ttk.Style().configure("Bold.TLabelFrame.Label", font=("TkDefaultFont", 8, "bold"))
-        title_label = ttk.Label(self.license_frame, text=about.LICENSE_NAME, style="Bold.TLabelFrame.Label")
+        default_font = font.nametofont("TkDefaultFont")
+        font_family = default_font.actual("family")
+        font_size = default_font.actual("size") - 1
+        labelframe = "Header.TLabelframe.Label"
+        ttk.Style(self).configure(labelframe, font=(font_family, font_size, "bold"))
+
+        title_label = ttk.Label(self.license_frame, text=about.LICENSE_NAME, style=labelframe)
         self.license_frame.config(labelwidget=title_label, borderwidth=2, labelanchor="n")
 
         license_textbox = tk.Text(self.license_frame, wrap="word", font=("TkDefaultFont", 8, "normal"))

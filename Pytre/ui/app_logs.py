@@ -1,7 +1,7 @@
 import tkinter as tk
 import json
 import subprocess
-from tkinter import ttk, Event, messagebox
+from tkinter import ttk, Event, messagebox, font
 from datetime import datetime
 from pathlib import Path
 
@@ -13,6 +13,7 @@ import logs_user
 import utils
 from ui.save_as import save_as
 from about import APP_NAME
+from ui.app_theme import set_theme, ThemeColors, theme_is_on
 
 DATE_FORMAT = "%d/%m/%Y"
 TIME_FORMAT = "%H:%M:%S"
@@ -22,7 +23,10 @@ class LogsWindow(tk.Toplevel):
     def __init__(self, parent=None, query_name=""):
         super().__init__()
         self.parent = parent
-        self.focus_set() if self.parent else self.master.withdraw()
+        if self.parent:
+            self.focus_set()
+        else:
+            self.master.withdraw()
 
         self.user_db: logs_user.UserDb = logs_user.UserDb()
 
@@ -31,6 +35,7 @@ class LogsWindow(tk.Toplevel):
         self.stats_mode: bool = False
         self.sort_info: dict[str, str | bool] = {"col": None, "reverse": None}
 
+        set_theme(self)
         self._setup_ui()
         self._events_binds()
 
@@ -80,6 +85,23 @@ class LogsWindow(tk.Toplevel):
         self.menu_extract.add_separator()
         self.menu_extract.add_command(label="Fermer", command=self.app_exit)
         self.menubar.add_cascade(label="Extractions", menu=self.menu_extract)
+
+        if theme_is_on():
+            menus: list[tk.Menu] = [self.menubar, self.menu_extract]
+
+            default_font = font.nametofont("TkDefaultFont")
+            font_family = default_font.actual("family")
+            font_size = default_font.actual("size")
+
+            for menu in menus:
+                menu.config(
+                    font=font.Font(family=font_family, size=font_size),
+                    bg=ThemeColors.bg_base,
+                    fg=ThemeColors.text_primary,
+                    activebackground=ThemeColors.accent_light,
+                    activeforeground=ThemeColors.text_primary,
+                    activeborderwidth=0,
+                )
 
     def _setup_ui_ctrl(self):
         self.btn_stats = ttk.Button(self.ctrl_frame, text="Stats", command=self.show_query_stats)

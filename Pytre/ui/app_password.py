@@ -7,6 +7,7 @@ if not __package__:
 import utils
 from kee import Kee
 from about import APP_NAME
+from ui.app_theme import set_theme, ThemeColors, theme_is_on
 
 
 class PasswordWindow(tk.Toplevel):
@@ -25,6 +26,7 @@ class PasswordWindow(tk.Toplevel):
         self.kee._open_db(True)
         self.history: list[str] = self.kee.pwd_history()
 
+        set_theme(self)
         self._setup_ui()
         self._events_binds()
 
@@ -78,6 +80,8 @@ class PasswordWindow(tk.Toplevel):
         self.history_frame.rowconfigure(0, weight=1)
 
         self.listbox = tk.Listbox(self.history_frame, height=10, activestyle="none", relief="groove")
+        if theme_is_on():
+            self.listbox.configure(selectbackground=ThemeColors.accent, selectforeground=ThemeColors.text_secondary)
         ybar = ttk.Scrollbar(self.history_frame, orient="vertical", command=self.listbox.yview)
         self.listbox.configure(yscroll=ybar.set)
 

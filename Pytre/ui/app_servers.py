@@ -5,6 +5,7 @@ if not __package__:
     import syspath_insert  # noqa: F401  # disable unused-import warning
 
 import utils
+from ui.app_theme import set_theme, ThemeColors, theme_is_on
 from ui.InputDialog import InputDialog
 from servers import Servers, Server, ServerType
 from about import APP_NAME
@@ -29,6 +30,7 @@ class ServersWindow(tk.Toplevel):
         self.server: Server = None
         self.new_server: bool = False
 
+        set_theme(self)
         self._setup_ui()
         self._events_binds()
 
@@ -82,6 +84,23 @@ class ServersWindow(tk.Toplevel):
         menu_servers.add_separator()
         menu_servers.add_command(label="Recharger", command=lambda: self.reload_all(True))
         self.menubar.add_cascade(label="Serveurs", menu=menu_servers)
+
+        if theme_is_on():
+            menus: list[tk.Menu] = [self.menubar, menu_servers]
+
+            default_font = font.nametofont("TkDefaultFont")
+            font_family = default_font.actual("family")
+            font_size = default_font.actual("size")
+
+            for menu in menus:
+                menu.config(
+                    font=font.Font(family=font_family, size=font_size),
+                    bg=ThemeColors.bg_base,
+                    fg=ThemeColors.text_primary,
+                    activebackground=ThemeColors.accent_light,
+                    activeforeground=ThemeColors.text_primary,
+                    activeborderwidth=0,
+                )
 
     def _tree_cols(self) -> dict[str, dict]:
         return {
@@ -156,6 +175,8 @@ class ServersWindow(tk.Toplevel):
         self.new_grp = ttk.Button(self.groups_frame, text="+", width=3, command=self.group_add)
 
         self.listbox = tk.Listbox(self.groups_frame, selectmode=tk.MULTIPLE, activestyle="none", relief="groove")
+        if theme_is_on():
+            self.listbox.configure(selectbackground=ThemeColors.accent, selectforeground=ThemeColors.text_secondary)
         ybar = ttk.Scrollbar(self.groups_frame, orient="vertical", command=self.listbox.yview)
         self.listbox.configure(yscroll=ybar.set)
 

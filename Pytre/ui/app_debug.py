@@ -8,6 +8,7 @@ if not __package__:
 
 import sql_query
 from sql_lexer import SqlLexer, TokenType
+from ui.app_theme import set_theme
 
 
 class DebugWindow(tk.Toplevel):
@@ -23,6 +24,7 @@ class DebugWindow(tk.Toplevel):
         self.query: sql_query.Query = query
         self.tabs = {}
 
+        set_theme(self)
         self._setup_ui()
         self._setup_ui_tabs()
         self._events_binds()

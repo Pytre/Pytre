@@ -20,8 +20,6 @@ import user_prefs
 import servers
 import utils
 import logs_central
-
-# from logs_central import CentralLogs, write_to_central_log, DEFAULT_CLASS as LOG_CLASS
 from about import APP_NAME, APP_VERSION, APP_STATUS
 
 from ui.save_as import save_as
@@ -34,6 +32,7 @@ from ui.app_settings import SettingsWindow
 from ui.app_password import PasswordWindow
 from ui.app_console import ConsoleWindow
 from ui.app_about import AboutWindow
+from ui.app_theme import ThemeColors, set_theme, theme_is_on
 
 
 class App(tk.Toplevel):
@@ -171,11 +170,16 @@ class App(tk.Toplevel):
                 self.open_folder(extract_folder)
 
     # ------------------------------------------------------------------------------------------
-    # Définition des styles
+    # Définition des styles / thème
     # ------------------------------------------------------------------------------------------
     def setup_style(self):
-        self.style_frame_label = "Bold.TLabelFrame.Label"
-        ttk.Style(self).configure(self.style_frame_label, font=("TkDefaultFont", 10, "bold"))
+        set_theme(self)
+        default_font = font.nametofont("TkDefaultFont")
+        self.font_family = default_font.actual("family")
+        self.font_size = default_font.actual("size")
+
+        self.s_header = "Header.TLabelframe.Label"
+        ttk.Style(self).configure(self.s_header, font=(self.font_family, self.font_size, "bold"))
 
     # ------------------------------------------------------------------------------------------
     # Création de l'interface
@@ -188,7 +192,7 @@ class App(tk.Toplevel):
         icon_img = tk.PhotoImage(file=icon_file)
         self.iconphoto(True, icon_img)
 
-        self.minsize(width=975, height=700)
+        self.minsize(width=1020, height=740)
         self.resizable(True, True)
 
         self.setup_ui_menu()
@@ -238,6 +242,18 @@ class App(tk.Toplevel):
         menu_about.add_separator()
         menu_about.add_command(label=f"À propos de {APP_NAME}...", command=self.about_info)
         menubar.add_cascade(label="?", menu=menu_about)
+
+        if theme_is_on():
+            menus: list[tk.Menu] = [menubar, self.menu_query, menu_admin, menu_about]
+            for menu in menus:
+                menu.config(
+                    font=font.Font(family=self.font_family, size=self.font_size),
+                    bg=ThemeColors.bg_base,
+                    fg=ThemeColors.text_primary,
+                    activebackground=ThemeColors.accent_light,
+                    activeforeground=ThemeColors.text_primary,
+                    activeborderwidth=0,
+                )
 
     def setup_ui_paned_window(self):
         self.paned_window = ttk.PanedWindow(self, orient="horizontal")
@@ -304,7 +320,7 @@ class App(tk.Toplevel):
 
     def setup_ui_params(self):
         self.params_outer = ttk.LabelFrame(self.right_panned, borderwidth=2)
-        self.params_label = ttk.Label(self.params_outer, text="Saisie des paramètres", style=self.style_frame_label)
+        self.params_label = ttk.Label(self.params_outer, text="Saisie des paramètres", style=self.s_header)
         self.params_outer.config(labelwidget=self.params_label)
 
         self.params_outer.rowconfigure(0, weight=1)
@@ -336,20 +352,24 @@ class App(tk.Toplevel):
         self.output_and_btn_frame.columnconfigure(0, weight=1)
 
     def setup_ui_output(self):
-        self.setup_style()
         self.output_frame = ttk.LabelFrame(self.output_and_btn_frame, borderwidth=2)
-        self.output_label = ttk.Label(
-            self.output_frame, text="Messages / Fenêtre d'execution", style=self.style_frame_label
-        )
+        self.output_label = ttk.Label(self.output_frame, text="Messages / Fenêtre d'execution", style=self.s_header)
         self.output_frame.config(labelwidget=self.output_label)
 
         self.output_frame.grid(row=0, column=0, padx=0, pady=0, sticky="nswe")
 
         self.output_textbox = tk.Text(
-            self.output_frame, width=75, height=7, wrap="word", state="disabled", font=("TkDefaultFont", 10)
+            self.output_frame,
+            width=75,
+            height=7,
+            wrap="word",
+            state="disabled",
+            font=("TkFixedFont", self.font_size),
         )
         self.output_textbox_scrollbar = ttk.Scrollbar(
-            self.output_frame, orient="vertical", command=self.output_textbox.yview
+            self.output_frame,
+            orient="vertical",
+            command=self.output_textbox.yview,
         )
         self.output_textbox["yscrollcommand"] = self.output_textbox_scrollbar.set
         self.output_textbox.see("1.0")
@@ -386,10 +406,7 @@ class App(tk.Toplevel):
 
     def setup_ui_position(self):
         if not utils.get_system() == "Windows":
-            # récup avant que l'UI soit affichée de la hauteur
-            # qui correspond à la barre de titre et au menu
-            decoration_height = self.winfo_reqheight()
-            self.geometry(f"{1025}x{750 - decoration_height}")
+            self.geometry("1100x750")
 
         utils.ui_center(self)
 
@@ -444,6 +461,7 @@ class App(tk.Toplevel):
                 my_widgets["entry"]["state"] = "readonly"
                 my_widgets["entry"]["values"] = tuple(params[key].authorized_values.values())
                 my_widgets["entry_var"].trace_add("write", self.param_input_trace)
+                my_widgets["entry"].bind("<FocusOut>", lambda _: my_widgets["entry"].selection_clear())
 
             else:
                 my_widgets["entry"] = ttk.Entry(self.params_inner, textvariable=my_widgets["entry_var"])
@@ -494,6 +512,7 @@ class App(tk.Toplevel):
     # ------------------------------------------------------------------------------------------
     def setup_events_binds(self):
         self.servers_cb.bind("<<ComboboxSelected>>", lambda _: self.queries_filter())
+        self.servers_cb.bind("<FocusOut>", lambda _: self.servers_cb.selection_clear())
         self.queries_entry_filter.bind("<KeyRelease>", lambda _: self.queries_filter(self.queries_entry_filter.get()))
         self.queries_tree.bind("<<TreeviewSelect>>", self.tree_selection_change)
 
@@ -886,6 +905,9 @@ class App(tk.Toplevel):
 
     def param_input_event(self, event: tkEvent):
         widget = event.widget
+
+        if event.type == tk.EventType.FocusOut:
+            widget.selection_clear()
 
         key = ""
         for param_key in self.params_widgets:

@@ -6,6 +6,7 @@ if not __package__:
 
 import utils
 from settings import get_app_path
+from ui.app_theme import set_theme
 
 
 class MsgDialog(tk.Toplevel):
@@ -30,6 +31,7 @@ class MsgDialog(tk.Toplevel):
         self.buttons_widgets: list[tk.Widget] = []
         self.button_clicked = None
 
+        set_theme(self)
         self._setup_ui(title, msg)
         self._setup_position(self.parent)
         self._events_binds()

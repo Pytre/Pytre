@@ -7,6 +7,7 @@ if not __package__:
 import utils
 from settings import Settings
 from about import APP_NAME
+from ui.app_theme import set_theme
 
 
 class SettingsWindow(tk.Toplevel):
@@ -23,6 +24,7 @@ class SettingsWindow(tk.Toplevel):
         self.settings = Settings()
         self.settings.reload()
 
+        set_theme(self)
         self._setup_ui()
         self._events_binds()
 
@@ -35,7 +37,7 @@ class SettingsWindow(tk.Toplevel):
         self.minsize(width=400, height=100)
         if self.parent:
             self.geometry(f"+{self.parent.winfo_x() + 200}+{self.parent.winfo_y() + 150}")
-        else:
+        elif utils.get_system() == "Windows":
             self.geometry("+200+150")
         self.resizable(True, True)
 

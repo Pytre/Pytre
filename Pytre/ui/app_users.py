@@ -5,6 +5,7 @@ if not __package__:
     import syspath_insert  # noqa: F401  # disable unused-import warning
 
 import utils
+from ui.app_theme import set_theme, ThemeColors, theme_is_on
 from ui.InputDialog import InputDialog
 from users import Users, User
 from about import APP_NAME
@@ -25,6 +26,7 @@ class UsersWindow(tk.Toplevel):
         self.sort_info: dict[str, str | bool] = {"col": None, "reverse": None}
         self.groups: set = set()
 
+        set_theme(self)
         self._setup_ui()
         self._events_binds()
 
@@ -38,7 +40,7 @@ class UsersWindow(tk.Toplevel):
         self.geometry("1200x800")
         if self.parent:
             utils.ui_center(self, self.parent)
-        elif utils.platform == "Windows":
+        elif utils.get_system() == "Windows":
             self.geometry("+100+75")
         self.resizable(True, True)
 
@@ -77,6 +79,23 @@ class UsersWindow(tk.Toplevel):
         menu_groups.add_command(label="Affecter à la sélection...", command=self.groups_add)
         menu_groups.add_command(label="Retirer de la sélection...", command=self.groups_remove)
         self.menubar.add_cascade(label="Groupes", menu=menu_groups)
+
+        if theme_is_on():
+            menus: list[tk.Menu] = [self.menubar, menu_users, menu_groups]
+
+            default_font = font.nametofont("TkDefaultFont")
+            font_family = default_font.actual("family")
+            font_size = default_font.actual("size")
+
+            for menu in menus:
+                menu.config(
+                    font=font.Font(family=font_family, size=font_size),
+                    bg=ThemeColors.bg_base,
+                    fg=ThemeColors.text_primary,
+                    activebackground=ThemeColors.accent_light,
+                    activeforeground=ThemeColors.text_primary,
+                    activeborderwidth=0,
+                )
 
     def _setup_ui_ctrl(self):
         self.btn_add = ttk.Button(self.ctrl_frame, text="Ajouter", command=self.user_add)
@@ -420,6 +439,7 @@ class UserDialog(tk.Toplevel):
         utils.ui_disable_parent(self, self.parent)
         self.transient(self.parent)
 
+        set_theme(self)
         self._setup_ui()
         self._events_binds()
 
@@ -494,6 +514,8 @@ class UserDialog(tk.Toplevel):
         self.new_grp = ttk.Button(self.groups_frame, text="+", width=3, command=self.group_add)
 
         self.listbox = tk.Listbox(self.groups_frame, selectmode=tk.MULTIPLE, activestyle="none", relief="groove")
+        if theme_is_on():
+            self.listbox.configure(selectbackground=ThemeColors.accent, selectforeground=ThemeColors.text_secondary)
         ybar = ttk.Scrollbar(self.groups_frame, orient="vertical", command=self.listbox.yview)
         self.listbox.configure(yscroll=ybar.set)
 
@@ -613,6 +635,7 @@ class GroupsDialog(tk.Toplevel):
 
         self.remove_mode: bool = remove_mode
 
+        set_theme(self)
         self._setup_ui()
         self._events_binds()
 
@@ -659,6 +682,8 @@ class GroupsDialog(tk.Toplevel):
         self.new_grp = ttk.Button(self.groups_frame, text="+", width=3, command=self.group_add)
 
         self.listbox = tk.Listbox(self.groups_frame, selectmode=tk.MULTIPLE, activestyle="none", relief="groove")
+        if theme_is_on():
+            self.listbox.configure(selectbackground=ThemeColors.accent, selectforeground=ThemeColors.text_secondary)
         ybar = ttk.Scrollbar(self.groups_frame, orient="vertical", command=self.listbox.yview)
         self.listbox.configure(yscroll=ybar.set)
         self.listbox.configure(selectbackground=select_bg_color, selectforeground="black")

@@ -430,8 +430,8 @@ class LogsWindow(tk.Toplevel):
     # ------------------------------------------------------------------------------------------
     def duration_format(self, secs: float) -> str:
         min = int(secs // 60)
-        sec = str(round(secs % 60, 0)).split(".")[0].rjust(2, "0")
-        text = f"{min} min {sec}"
+        sec = round(secs % 60)
+        text = f"{min} min {str(sec).rjust(2, '0')}"
         return text
 
     def show_file(self, only_reveal: bool = False):

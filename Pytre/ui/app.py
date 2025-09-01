@@ -984,13 +984,10 @@ class App(tk.Toplevel):
             self.user_window.focus_set()
 
     def manage_servers(self):
-        child = ServersWindow(self)
-        self.wait_window(child)
+        ServersWindow(self)
 
     def manage_settings(self):
-        child = SettingsWindow(self)
-        self.wait_window(child)
-        self.app_settings.reload()
+        SettingsWindow(self, self.app_settings.reload)
 
     def manage_password(self):
         PasswordWindow(self)

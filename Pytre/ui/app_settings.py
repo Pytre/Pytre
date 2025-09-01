@@ -11,9 +11,10 @@ from ui.app_theme import set_theme
 
 
 class SettingsWindow(tk.Toplevel):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, on_close_callback=None):
         super().__init__()
         self.parent = parent
+        self.on_close_callback = on_close_callback
         if self.parent:
             self.focus_set()
             utils.ui_disable_parent(self, self.parent)
@@ -135,6 +136,9 @@ class SettingsWindow(tk.Toplevel):
             messagebox.showerror(title="Mise à jour paramètres", message=msg, parent=self, type=messagebox.OK)
 
     def app_exit(self, _: Event = None):
+        if self.on_close_callback:
+            self.on_close_callback()
+
         if self.parent:
             utils.ui_undisable_parent(self, self.parent)
 

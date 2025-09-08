@@ -46,6 +46,7 @@ class App(tk.Toplevel):
         self.app_settings: settings.Settings = settings.Settings()
         self.servers: servers.Servers = servers.Servers()
         self.server_id: str = ""
+        self.central_logs: logs_central.CentralLogs = None
 
         self.queries_all: list[sql_query.Query] = []
         self.queries: list[sql_query.Query] = []
@@ -580,8 +581,8 @@ class App(tk.Toplevel):
                     msg = f"Erreur non gérée :\n{data}"
                     print(msg)
                     self.output_msg(msg, "end")
-                elif msg_type == "central_log":
-                    logs_central.write_to_central_log(**data)
+                elif msg_type == "central_log" and self.instanciate_logs():
+                    self.central_logs.trigger_sync(**data)
                 elif msg_type == "done":
                     done = True
         except Exception as e:
@@ -783,10 +784,21 @@ class App(tk.Toplevel):
 
         return self.query.values_ok()
 
+    def instanciate_logs(self) -> bool:
+        if self.central_logs:
+            return True
+        elif self.app_settings.logs_are_on:
+            LogsClass = logs_central.get_default_class()
+            logs_folder = self.app_settings.logs_folder
+            self.central_logs = LogsClass(logs_folder)
+
+            return True
+
+        return False
+
     def app_exit(self, event: tkEvent = None):
-        if self.app_settings.logs_are_on:
-            logs: logs_central.CentralLogs = logs_central.get_default_class()()
-            logs.stop_sync()
+        if self.instanciate_logs():
+            self.central_logs.stop_sync()
 
         self.prefs.set(user_prefs.UserPrefsEnum.last_server, self.server_id)
 

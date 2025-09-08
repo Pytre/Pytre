@@ -20,7 +20,7 @@ LATEST_VERSION: int = 2  # latest version model of central database
 
 
 class CentralLogs(metaclass=Singleton):
-    def __init__(self, logs_folder: Path = "."):
+    def __init__(self, logs_folder: Path = Path.cwd() / "logs"):
         self.sync_thread = None
         self.logs_folder: Path = Path(logs_folder)
         self.central_db: Path = self.logs_folder / CENTRAL_DB
@@ -220,7 +220,7 @@ class CentralLogs(metaclass=Singleton):
 
 
 class FileDriven(CentralLogs):
-    def __init__(self, logs_folder: Path = "."):
+    def __init__(self, logs_folder: Path = Path.cwd() / "logs"):
         super().__init__(logs_folder)
 
         self.queue_ctrl_file: Path = self.logs_folder / "Pytre_Queue.json"
@@ -671,8 +671,8 @@ class FileDriven(CentralLogs):
 
     def cleanup_temp_files(self):
         for temp_file in list(self.logs_folder.glob("**/*.tmp")):
-            # add files older than 1 hour as file to be cleaned up
-            if time.time() - temp_file.stat().st_mtime > 3600:
+            # add files older than 1 week as file to be cleaned up
+            if time.time() - temp_file.stat().st_mtime > 3600 * 24 * 7:
                 self.temp_files.append(temp_file)
 
         for temp_file in set(self.temp_files):
@@ -737,12 +737,6 @@ class FileDriven(CentralLogs):
 
 def get_default_class():
     return FileDriven
-
-
-def write_to_central_log(logs_folder: Path, user_db: Path, user_name: str, user_title: str):
-    default_class = get_default_class()
-    central_logs: CentralLogs = default_class(logs_folder)
-    central_logs.trigger_sync(user_db, user_name, user_title)
 
 
 if __name__ == "__main__":

@@ -24,6 +24,7 @@ from about import APP_NAME, APP_VERSION, APP_STATUS
 
 from ui.save_as import save_as
 from ui.MsgDialog import MsgDialog
+from ui.MsgOverlay import MsgOverlay
 from ui.app_logs import LogsWindow
 from ui.app_debug import DebugWindow
 from ui.app_users import UsersWindow
@@ -71,12 +72,11 @@ class App(tk.Toplevel):
             self.is_authorized = False
             return
 
-        self.refresh_queries()
-
-        if self.user.msg_login:
-            self.output_msg(str(self.user.msg_login) + "\n", "1.0", "1.0")
-
         self.console_start()
+
+        self._queries_first_load: bool = True
+        self.refresh_queries(reload_servers=True)
+
         self.extract_folder_cleaning()
 
     def check_user_access(self) -> bool:
@@ -219,7 +219,7 @@ class App(tk.Toplevel):
         self.menu_query.add_command(label="Journal...", command=lambda: self.open_logs(True))
         self.menu_query.add_command(label="Debug...", state="disabled", command=self.debug_query)
         self.menu_query.add_separator()
-        self.menu_query.add_command(label="Recharger", command=lambda: self.refresh_queries(notify=True))
+        self.menu_query.add_command(label="Recharger", command=lambda: self.refresh_queries())
         if self.user.admin:
             self.menu_query.add_command(label="Liste orphelines...", command=self.orphan_queries)
             self.menu_query.add_command(
@@ -271,7 +271,7 @@ class App(tk.Toplevel):
         self.queries_label_filter = ttk.Label(self.left_frame, text="Filtre :", justify=tk.LEFT)
         self.queries_entry_filter = ttk.Entry(self.left_frame, textvariable=self.queries_filter_text, width=25)
         self.queries_btn_refresh = ttk.Button(
-            self.left_frame, text="\U00002b6e", width=4, command=lambda: self.refresh_queries(notify=True)
+            self.left_frame, text="\U00002b6e", width=4, command=lambda: self.refresh_queries()
         )
 
         self.queries_tree = ttk.Treeview(self.left_frame, columns=(1, 2), show="headings", selectmode="browse")
@@ -514,7 +514,7 @@ class App(tk.Toplevel):
     def setup_events_binds(self):
         self.servers_cb.bind("<<ComboboxSelected>>", lambda _: self.queries_filter())
         self.servers_cb.bind("<FocusOut>", lambda _: self.servers_cb.selection_clear())
-        self.queries_entry_filter.bind("<KeyRelease>", lambda _: self.queries_filter(self.queries_entry_filter.get()))
+        self.queries_entry_filter.bind("<KeyRelease>", lambda _: self.queries_filter(self.queries_filter_text.get()))
         self.queries_tree.bind("<<TreeviewSelect>>", self.tree_selection_change)
 
         self.params_canvas.bind("<Configure>", self.params_resize)
@@ -556,7 +556,7 @@ class App(tk.Toplevel):
 
         print("UI - Execution starting")
         self.process_running = True
-        self.lock_ui()
+        self.lock_ui(query_exec=True)
 
         serialized_query = self.query.serialize()
         self.query_worker.input_task(self.server_id, serialized_query)
@@ -610,7 +610,7 @@ class App(tk.Toplevel):
         self.output_msg(msg, "end")
 
     def exec_finish(self):
-        self.unlock_ui()
+        self.unlock_ui(query_exec=True)
         self.process_running = False
         print("UI - Execution ending")
 
@@ -659,11 +659,14 @@ class App(tk.Toplevel):
     # ------------------------------------------------------------------------------------------
     # Verrouillage / Déverrouillage de l'UI
     # ------------------------------------------------------------------------------------------
-    def lock_ui(self):
-        self.menu_query.entryconfig("Executer", label="Interrompre")
-        self.menu_query.entryconfig("Recharger", state="disable")
+    def lock_ui(self, query_exec: bool = False):
+        if query_exec:
+            self.menu_query.entryconfig("Executer", label="Interrompre")
+            self.btn_execute["text"] = "Interrompre"
 
-        self.btn_execute["text"] = "Interrompre"
+        self.menu_query.entryconfig("Recharger", state="disable")
+        self.menu_query.entryconfig("Liste orphelines...", state="disable")
+
         self.servers_cb["state"] = "disable"
         self.queries_entry_filter["state"] = "disable"
         self.queries_btn_refresh["state"] = "disable"
@@ -673,11 +676,14 @@ class App(tk.Toplevel):
             if (widget_entry := self.params_widgets[key].get("entry", None)) is not None:
                 widget_entry["state"] = "disable"
 
-    def unlock_ui(self):
-        self.menu_query.entryconfig("Interrompre", label="Executer")
-        self.menu_query.entryconfig("Recharger", state="normal")
+    def unlock_ui(self, query_exec: bool = False):
+        if query_exec:
+            self.menu_query.entryconfig("Interrompre", label="Executer")
+            self.btn_execute["text"] = "Executer"
 
-        self.btn_execute["text"] = "Executer"
+        self.menu_query.entryconfig("Recharger", state="normal")
+        self.menu_query.entryconfig("Liste orphelines...", state="normal")
+
         self.servers_cb["state"] = "readonly"
         self.queries_entry_filter["state"] = "enable"
         self.queries_btn_refresh["state"] = "enable"
@@ -690,34 +696,44 @@ class App(tk.Toplevel):
     # ------------------------------------------------------------------------------------------
     # Traitements
     # ------------------------------------------------------------------------------------------
-    def refresh_queries(self, reload_servers: bool = False, notify: bool = False):
-        if not self.is_authorized:
-            return
+    def refresh_queries(self, reload_servers: bool = False):
+        overlay = MsgOverlay.display(self, "Chargement des requêtes...", 1500)
 
+        self.lock_ui()
         self.ui_params_reset()
         self.query = sql_query.Query()
         self.output_msg("")
-        self.queries_filter_text = ""
+        self.queries_filter_text.set("")
 
-        try:
-            if self.check_min_version():
+        def worker():
+            queries_all, errors = [], []
+            try:
                 self.refresh_servers(reload_servers)
-                queries_folder = self.app_settings.queries_folder
-                self.queries_all, errors = sql_query.get_queries(queries_folder)
-            else:
-                self.queries_all, self.queries, errors = [], [], []
-            self.queries_filter()  # rénitialiser l'UI en simulant un filtre sur aucun élément
-        except ValueError as err:
-            self.queries_all, self.queries = [], []
-            self.queries_filter(msg_filter=err)
-        finally:
+                queries_all, errors = sql_query.get_queries(self.app_settings.queries_folder)
+            except Exception as err:
+                queries_all, errors = [], [str(err)]
+            finally:
+                # retour dans le thread principal pour mettre à jour l'UI et finaliser
+                self.after(0, lambda: refresh_end(queries_all, errors))
+
+        def refresh_end(queries_all, errors):
+            self.queries_all = queries_all
+            self.queries_filter()
             self.tree_autosize()
 
-        if errors:
-            self.output_msg("\n".join(errors))
+            if self._queries_first_load and self.user.msg_login:
+                self.output_msg(str(self.user.msg_login) + "\n", "1.0", "1.0")
 
-        if notify:
-            messagebox.showinfo("Rechargement", "Ok requêtes rechargées", parent=self)
+            if errors:
+                self.output_msg("\n".join(errors))
+
+            overlay.hide(callback=self.unlock_ui)
+            if not self._queries_first_load:
+                messagebox.showinfo("Rechargement", "Ok requêtes rechargées", parent=self)
+            else:
+                self._queries_first_load = False
+
+        Thread(target=worker, daemon=True).start()
 
     def refresh_servers(self, reload_servers: bool = False):
         grp_authorized = self.user.grp_authorized if not self.user.admin else None

@@ -67,10 +67,8 @@ class App(tk.Toplevel):
         self.setup_ui()
         self.setup_events_binds()
 
-        self.is_authorized = True
-        if not self.check_user_access():
-            self.is_authorized = False
-            return
+        self.check_min_version()  # quitte l'application si pas ok
+        self.check_user_access()  # quitte l'application si pas d'accès
 
         self.console_start()
 
@@ -79,7 +77,7 @@ class App(tk.Toplevel):
 
         self.extract_folder_cleaning()
 
-    def check_user_access(self) -> bool:
+    def check_user_access(self):
         if not self.user.is_authorized:
             messagebox.showerror(
                 "Erreur",
@@ -88,9 +86,7 @@ class App(tk.Toplevel):
                 + f"\n- User : {self.user.username}",
                 parent=self,
             )
-            return False
-
-        return True
+            self.app_exit()
 
     def version_used_gte_mini(self, used: str, mini: str) -> bool:
         """ctrl si version utilisé supérieure ou égale à version mini"""
@@ -110,7 +106,7 @@ class App(tk.Toplevel):
 
         return False
 
-    def check_min_version(self) -> bool:
+    def check_min_version(self):
         queries_folder = Path(self.app_settings.queries_folder)
         if not queries_folder.is_dir():
             messagebox.showerror(
@@ -118,7 +114,7 @@ class App(tk.Toplevel):
                 f"Répertoire des requêtes non trouvée :\n{queries_folder.resolve()}",
                 parent=self,
             )
-            return False
+            self.app_exit()
 
         if not self.version_used_gte_mini(self.app_settings.settings_version, self.app_settings.min_version_settings):
             messagebox.showerror(
@@ -129,7 +125,7 @@ class App(tk.Toplevel):
                 "\n\nMerci d'utiliser le fichier des settings à jour",
                 parent=self,
             )
-            return False
+            self.app_exit()
 
         if not self.version_used_gte_mini(APP_VERSION, self.app_settings.min_version_pytre):
             messagebox.showerror(
@@ -140,9 +136,7 @@ class App(tk.Toplevel):
                 "\n\nMerci d'utiliser une version à jour",
                 parent=self,
             )
-            return False
-
-        return True
+            self.app_exit()
 
     def extract_folder_cleaning(self):
         extract_folder = self.prefs.extract_folder

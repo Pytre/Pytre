@@ -4,7 +4,7 @@ from tkinter import Event, ttk, font
 if not __package__:
     import syspath_insert  # noqa: F401  # disable unused-import warning
 
-import utils
+import ui.ui_utils as ui_utils
 from ui.app_theme import set_theme
 
 
@@ -23,7 +23,7 @@ class InputDialog(tk.Toplevel):
             self.master.withdraw()
         else:
             self.focus_set()
-            utils.ui_disable_parent(self, self.parent)
+            ui_utils.ui_disable_parent(self, self.parent)
             self.transient(self.parent)
 
         self.answer = None
@@ -69,7 +69,7 @@ class InputDialog(tk.Toplevel):
         self.entry.focus_set()
 
     def _setup_position(self, parent: tk.Toplevel | None):
-        utils.ui_center(self, parent)
+        ui_utils.ui_center(self, parent)
 
     def _setup_buttons(self):
         self.buttons_frame.columnconfigure(0, weight=1)
@@ -90,7 +90,7 @@ class InputDialog(tk.Toplevel):
 
     def close(self, _: Event = None):
         if self.parent:
-            utils.ui_undisable_parent(self, self.parent)
+            ui_utils.ui_undisable_parent(self, self.parent)
             self.parent.focus_set()
             self.destroy()  # doit se faire après avoir rendu le focus
         else:

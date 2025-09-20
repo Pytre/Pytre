@@ -1,4 +1,3 @@
-import subprocess
 import tkinter as tk
 from time import sleep
 from threading import Thread
@@ -22,6 +21,7 @@ import utils
 import logs_central
 from about import APP_NAME, APP_VERSION, APP_STATUS
 
+import ui.ui_utils as ui_utils
 from ui.save_as import save_as
 from ui.MsgDialog import MsgDialog
 from ui.MsgOverlay import MsgOverlay
@@ -403,7 +403,7 @@ class App(tk.Toplevel):
         if not utils.get_system() == "Windows":
             self.geometry("1100x750")
 
-        utils.ui_center(self)
+        ui_utils.ui_center(self)
 
     # ------------------------------------------------------------------------------------------
     # Gestion de l'interface pour la frame de saisie des paramètres
@@ -824,12 +824,10 @@ class App(tk.Toplevel):
             pass
 
     def open_folder(self, folder: str):
-        if utils.get_system() == "Linux":
-            utils.startfile(folder)  # difficult to select open and select a file for Linux
-        elif folder == self.prefs.extract_folder and self.output_file:
-            subprocess.Popen(f"explorer /select,{self.output_file}")
+        if folder == self.prefs.extract_folder and self.output_file:
+            utils.showfile(self.output_file)
         else:
-            subprocess.Popen(f"explorer {folder}")
+            utils.showfile(folder)
 
     def orphan_queries(self):
         orphans = sql_query.orphan_queries(self.app_settings.queries_folder)

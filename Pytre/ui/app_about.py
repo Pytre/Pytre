@@ -8,6 +8,8 @@ if not __package__:
 import utils
 import about
 from settings import get_app_path
+
+import ui.ui_utils as ui_utils
 from ui.app_theme import set_theme
 
 
@@ -17,7 +19,7 @@ class AboutWindow(tk.Toplevel):
         self.parent: tk.Toplevel = parent
         if self.parent:
             self.focus_set()
-            utils.ui_disable_parent(self, self.parent)
+            ui_utils.ui_disable_parent(self, self.parent)
             self.transient(self.parent)
         else:
             self.master.withdraw()
@@ -136,7 +138,7 @@ class AboutWindow(tk.Toplevel):
     # ------------------------------------------------------------------------------------------
     def app_exit(self, _: Event = None):
         if self.parent:
-            utils.ui_undisable_parent(self, self.parent)
+            ui_utils.ui_undisable_parent(self, self.parent)
 
         self.destroy()
 

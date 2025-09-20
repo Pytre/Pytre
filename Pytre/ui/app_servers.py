@@ -5,10 +5,12 @@ if not __package__:
     import syspath_insert  # noqa: F401  # disable unused-import warning
 
 import utils
-from ui.app_theme import set_theme, ThemeColors, theme_is_on
-from ui.InputDialog import InputDialog
 from servers import Servers, Server, ServerType
 from about import APP_NAME
+
+import ui.ui_utils as ui_utils
+from ui.app_theme import set_theme, ThemeColors, theme_is_on
+from ui.InputDialog import InputDialog
 
 
 class ServersWindow(tk.Toplevel):
@@ -17,7 +19,7 @@ class ServersWindow(tk.Toplevel):
         self.parent = parent
         if self.parent:
             self.focus_set()
-            utils.ui_disable_parent(self, self.parent)
+            ui_utils.ui_disable_parent(self, self.parent)
             self.transient(self.parent)
         else:
             self.master.withdraw()
@@ -436,7 +438,7 @@ class ServersWindow(tk.Toplevel):
 
     def app_exit(self, _: Event = None):
         if self.parent:
-            utils.ui_undisable_parent(self, self.parent)
+            ui_utils.ui_undisable_parent(self, self.parent)
 
         self.destroy()
 

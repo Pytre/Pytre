@@ -7,11 +7,13 @@ if not __package__:
     import syspath_insert  # noqa: F401  # disable unused-import warning
 
 import utils
+from users import Users, User
+from about import APP_NAME
+
+import ui.ui_utils as ui_utils
 from ui.app_theme import set_theme, ThemeColors, theme_is_on
 from ui.InputDialog import InputDialog
 from ui.MsgOverlay import MsgOverlay
-from users import Users, User
-from about import APP_NAME
 
 
 class UsersWindow(tk.Toplevel):
@@ -42,7 +44,7 @@ class UsersWindow(tk.Toplevel):
         self.title(f"{APP_NAME} - Gestion des utilisateurs")
         self.geometry("1200x800")
         if self.parent:
-            utils.ui_center(self, self.parent)
+            ui_utils.ui_center(self, self.parent)
         elif utils.get_system() == "Windows":
             self.geometry("+100+75")
         self.resizable(True, True)
@@ -534,7 +536,7 @@ class UserDialog(tk.Toplevel):
 
         self.focus_set()
         self.update_idletasks()  # needed to update correctly on Linux
-        utils.ui_disable_parent(self, self.parent)
+        ui_utils.ui_disable_parent(self, self.parent)
         self.transient(self.parent)
 
         set_theme(self)
@@ -699,7 +701,7 @@ class UserDialog(tk.Toplevel):
             return
 
     def close(self, _: Event = None, refresh_tree: bool = False):
-        utils.ui_undisable_parent(self, self.parent)
+        ui_utils.ui_undisable_parent(self, self.parent)
 
         if refresh_tree:
             self.parent.tree_refresh()
@@ -728,7 +730,7 @@ class GroupsDialog(tk.Toplevel):
         self.usernames: list[str] = usernames
 
         self.focus_set()
-        utils.ui_disable_parent(self, self.parent)
+        ui_utils.ui_disable_parent(self, self.parent)
         self.transient(self.parent)
 
         self.remove_mode: bool = remove_mode
@@ -846,7 +848,7 @@ class GroupsDialog(tk.Toplevel):
         self.close(refresh_tree=True)
 
     def close(self, _: Event = None, refresh_tree: bool = False):
-        utils.ui_undisable_parent(self, self.parent)
+        ui_utils.ui_undisable_parent(self, self.parent)
 
         if refresh_tree:
             self.parent.tree_refresh()

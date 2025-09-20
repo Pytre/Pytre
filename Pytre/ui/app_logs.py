@@ -1,6 +1,5 @@
 import tkinter as tk
 import json
-import subprocess
 from tkinter import ttk, Event, messagebox, font
 from datetime import datetime
 from pathlib import Path
@@ -11,8 +10,10 @@ if not __package__:
 
 import logs_user
 import utils
-from ui.save_as import save_as
 from about import APP_NAME
+
+import ui.ui_utils as ui_utils
+from ui.save_as import save_as
 from ui.app_theme import set_theme, ThemeColors, theme_is_on
 
 DATE_FORMAT = "%d/%m/%Y"
@@ -52,7 +53,7 @@ class LogsWindow(tk.Toplevel):
             self.geometry(f"640x750+{self.parent.winfo_x() + 130}+{self.parent.winfo_y() - 20}")
         else:
             self.geometry("640x750")
-            utils.ui_center(self)
+            ui_utils.ui_center(self)
 
         self.resizable(True, True)
 
@@ -440,10 +441,8 @@ class LogsWindow(tk.Toplevel):
             return
         elif not file.exists():
             messagebox.showerror("Erreur", "Le fichier n'existe pas", parent=self)
-        elif only_reveal and utils.get_system() == "Windows":
-            subprocess.Popen(f"explorer /select,{file}")
         elif only_reveal:
-            utils.startfile(Path(file).parent)
+            utils.showfile(file)
         else:
             utils.startfile(file)
 

@@ -4,9 +4,10 @@ from tkinter import Event, ttk
 if not __package__:
     import syspath_insert  # noqa: F401  # disable unused-import warning
 
-import utils
 from kee import Kee
 from about import APP_NAME
+
+import ui.ui_utils as ui_utils
 from ui.app_theme import set_theme, ThemeColors, theme_is_on
 
 
@@ -19,7 +20,7 @@ class PasswordWindow(tk.Toplevel):
             self.master.withdraw()
         else:
             self.focus_set()
-            utils.ui_disable_parent(self, self.parent)
+            ui_utils.ui_disable_parent(self, self.parent)
             self.transient(self.parent)
 
         self.kee: Kee = Kee()
@@ -38,7 +39,7 @@ class PasswordWindow(tk.Toplevel):
         if self.parent:
             self.geometry(f"+{self.parent.winfo_x() + 200}+{self.parent.winfo_y() + 150}")
         else:
-            utils.ui_center(self)
+            ui_utils.ui_center(self)
         self.resizable(True, False)
 
         self.rowconfigure(1, weight=1)
@@ -143,7 +144,7 @@ class PasswordWindow(tk.Toplevel):
 
     def close(self, _: Event = None):
         if self.parent:
-            utils.ui_undisable_parent(self, self.parent)
+            ui_utils.ui_undisable_parent(self, self.parent)
             self.parent.focus_set()
             self.destroy()  # doit se faire après avoir rendu le focus
         else:

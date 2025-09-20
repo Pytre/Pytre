@@ -7,6 +7,8 @@ if not __package__:
 import utils
 from settings import Settings
 from about import APP_NAME
+
+import ui.ui_utils as ui_utils
 from ui.app_theme import set_theme
 
 
@@ -17,7 +19,7 @@ class SettingsWindow(tk.Toplevel):
         self.on_close_callback = on_close_callback
         if self.parent:
             self.focus_set()
-            utils.ui_disable_parent(self, self.parent)
+            ui_utils.ui_disable_parent(self, self.parent)
             self.transient(self.parent)
         else:
             self.master.withdraw()
@@ -140,7 +142,7 @@ class SettingsWindow(tk.Toplevel):
             self.on_close_callback()
 
         if self.parent:
-            utils.ui_undisable_parent(self, self.parent)
+            ui_utils.ui_undisable_parent(self, self.parent)
 
         self.destroy()
 

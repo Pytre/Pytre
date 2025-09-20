@@ -453,7 +453,7 @@ class LogsWindow(tk.Toplevel):
 
     def get_extract_path(self) -> Path | None:
         item = self.tree.selection()
-        file: Path
+        file: Path = None
         if item:
             file = Path(self.tree.item(item[0])["values"][self.col_idx("fullpath")])
 

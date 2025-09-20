@@ -1,5 +1,7 @@
 import tkinter as tk
 from tkinter import ttk, Event, font, messagebox, filedialog
+from threading import Thread
+from collections.abc import Iterator
 
 if not __package__:
     import syspath_insert  # noqa: F401  # disable unused-import warning
@@ -7,6 +9,7 @@ if not __package__:
 import utils
 from ui.app_theme import set_theme, ThemeColors, theme_is_on
 from ui.InputDialog import InputDialog
+from ui.MsgOverlay import MsgOverlay
 from users import Users, User
 from about import APP_NAME
 
@@ -237,40 +240,55 @@ class UsersWindow(tk.Toplevel):
     def tree_refresh(self, sort_col: str = ""):
         sort_col = self.default_sort_col if sort_col == "" else sort_col
 
-        users: list[User] = self.users.get_all_users()
-        cols = self._tree_cols()
+        overlay = MsgOverlay.display(self, "Chargement des utilisateurs...", 1500)
+        self.lock_ui()
 
-        self.tree.delete(*self.tree.get_children())
-        self.tree.delete(*self.detached_items)
-        self.detached_items = set()
-        # self.groups = set()
-        self.groups = self.users.groups
-
-        for u in users:
-            values: list = []
-            for col in cols.keys():
-                if col in self.users.attribs_cust:
-                    value = u.attribs_cust.get(col, "")
-                else:
-                    value = getattr(u, col, "")
-
-                if col == "grp_authorized":
-                    value.remove("all")
-                    value.sort()
-                    # self.groups.update(value)
-                    value = "".join([f"[{item}]" for item in value])
-                if col == "admin":
-                    value = "\U0001f5f9" if value is True else "\U000000b7"
-                values.append(value)
-
+        def worker():
+            users: list[User] = []
             try:
-                self.tree.insert("", tk.END, iid=u.uuid, values=values)
-            except Exception as e:
-                messagebox.showerror("Erreur chargement liste", e)
+                users: list[User] = self.users.get_all_users()
+            finally:
+                # retour dans le thread principal pour mettre à jour l'UI et finaliser
+                self.after(0, lambda: refresh_end(users))
 
-        self.tree_sort(sort_col)
-        self.tree_autosize()
-        self.tree_filter()
+        def refresh_end(users: list[User]):
+            cols = self._tree_cols()
+
+            self.tree.delete(*self.tree.get_children())
+            self.tree.delete(*self.detached_items)
+            self.detached_items = set()
+            # self.groups = set()
+            self.groups = self.users.groups
+
+            for u in users:
+                values: list = []
+                for col in cols.keys():
+                    if col in self.users.attribs_cust:
+                        value = u.attribs_cust.get(col, "")
+                    else:
+                        value = getattr(u, col, "")
+
+                    if col == "grp_authorized":
+                        value.remove("all")
+                        value.sort()
+                        # self.groups.update(value)
+                        value = "".join([f"[{item}]" for item in value])
+                    if col == "admin":
+                        value = "\U0001f5f9" if value is True else "\U000000b7"
+                    values.append(value)
+
+                try:
+                    self.tree.insert("", tk.END, iid=u.uuid, values=values)
+                except Exception as e:
+                    messagebox.showerror("Erreur chargement liste", e)
+
+            self.tree_sort(sort_col)
+            self.tree_autosize()
+            self.tree_filter()
+
+            overlay.hide(callback=self.unlock_ui)
+
+        Thread(target=worker, daemon=True).start()
 
     def tree_autosize(self):
         sort_max_width = max([font.Font().measure(item) for item in self.sort_symbols])
@@ -317,6 +335,56 @@ class UsersWindow(tk.Toplevel):
         self.destroy()
         if self.parent is None:
             self.quit()
+
+    # ------------------------------------------------------------------------------------------
+    # Verrouillage / Déverrouillage de l'UI
+    # ------------------------------------------------------------------------------------------
+    def menu_commands(self, menu: tk.Menu) -> Iterator[tuple[tk.Menu, int]]:
+        end_index = menu.index("end")
+        if end_index is None:
+            return
+
+        for i in range(end_index + 1):
+            try:
+                entry_type = menu.type(i)
+            except tk.TclError:
+                continue
+
+            if entry_type == "command":
+                yield (menu, i)
+            elif entry_type == "cascade":
+                submenu_name = menu.entrycget(i, "menu")
+                if submenu_name:
+                    submenu = menu.nametowidget(submenu_name)
+                    yield from self.menu_commands(submenu)
+
+    def lock_ui(self):
+        # disable all menus
+        menu: tk.Menu
+        for menu, index in self.menu_commands(self.menubar):
+            menu.entryconfig(index, state="disable")
+
+        # disable all widgets
+        frames_lst = self.ctrl_frame.winfo_children() + self.tree_frame.winfo_children()
+        for widget in frames_lst:
+            if type(widget) in [ttk.Button, ttk.Entry]:
+                widget["state"] = "disable"
+            elif widget in [self.tree]:
+                self.tree["selectmode"] = "none"
+
+    def unlock_ui(self):
+        # enable all menus
+        menu: tk.Menu
+        for menu, index in self.menu_commands(self.menubar):
+            menu.entryconfig(index, state="normal")
+
+        # enable all widgets
+        frames_lst = self.ctrl_frame.winfo_children() + self.tree_frame.winfo_children()
+        for widget in frames_lst:
+            if type(widget) in [ttk.Button, ttk.Entry]:
+                widget["state"] = "enable"
+            elif widget in [self.tree]:
+                self.tree["selectmode"] = "extended"
 
     # ------------------------------------------------------------------------------------------
     # Autres traitements
@@ -400,15 +468,31 @@ class UsersWindow(tk.Toplevel):
         title = "Fichier à importer"
         types = (("Fichier csv", "*.csv"), ("Tous les fichiers", "*.*"))
         filename = filedialog.askopenfilename(title=title, filetypes=types, parent=self)
+        if not filename:
+            return
 
-        result = self.users.csv_import(filename)
-        self.tree_refresh()
-        if result:
-            msg = "Fin de l'import des utilisateurs"
-            messagebox.showinfo(title="Import", message=msg, parent=self, type=messagebox.OK)
-        else:
-            msg = "Quelque chose ne s'est pas bien passé lors de l'import !"
-            messagebox.showerror(title="Import", message=msg, parent=self, type=messagebox.OK)
+        overlay = MsgOverlay.display(self, "Import des utilisateurs...", 1500)
+        self.lock_ui()
+
+        def worker():
+            result: bool = False
+            try:
+                result = self.users.csv_import(filename)
+            finally:
+                # retour dans le thread principal pour mettre à jour l'UI et finaliser
+                self.after(0, lambda: end(result))
+
+        def end(result):
+            self.tree_refresh()
+            overlay.hide(callback=self.unlock_ui)
+            if result:
+                msg = "Fin de l'import des utilisateurs"
+                messagebox.showinfo(title="Import", message=msg, parent=self, type=messagebox.OK)
+            else:
+                msg = "Quelque chose ne s'est pas bien passé lors de l'import !"
+                messagebox.showerror(title="Import", message=msg, parent=self, type=messagebox.OK)
+
+        Thread(target=worker, daemon=True).start()
 
     def export_users(self):
         title = "Fichier à exporter"
@@ -417,13 +501,27 @@ class UsersWindow(tk.Toplevel):
         if not filename:
             return
 
-        result = self.users.csv_export(filename, overwrite=True)
-        if result:
-            msg = "Fin de l'export des utilisateurs"
-            messagebox.showinfo(title="Export", message=msg, parent=self, type=messagebox.OK)
-        else:
-            msg = "Quelque chose ne s'est pas bien passé lors de l'export !"
-            messagebox.showerror(title="Export", message=msg, parent=self, type=messagebox.OK)
+        overlay = MsgOverlay.display(self, "Export des utilisateurs...", 1500)
+        self.lock_ui()
+
+        def worker():
+            result: bool = False
+            try:
+                result = self.users.csv_export(filename, overwrite=True)
+            finally:
+                # retour dans le thread principal pour mettre à jour l'UI et finaliser
+                self.after(0, lambda: end(result))
+
+        def end(result):
+            overlay.hide(callback=self.unlock_ui)
+            if result:
+                msg = "Fin de l'export des utilisateurs"
+                messagebox.showinfo(title="Export", message=msg, parent=self, type=messagebox.OK)
+            else:
+                msg = "Quelque chose ne s'est pas bien passé lors de l'export !"
+                messagebox.showerror(title="Export", message=msg, parent=self, type=messagebox.OK)
+
+        Thread(target=worker, daemon=True).start()
 
 
 class UserDialog(tk.Toplevel):

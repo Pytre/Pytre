@@ -33,7 +33,7 @@ from ui.app_settings import SettingsWindow
 from ui.app_password import PasswordWindow
 from ui.app_console import ConsoleWindow
 from ui.app_about import AboutWindow
-from ui.app_theme import ThemeColors, set_theme, theme_is_on
+from ui.app_theme import set_theme, set_menus, theme_is_on
 
 
 class App(tk.Toplevel):
@@ -240,15 +240,7 @@ class App(tk.Toplevel):
 
         if theme_is_on():
             menus: list[tk.Menu] = [menubar, self.menu_query, menu_admin, menu_about]
-            for menu in menus:
-                menu.config(
-                    font=font.Font(family=self.font_family, size=self.font_size),
-                    bg=ThemeColors.bg_base,
-                    fg=ThemeColors.text_primary,
-                    activebackground=ThemeColors.accent_light,
-                    activeforeground=ThemeColors.text_primary,
-                    activeborderwidth=0,
-                )
+            set_menus(menus)
 
     def setup_ui_paned_window(self):
         self.paned_window = ttk.PanedWindow(self, orient="horizontal")

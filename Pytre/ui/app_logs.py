@@ -1,6 +1,6 @@
 import tkinter as tk
 import json
-from tkinter import ttk, Event, messagebox, font
+from tkinter import ttk, Event, messagebox
 from datetime import datetime
 from pathlib import Path
 
@@ -14,7 +14,7 @@ from about import APP_NAME
 
 import ui.ui_utils as ui_utils
 from ui.save_as import save_as
-from ui.app_theme import set_theme, ThemeColors, theme_is_on
+from ui.app_theme import set_theme, set_menus, theme_is_on
 
 DATE_FORMAT = "%d/%m/%Y"
 TIME_FORMAT = "%H:%M:%S"
@@ -89,20 +89,7 @@ class LogsWindow(tk.Toplevel):
 
         if theme_is_on():
             menus: list[tk.Menu] = [self.menubar, self.menu_extract]
-
-            default_font = font.nametofont("TkDefaultFont")
-            font_family = default_font.actual("family")
-            font_size = default_font.actual("size")
-
-            for menu in menus:
-                menu.config(
-                    font=font.Font(family=font_family, size=font_size),
-                    bg=ThemeColors.bg_base,
-                    fg=ThemeColors.text_primary,
-                    activebackground=ThemeColors.accent_light,
-                    activeforeground=ThemeColors.text_primary,
-                    activeborderwidth=0,
-                )
+            set_menus(menus)
 
     def _setup_ui_ctrl(self):
         self.btn_stats = ttk.Button(self.ctrl_frame, text="Stats", command=self.show_query_stats)

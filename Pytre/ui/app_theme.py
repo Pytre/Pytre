@@ -3,10 +3,17 @@ from __future__ import annotations
 import tkinter as tk
 from tkinter import ttk, font
 
+if not __package__:
+    import syspath_insert  # noqa: F401  # disable unused-import warning
+
 from utils import get_system
 
 
 THEME_ON: bool = False
+
+
+def theme_is_on() -> bool:
+    return THEME_ON
 
 
 def set_theme(root: tk.Toplevel) -> bool:
@@ -19,8 +26,37 @@ def set_theme(root: tk.Toplevel) -> bool:
     return THEME_ON
 
 
-def theme_is_on() -> bool:
-    return THEME_ON
+def set_menus(menus: list[tk.Menu], first_is_menubar: bool = True):
+    if not menus:
+        return
+
+    default_font = font.nametofont("TkDefaultFont")
+    font_family = default_font.actual("family")
+    font_size = default_font.actual("size")
+
+    # icon in first menu to avoid being garbage collected
+    menus[0].empty_icon = tk.PhotoImage(width=16, height=16)
+
+    for i, menu in enumerate(menus):
+        menu.config(
+            font=font.Font(family=font_family, size=font_size),
+            bg=ThemeColors.bg_base if i == 0 and first_is_menubar else ThemeColors.bg_primary,
+            fg=ThemeColors.text_primary,
+            activebackground=ThemeColors.accent_light if i == 0 and first_is_menubar else ThemeColors.accent,
+            activeforeground=ThemeColors.text_primary if i == 0 and first_is_menubar else ThemeColors.text_secondary,
+            activeborderwidth=0,
+        )
+
+        # display an empty icon for command without icon
+        # on linux if there is no icon, no space is reserved for them
+        if i == 0 and first_is_menubar:
+            continue
+        for index in range(menu.index("end") + 1):
+            try:
+                if not menu.entrycget(index, "image"):
+                    menu.entryconfig(index, image=menus[0].empty_icon, compound="left")
+            except tk.TclError:
+                pass
 
 
 class _WinColors:

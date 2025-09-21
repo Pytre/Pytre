@@ -9,7 +9,7 @@ from servers import Servers, Server, ServerType
 from about import APP_NAME
 
 import ui.ui_utils as ui_utils
-from ui.app_theme import set_theme, ThemeColors, theme_is_on
+from ui.app_theme import set_theme, set_menus, ThemeColors, theme_is_on
 from ui.InputDialog import InputDialog
 
 
@@ -89,20 +89,7 @@ class ServersWindow(tk.Toplevel):
 
         if theme_is_on():
             menus: list[tk.Menu] = [self.menubar, menu_servers]
-
-            default_font = font.nametofont("TkDefaultFont")
-            font_family = default_font.actual("family")
-            font_size = default_font.actual("size")
-
-            for menu in menus:
-                menu.config(
-                    font=font.Font(family=font_family, size=font_size),
-                    bg=ThemeColors.bg_base,
-                    fg=ThemeColors.text_primary,
-                    activebackground=ThemeColors.accent_light,
-                    activeforeground=ThemeColors.text_primary,
-                    activeborderwidth=0,
-                )
+            set_menus(menus)
 
     def _tree_cols(self) -> dict[str, dict]:
         return {

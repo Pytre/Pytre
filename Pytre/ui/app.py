@@ -1009,7 +1009,7 @@ class App(tk.Toplevel):
 
     def console(self):
         if not self.console.winfo_exists():
-            self.console_start
+            self.console_start()
         self.console.deiconify()
 
     def about_info(self):

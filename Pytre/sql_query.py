@@ -567,7 +567,7 @@ class _QueryExecute:
         # if on, launch central log
         if self.app_settings.logs_are_on:
             user: users.CurrentUser = users.CurrentUser()
-            log_infos: dict = {"user_db": user_log.user_db, "user_name": user.username, "user_title": user.title}
+            log_infos: dict = {"user_db": user_log.user_db, "user_id": user.username, "user_name": user.title}
             self.parent.queue.put(("central_log", log_infos))
 
         # notify end result

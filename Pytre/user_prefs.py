@@ -21,11 +21,6 @@ class UserPrefs(metaclass=Singleton):
     def _init_extract_folder(self) -> str:
         extract_folder = USER_FOLDER
 
-        # TODO : migration dossier à retirer dans le futur
-        old_folder: Path = Path.home() / "Pytre X3 - Extract"
-        if old_folder.exists():
-            old_folder.rename(extract_folder)
-
         if not extract_folder.exists() or not extract_folder.is_dir():
             try:
                 extract_folder.mkdir(parents=True, exist_ok=True)

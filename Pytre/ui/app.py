@@ -651,7 +651,9 @@ class App(tk.Toplevel):
             self.btn_execute["text"] = "Interrompre"
 
         self.menu_query.entryconfig("Recharger", state="disable")
-        self.menu_query.entryconfig("Liste orphelines...", state="disable")
+
+        if self.user.admin:
+            self.menu_query.entryconfig("Liste orphelines...", state="disable")
 
         self.servers_cb["state"] = "disable"
         self.queries_entry_filter["state"] = "disable"
@@ -668,7 +670,9 @@ class App(tk.Toplevel):
             self.btn_execute["text"] = "Executer"
 
         self.menu_query.entryconfig("Recharger", state="normal")
-        self.menu_query.entryconfig("Liste orphelines...", state="normal")
+
+        if self.user.admin:
+            self.menu_query.entryconfig("Liste orphelines...", state="normal")
 
         self.servers_cb["state"] = "readonly"
         self.queries_entry_filter["state"] = "enable"

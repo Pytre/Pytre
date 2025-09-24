@@ -35,6 +35,7 @@ class UsersWindow(tk.Toplevel):
         self._setup_ui()
         self._events_binds()
 
+        self._initial_load: bool = True
         self.tree_refresh()
 
     # ------------------------------------------------------------------------------------------
@@ -276,6 +277,11 @@ class UsersWindow(tk.Toplevel):
             self.tree_filter()
 
             overlay.hide(callback=self.unlock_ui)
+
+            if not self._initial_load:
+                messagebox.showinfo("Rechargement", "Ok liste des utilisateurs rechargées", parent=self)
+            else:
+                self._initial_load = False
 
         Thread(target=worker, daemon=True).start()
 
@@ -522,7 +528,8 @@ class UserDialog(tk.Toplevel):
         self.user: User = user
 
         self.focus_set()
-        self.update_idletasks()  # needed to update correctly on Linux
+        if utils.get_system() == "Linux":
+            self.update_idletasks()  # needed to update correctly on Linux
         ui_utils.ui_disable_parent(self, self.parent)
         self.transient(self.parent)
 

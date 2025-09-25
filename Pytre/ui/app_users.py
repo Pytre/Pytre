@@ -35,8 +35,7 @@ class UsersWindow(tk.Toplevel):
         self._setup_ui()
         self._events_binds()
 
-        self._initial_load: bool = True
-        self.tree_refresh()
+        self.tree_refresh(notify_end=False)
 
     # ------------------------------------------------------------------------------------------
     # Création de l'interface
@@ -227,7 +226,7 @@ class UsersWindow(tk.Toplevel):
 
         self.tree_sort(col, reverse)
 
-    def tree_refresh(self, sort_col: str = ""):
+    def tree_refresh(self, sort_col: str = "", notify_end: bool = True):
         sort_col = self.default_sort_col if sort_col == "" else sort_col
 
         overlay = MsgOverlay.display(self, "Chargement des utilisateurs...", 1500)
@@ -278,10 +277,8 @@ class UsersWindow(tk.Toplevel):
 
             overlay.hide(callback=self.unlock_ui)
 
-            if not self._initial_load:
+            if notify_end:
                 messagebox.showinfo("Rechargement", "Ok liste des utilisateurs rechargées", parent=self)
-            else:
-                self._initial_load = False
 
         Thread(target=worker, daemon=True).start()
 
@@ -526,6 +523,7 @@ class UserDialog(tk.Toplevel):
 
         self.users: Users = Users()
         self.user: User = user
+        self.user_modified: bool = False
 
         self.focus_set()
         if utils.get_system() == "Linux":
@@ -673,6 +671,8 @@ class UserDialog(tk.Toplevel):
         else:
             user: User = User(detect_user=False)
 
+        overlay = MsgOverlay.display(self, "Enregistrement en cours...", 0)
+
         # mise à jour des infos de l'utilisateur
         for key, item in self.entries.items():
             val = item["var"].get()
@@ -684,21 +684,31 @@ class UserDialog(tk.Toplevel):
         user.grp_authorized = [self.listbox.get(line) for line in self.listbox.curselection()]
 
         # enregistrement des infos
-        try:
-            user.save()
-            self.close(refresh_tree=True)
-        except Exception as e:
-            msg = "Erreur inattendue lors de l'enregistrement :\n"
-            messagebox.showerror(
-                title="Enregistrement utilisateur", message=msg + str(e), parent=self, type=messagebox.OK
-            )
-            return
+        def worker():
+            msg: str = ""
+            try:
+                user.save()
+            except Exception as e:
+                msg = "Erreur inattendue lors de l'enregistrement :\n" + str(e)
+            finally:
+                self.after(0, lambda: save_end(msg))
 
-    def close(self, _: Event = None, refresh_tree: bool = False):
+        def save_end(error_msg: str = ""):
+            overlay.hide()
+
+            if error_msg:
+                messagebox.showerror(title="Erreur Enregistrement", message=error_msg, parent=self, type=messagebox.OK)
+            else:
+                self.user_modified = True
+                self.close()
+
+        Thread(target=worker, daemon=True).start()
+
+    def close(self, _: Event = None):
         ui_utils.ui_undisable_parent(self, self.parent)
 
-        if refresh_tree:
-            self.parent.tree_refresh()
+        if self.user_modified:
+            self.parent.tree_refresh(notify_end=False)
         self.parent.focus_set()
 
         self.destroy()

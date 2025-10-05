@@ -114,7 +114,9 @@ class App(tk.Toplevel):
                 f"Répertoire des requêtes non trouvée :\n{queries_folder.resolve()}",
                 parent=self,
             )
-            self.app_exit()
+            if not self.user.admin:
+                raise SystemExit
+            return
 
         if not self.version_used_gte_mini(self.app_settings.settings_version, self.app_settings.min_version_settings):
             messagebox.showerror(
@@ -125,7 +127,8 @@ class App(tk.Toplevel):
                 "\n\nMerci d'utiliser le fichier des settings à jour",
                 parent=self,
             )
-            self.app_exit()
+            if not self.user.admin:
+                raise SystemExit
 
         if not self.version_used_gte_mini(APP_VERSION, self.app_settings.min_version_pytre):
             messagebox.showerror(
@@ -136,7 +139,8 @@ class App(tk.Toplevel):
                 "\n\nMerci d'utiliser une version à jour",
                 parent=self,
             )
-            self.app_exit()
+            if not self.user.admin:
+                raise SystemExit
 
     def extract_folder_cleaning(self):
         extract_folder = self.prefs.extract_folder

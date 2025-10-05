@@ -4,6 +4,7 @@ import os
 import getpass
 
 import csv
+import io
 from uuid import UUID
 from pathlib import Path
 from tkinter import messagebox
@@ -125,10 +126,7 @@ class Users(metaclass=Singleton):
             if u_entry.username not in usernames or not u_entry.tags:
                 continue
 
-            new_groups: list[str] = u_entry.tags
-            for tag in u_entry.tags:
-                if tag in groups:
-                    new_groups.remove(tag)
+            new_groups: list[str] = [tag for tag in u_entry.tags if tag not in groups]
 
             if not new_groups == u_entry.tags:
                 u_entry.tags = new_groups
@@ -137,53 +135,69 @@ class Users(metaclass=Singleton):
         if save:
             self.kee.save_db()
 
-    def csv_import(self, filename: Path, delimiter: str = ";") -> bool:
+    def csv_import(self, filename: Path, delimiter: str = ";", quotechar: str = '"') -> bool:
+        if not filename.exists():
+            raise FileNotFoundError(f"File to import users does not exist : {filename}")
+
         self.open_db(True)
 
+        # dictionnaire des utilisateurs déjà existants
         entries_dict = {}
         u_entry: Entry
         for u_entry in self.kee_grp.entries:
-            entries_dict[u_entry.username] = u_entry.username.upper()
+            entries_dict[u_entry.username.upper()] = u_entry
 
+        # défininition des colonnes attendues dans le fichier à importer
         cols_std = ["username", "title", "superuser", "grp_authorized", "msg_login"]
         cols_cust = self.get_cust_attribs_list()
-        cols_dict = {}
-        for i, val in enumerate(cols_std + cols_cust):
-            cols_dict[val] = i
+        cols_all = cols_std + cols_cust
 
+        # traitement du fichier à importer
         with open(filename, mode="r", encoding="latin-1") as csv_file:
-            csv_reader = csv.reader(csv_file, delimiter=delimiter, quotechar='"')
+            csv_reader = csv.DictReader(csv_file, delimiter=delimiter, quotechar=quotechar)
 
-            for i, row in enumerate(csv_reader):
-                if i == 0:
+            # vérification de la présence des colonnes
+            csv_headers = [header.strip() for header in csv_reader.fieldnames]
+            missing_cols = [col for col in cols_all if col not in csv_headers]
+            if missing_cols:
+                raise ValueError(f"Missing columns in file to import : {', '.join(missing_cols)}")
+
+            for row_num, row in enumerate(csv_reader, start=2):
+                username = row["username"].strip()
+                if not username:
+                    print(f"Ligne {row_num} ignorée : aucun id renseigné")
                     continue
 
-                # mapping des colonnes
-                row_dict = {}
-                for key, val in cols_dict.items():
-                    row_dict[key] = row[val]
-
                 # contrôle si utilisateurs à modifier ou à créer
-                if row_dict["username"].upper() in entries_dict.keys():
-                    u_entry = entries_dict[row_dict["username"]]
+                if username.upper() in entries_dict.keys():
+                    u_entry = entries_dict[username.upper()]
+                    u_entry.username = username
                 else:
-                    u_entry = self.kee.db.add_entry(self.kee_grp, "", row_dict["username"], "")
+                    u_entry = self.kee.db.add_entry(self.kee_grp, "", username, "")
 
-                # modification des entry de la base
-                u_entry.title = row_dict["title"]
+                # modification des propriétés obligatoires
+                u_entry.title = row.get("title", "").strip()
 
-                if row_dict["superuser"] == "true":
+                if row["superuser"].strip().lower() == "true":
                     u_entry.set_custom_property("superuser", "true")
                 else:
                     u_entry.set_custom_property("superuser", "false")
 
-                u_entry.set_custom_property("msg_login", row_dict["msg_login"])
+                u_entry.set_custom_property("msg_login", row["msg_login"].strip())
 
+                # récup des groupes en utilisant csv.reader pour parser les cas de groupe entre guillemets
+                grp_authorized = row["grp_authorized"].strip()
+                if grp_authorized:
+                    grp_reader = csv.reader([grp_authorized], delimiter=delimiter, quotechar=quotechar)
+                    u_entry.tags = [grp.strip() for grp in next(grp_reader) if grp.strip().lower() not in ["all", ""]]
+                    # remplacement caractères interdits par keepass
+                    u_entry.tags = [grp.replace(",", "_").replace(";", "_") for grp in u_entry.tags]
+                else:
+                    u_entry.tags = []
+
+                # modification des propriétés custom
                 for prop in cols_cust:
-                    u_entry.set_custom_property(prop, row_dict[prop])
-
-                groups = row_dict["grp_authorized"].split(delimiter)
-                u_entry.tags = [group for group in groups if not group == "all"]
+                    u_entry.set_custom_property(prop, row[prop].strip())
 
             # une fois que toutes les entries sont à jour, sauvegarde de la base
             self.kee.save_db()
@@ -191,6 +205,8 @@ class Users(metaclass=Singleton):
             return True
 
     def csv_export(self, filename: Path, delimiter: str = ";", overwrite: bool = False) -> bool:
+        quotechar = '"'
+
         if Path(filename).exists() and not overwrite:
             return False
 
@@ -203,8 +219,15 @@ class Users(metaclass=Singleton):
         for u_entry in self.kee_grp.entries:
             row = [u_entry.username, u_entry.title]
 
+            # utilisation de csv.writer pour joindre les groupes et gérer les caractères similaires au delimiter
             tags = u_entry.tags if u_entry.tags else []
-            group = delimiter.join(tags)
+            if tags:
+                output = io.StringIO()
+                grp_writer = csv.writer(output, delimiter=delimiter, quotechar=quotechar, quoting=csv.QUOTE_MINIMAL)
+                grp_writer.writerows(tags)
+                group = output.getvalue().rstrip("\n")
+            else:
+                group = ""
 
             properties_dict = {}
             for property in u_entry.custom_properties:
@@ -223,7 +246,7 @@ class Users(metaclass=Singleton):
             rows.append(row)
 
         with open(filename, mode="w", encoding="latin-1", newline="") as csv_file:
-            csv_writer = csv.writer(csv_file, delimiter=delimiter, quotechar='"', quoting=csv.QUOTE_MINIMAL)
+            csv_writer = csv.writer(csv_file, delimiter=delimiter, quotechar=quotechar, quoting=csv.QUOTE_MINIMAL)
             csv_writer.writerows(rows)
 
         return True
@@ -379,9 +402,11 @@ class User:
         for attr, val in self.attribs_cust.items():
             u_entry.set_custom_property(attr, val)
 
-        u_entry.tags = [grp for grp in self.grp_authorized if not grp == "all"]
+        # caractères interdits par keepass pour les tags : , et ;
+        u_entry.tags = [grp.replace(",", "_").replace(";", "_") for grp in self.grp_authorized if not grp == "all"]
 
         self.users.kee.save_db()
+        self.users.get_all_groups(reload=False)
 
         self.exists = True
         self.is_authorized = True

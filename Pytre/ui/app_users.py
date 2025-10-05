@@ -468,20 +468,23 @@ class UsersWindow(tk.Toplevel):
 
         def worker():
             result: bool = False
+            error: Exception = None
             try:
                 result = self.users.csv_import(filename)
+            except Exception as err:
+                error = err
             finally:
                 # retour dans le thread principal pour mettre à jour l'UI et finaliser
-                self.after(0, lambda: end(result))
+                self.after(0, lambda: end(result, error))
 
-        def end(result):
+        def end(result, error):
             self.tree_refresh()
             overlay.hide(callback=self.unlock_ui)
             if result:
                 msg = "Fin de l'import des utilisateurs"
                 messagebox.showinfo(title="Import", message=msg, parent=self, type=messagebox.OK)
             else:
-                msg = "Quelque chose ne s'est pas bien passé lors de l'import !"
+                msg = "Quelque chose ne s'est pas bien passé lors de l'import :\n" + str(error)
                 messagebox.showerror(title="Import", message=msg, parent=self, type=messagebox.OK)
 
         Thread(target=worker, daemon=True).start()

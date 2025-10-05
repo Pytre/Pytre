@@ -1,4 +1,5 @@
 import csv
+import io
 from uuid import UUID
 from pathlib import Path
 from enum import Enum
@@ -57,7 +58,10 @@ class Servers(metaclass=Singleton):
 
         return self.groups
 
-    def csv_import(self, filename: Path, delimiter: str = ";") -> bool:
+    def csv_import(self, filename: Path, delimiter: str = ";", quotechar: str = '"') -> bool:
+        if not filename.exists():
+            raise FileNotFoundError(f"File to import servers does not exist : {filename}")
+
         self.open_db(True)
 
         cols_dict = {}
@@ -65,7 +69,7 @@ class Servers(metaclass=Singleton):
             cols_dict[val] = i
 
         with open(filename, mode="r", encoding="latin-1") as csv_file:
-            csv_reader = csv.DictReader(csv_file, delimiter=delimiter, quotechar='"')
+            csv_reader = csv.DictReader(csv_file, delimiter=delimiter, quotechar=quotechar)
 
             for num, csv_row in enumerate(csv_reader):
                 # contrôle si toutes les colonnes nécessaires sont présentes
@@ -91,8 +95,15 @@ class Servers(metaclass=Singleton):
                 for prop in self.cols_cust:
                     s_entry.set_custom_property(prop, csv_row[prop])
 
-                groups = csv_row["grp_authorized"].split(delimiter)
-                s_entry.tags = [group for group in groups]
+                # récup des groupes en utilisant csv.reader pour parser les cas de groupe entre guillemets
+                groups = csv_row["grp_authorized"].strip()
+                if groups:
+                    grp_reader = csv.reader([groups], delimiter=delimiter, quotechar=quotechar)
+                    s_entry.tags = [grp.strip() for grp in next(grp_reader) if grp.strip()]
+                    # remplacement caractères interdits par keepass
+                    s_entry.tags = [grp.replace(",", "_").replace(";", "_") for grp in s_entry.tags]
+                else:
+                    s_entry.tags = []
 
             # une fois que toutes les entries sont à jour, sauvegarde de la base
             self.kee.save_db()
@@ -100,6 +111,8 @@ class Servers(metaclass=Singleton):
             return True
 
     def csv_export(self, filename: Path, delimiter: str = ";", overwrite: bool = False) -> bool:
+        quotechar = '"'
+
         if Path(filename).exists() and not overwrite:
             return False
 
@@ -114,13 +127,21 @@ class Servers(metaclass=Singleton):
                 value = value if value is not None else ""
                 row.append(value)
 
-            groups = delimiter.join(s_entry.tags if s_entry.tags else [])
+            # utilisation de csv.writer pour joindre les groupes et gérer les caractères similaires au delimiter
+            tags = s_entry.tags if s_entry.tags else []
+            if tags:
+                output = io.StringIO()
+                grp_writer = csv.writer(output, delimiter=delimiter, quotechar=quotechar, quoting=csv.QUOTE_MINIMAL)
+                grp_writer.writerows(tags)
+                groups = output.getvalue().rstrip("\n")
+            else:
+                groups = ""
             row.append(groups)
 
             rows.append(row)
 
         with open(filename, mode="w", encoding="latin-1", newline="") as csv_file:
-            csv_writer = csv.writer(csv_file, delimiter=delimiter, quotechar='"', quoting=csv.QUOTE_MINIMAL)
+            csv_writer = csv.writer(csv_file, delimiter=delimiter, quotechar=quotechar, quoting=csv.QUOTE_MINIMAL)
             csv_writer.writerows(rows)
 
         return True
@@ -300,9 +321,11 @@ class Server:
             else:
                 entry.set_custom_property(key, val)
 
-        entry.tags = [grp for grp in self.grp_authorized]
+        # caractères interdits par keepass pour les tags : , et ;
+        entry.tags = [grp.replace(",", "_").replace(";", "_") for grp in self.grp_authorized]
 
         self.servers.kee.save_db()
+        self.servers.get_all_groups(reload=False)
         return True
 
     def delete(self) -> bool:

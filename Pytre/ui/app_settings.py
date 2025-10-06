@@ -1,5 +1,6 @@
 import tkinter as tk
 from tkinter import ttk, Event, messagebox
+from pathlib import Path
 
 if not __package__:
     import syspath_insert  # noqa: F401  # disable unused-import warning
@@ -123,6 +124,9 @@ class SettingsWindow(tk.Toplevel):
     def settings_load(self):
         for key, item in self.entries.items():
             val = getattr(self.settings, key)
+            if key in ("queries_folder", "logs_folder"):
+                # normalisation séparateurs de chemin (/ -> \ sous Windows)
+                val = str(Path(val))
             item["var"].set(val)
 
     def settings_save(self):

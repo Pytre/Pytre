@@ -43,7 +43,8 @@ def showfile(filename: str) -> None:
         startfile(folder)
         return
 
-    args = [file_manager, filename]
+    native_path = str(Path(filename))  # normalisation séparateurs de chemin (/ -> \ sous Windows)
+    args = [file_manager, native_path]
     if is_file:
         select_cmd: str = ""
         if system == "Windows":

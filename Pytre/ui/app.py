@@ -1,5 +1,4 @@
 import tkinter as tk
-from time import sleep
 from threading import Thread
 from multiprocessing import Queue, Event as proc_get_event
 from multiprocessing.synchronize import Event as ProcEvent
@@ -519,38 +518,47 @@ class App(tk.Toplevel):
     # ------------------------------------------------------------------------------------------
     # Execution de requête
     # ------------------------------------------------------------------------------------------
-    def worker_check(self) -> bool:
-        wait_counter: int = 0
-        while self.query_worker.creating_worker:
-            if wait_counter == 0:
-                self.output_msg("En attente de la création d'un nouveau sous processus...")
-            elif wait_counter == 10:
-                self.output_msg(
-                    "Echec ! Le sous processus ne semble pas disponible...\n" + "Lancement de la requête annulée !"
-                )
-                return False
-
-            sleep(1)
-            wait_counter += 1
-
-        return True
-
     def exec_start(self):
-        if not self.worker_check():
-            return
+        def init_query_run(try_counter: int = 0):
+            # initaliser l'execution de la requête si le worker est disponible
+            if not self.query_worker.creating_worker:
+                serialized_query = self.query.serialize()
+                self.query_worker.input_task(self.server_id, serialized_query)
+                self.exec_check_queue()
+                return
 
+            # sinon attendre
+            if try_counter == 0:
+                self.output_msg("En attente de la création d'un nouveau sous processus.", "end")
+            else:
+                self.output_msg(".", "end")
+
+            # demander l'arrêt si l'attente est anormalement longue
+            if try_counter == 10:
+                self.output_msg(
+                    "\nEchec ! Le sous processus ne semble pas disponible...\n" +
+                    "Lancement de la requête annulée !",
+                    "end",
+                ) # fmt: skip
+                self.force_stop.set()
+
+            # procéder à l'arrêt si demandé
+            if self.force_stop.is_set():
+                self.exec_force_stop(kill_worker=False)
+                return
+
+            self.after(1000, init_query_run, try_counter + 1)
+
+        # reset parameters
         self.rows_number: int = 0
         self.output_file = ""
         self.can_stop.set()
         self.force_stop.clear()
+        self.process_running = True
 
         print("UI - Execution starting")
-        self.process_running = True
         self.lock_ui(query_exec=True)
-
-        serialized_query = self.query.serialize()
-        self.query_worker.input_task(self.server_id, serialized_query)
-        self.exec_check_queue()
+        init_query_run()
 
     def exec_check_queue(self):
         done: bool = False
@@ -587,17 +595,19 @@ class App(tk.Toplevel):
         # si demande d'interruption et que l'execution n'est pas déjà finie
         if self.force_stop.is_set() and self.process_running:
             self.exec_force_stop()
-            self.exec_finish()
 
         # auto relance toutes les x ms
         self.after(100, self.exec_check_queue)
 
-    def exec_force_stop(self):
-        self.query_worker.kill_and_restart()
+    def exec_force_stop(self, kill_worker: bool = True):
+        if kill_worker:
+            self.query_worker.kill_and_restart()
         msg = datetime.now().strftime(self.date_format) + " - Requête interrompue"
         if not self.output_textbox.index("end-1c").split(".")[1] == "0":  # si on est pas en début de ligne
             msg = "\n" + msg
         self.output_msg(msg, "end")
+
+        self.exec_finish()
 
     def exec_finish(self):
         self.unlock_ui(query_exec=True)

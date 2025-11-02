@@ -524,7 +524,7 @@ class _QueryExecute:
             return False
 
         starting_date = datetime.now()
-        self._broadcast(starting_date.strftime(self.print_date_format) + " - Connection à la base de données...")
+        self._broadcast(starting_date.strftime(self.print_date_format) + " - Connexion à la base de données...")
 
         self.parent.can_stop.clear()
         with self.server.get_connection() as conn:

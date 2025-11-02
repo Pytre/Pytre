@@ -110,7 +110,7 @@ class App(tk.Toplevel):
         if not queries_folder.is_dir():
             messagebox.showerror(
                 "Répertoire inexistant",
-                f"Répertoire des requêtes non trouvée :\n{queries_folder.resolve()}",
+                f"Répertoire des requêtes non trouvée :\n{queries_folder}",
                 parent=self,
             )
             if not self.user.admin:

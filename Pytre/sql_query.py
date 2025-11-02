@@ -767,7 +767,7 @@ class QueryWorker:
 
 def get_queries(folder: Path) -> tuple[list[Query], list[str]]:
     if not Path(folder).is_dir():
-        raise ValueError(f"Erreur : le répertoire {folder} n'a pas été trouvé ou n'est pas accessible !")
+        raise ValueError(f"Erreur : le répertoire {Path(folder)} n'a pas été trouvé ou n'est pas accessible !")
 
     queries: list[Query] = []
     errors: list[str] = []

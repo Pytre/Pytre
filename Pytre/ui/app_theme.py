@@ -338,6 +338,14 @@ def set_win10_like_theme(root: tk.Toplevel, colors=_WinColors):
                     ("!active", colors.scrollbar_normal),  # scrollbar normal
                     ("active", colors.scrollbar_hover),  # scrollbar au survol
                 ],
+                "lightcolor": [
+                    ("!active", colors.scrollbar_normal),  # grip normal
+                    ("active", colors.scrollbar_hover),  # grip au survol
+                ],
+                "darkcolor": [
+                    ("!active", colors.scrollbar_normal),  # grip normal
+                    ("active", colors.scrollbar_hover),  # grip au survol
+                ],
                 "arrowcolor": [
                     ("!active", colors.text_primary),
                     ("active", colors.text_primary),

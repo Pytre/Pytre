@@ -1,4 +1,3 @@
-import builtins
 import re
 import csv
 from datetime import datetime
@@ -723,11 +722,6 @@ class QueryWorker:
         self.queue_task.put(("start", server_id, query_data))
 
     def _worker(self, queue_task: Queue, queue_result: Queue, force_stop: ProcEvent, can_stop: ProcEvent):
-        original_print = builtins.print  # backup current print function
-        builtins.print = (
-            lambda *args, **kwargs: None
-        )  # disable print, not working in frozen environment for subprocess
-
         self.queue_task: Queue = queue_task
         self.queue_result: Queue = queue_result
         self.force_stop: ProcEvent = force_stop
@@ -735,15 +729,12 @@ class QueryWorker:
 
         self.queue_result.put(True)
 
-        try:
-            while True:
-                msg_type, self.server_id, self.query_data = self.queue_task.get()
-                if msg_type == "stop":
-                    break
-                elif msg_type == "start":
-                    self._task()
-        finally:
-            builtins.print = original_print  # restore original print function
+        while True:
+            msg_type, self.server_id, self.query_data = self.queue_task.get()
+            if msg_type == "stop":
+                break
+            elif msg_type == "start":
+                self._task()
 
     def _task(self):
         try:

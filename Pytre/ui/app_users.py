@@ -1,6 +1,7 @@
 import tkinter as tk
 from tkinter import ttk, Event, font, messagebox, filedialog
 from threading import Thread
+from queue import Queue
 from collections.abc import Iterator
 
 if not __package__:
@@ -11,6 +12,7 @@ from users import Users, User
 from about import APP_NAME
 
 import ui.ui_utils as ui_utils
+from ui.ui_utils_thread import tk_call_when_ready
 from ui.app_theme import set_theme, set_menus, ThemeColors, theme_is_on
 from ui.InputDialog import InputDialog
 from ui.MsgOverlay import MsgOverlay
@@ -237,8 +239,8 @@ class UsersWindow(tk.Toplevel):
             try:
                 users: list[User] = self.users.get_all_users()
             finally:
-                # retour dans le thread principal pour mettre à jour l'UI et finaliser
-                self.after(0, lambda: refresh_end(users))
+                # envoi message de fin pour mettre à jour l'UI et finaliser dans le thread principal
+                result_queue.put(users)
 
         def refresh_end(users: list[User]):
             cols = self._tree_cols()
@@ -246,7 +248,6 @@ class UsersWindow(tk.Toplevel):
             self.tree.delete(*self.tree.get_children())
             self.tree.delete(*self.detached_items)
             self.detached_items = set()
-            # self.groups = set()
             self.groups = self.users.groups
 
             for u in users:
@@ -280,7 +281,9 @@ class UsersWindow(tk.Toplevel):
             if notify_end:
                 messagebox.showinfo("Rechargement", "Ok liste des utilisateurs rechargées", parent=self)
 
+        result_queue = Queue()
         Thread(target=worker, daemon=True).start()
+        tk_call_when_ready(self, result_queue, refresh_end)
 
     def tree_autosize(self):
         sort_max_width = max([font.Font().measure(item) for item in self.sort_symbols])
@@ -475,7 +478,7 @@ class UsersWindow(tk.Toplevel):
                 error = err
             finally:
                 # retour dans le thread principal pour mettre à jour l'UI et finaliser
-                self.after(0, lambda: end(result, error))
+                result_queue.put((result, error))
 
         def end(result, error):
             self.tree_refresh()
@@ -487,7 +490,9 @@ class UsersWindow(tk.Toplevel):
                 msg = "Quelque chose ne s'est pas bien passé lors de l'import :\n" + str(error)
                 messagebox.showerror(title="Import", message=msg, parent=self, type=messagebox.OK)
 
+        result_queue = Queue()
         Thread(target=worker, daemon=True).start()
+        tk_call_when_ready(self, result_queue, end)
 
     def export_users(self):
         title = "Fichier à exporter"
@@ -505,7 +510,7 @@ class UsersWindow(tk.Toplevel):
                 result = self.users.csv_export(filename, overwrite=True)
             finally:
                 # retour dans le thread principal pour mettre à jour l'UI et finaliser
-                self.after(0, lambda: end(result))
+                result_queue.put(result)
 
         def end(result):
             overlay.hide(callback=self.unlock_ui)
@@ -516,7 +521,9 @@ class UsersWindow(tk.Toplevel):
                 msg = "Quelque chose ne s'est pas bien passé lors de l'export !"
                 messagebox.showerror(title="Export", message=msg, parent=self, type=messagebox.OK)
 
+        result_queue = Queue()
         Thread(target=worker, daemon=True).start()
+        tk_call_when_ready(self, result_queue, end)
 
 
 class UserDialog(tk.Toplevel):
@@ -694,7 +701,7 @@ class UserDialog(tk.Toplevel):
             except Exception as e:
                 msg = "Erreur inattendue lors de l'enregistrement :\n" + str(e)
             finally:
-                self.after(0, lambda: save_end(msg))
+                result_queue.put(msg)
 
         def save_end(error_msg: str = ""):
             overlay.hide()
@@ -705,7 +712,9 @@ class UserDialog(tk.Toplevel):
                 self.user_modified = True
                 self.close()
 
+        result_queue = Queue()
         Thread(target=worker, daemon=True).start()
+        tk_call_when_ready(self, result_queue, save_end)
 
     def close(self, _: Event = None):
         ui_utils.ui_undisable_parent(self, self.parent)

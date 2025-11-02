@@ -2,6 +2,7 @@ import sys
 import tkinter as tk
 from tkinter import ttk, Event
 from datetime import datetime
+from queue import Queue, Empty as QueueIsEmpty
 
 if not __package__:
     import syspath_insert  # noqa: F401  # disable unused-import warning
@@ -25,6 +26,10 @@ class ConsoleWindow(tk.Toplevel):
         set_theme(self)
         self._setup_ui()
         self._events_binds()
+
+        self.console_queue: Queue = Queue()
+        self.stop_queue: bool = False
+        self.after(100, self._process_console_queue)
 
         self.redirect_stdout()
         if test:
@@ -73,18 +78,36 @@ class ConsoleWindow(tk.Toplevel):
     def redirect_stdout(self):
         self.old_stdout = sys.stdout
         self.old_stderr = sys.stderr
-        sys.stdout = TextRedirector(sys.stdout, self.textbox, "stdout")
-        sys.stderr = TextRedirector(sys.stderr, self.textbox, "stderr")
+        sys.stdout = TextRedirector(sys.stdout, self.console_queue, "stdout")
+        sys.stderr = TextRedirector(sys.stderr, self.console_queue, "stderr")
 
     def reset_stdout(self):
         sys.stdout = self.old_stdout
         sys.stderr = self.old_stderr
 
     def force_stop(self):
+        self.stop_queue = True
+
         self.reset_stdout()
         self.destroy()
         if self.parent is None:
             self.quit()
+
+    def _process_console_queue(self):
+        while True:
+            try:
+                if self.stop_queue:
+                    return
+                insert_args = self.console_queue.get_nowait()
+                self.textbox["state"] = "normal"
+                self.textbox.insert("end", *insert_args)
+                self.textbox["state"] = "disabled"
+                self.textbox.yview(tk.END)
+            except QueueIsEmpty:
+                self.after(100, self._process_console_queue)
+                break
+            except Exception as e:
+                print(f"Error while processing console queue: {e}")
 
     def app_exit(self, _: Event = None):
         if self.parent is None:
@@ -100,9 +123,9 @@ class ConsoleWindow(tk.Toplevel):
 
 
 class TextRedirector:
-    def __init__(self, terminal, textbox: tk.Text, tag: str = "stdout"):
+    def __init__(self, terminal, console_queue: Queue, tag: str = "stdout"):
         self.terminal = terminal
-        self.textbox: tk.Text = textbox
+        self.console_queue: Queue = console_queue
         self.tag: str = tag
         self.timestamp_tag: str = tag + "_timestamp"
 
@@ -113,27 +136,18 @@ class TextRedirector:
 
         # write to terminal only if it is not None
         if self.terminal:
-            self.write_to_terminal(text + "\n")
+            self.terminal.write(text + "\n")
+            self.terminal.flush()
 
-        self.write_to_textbox(text + "\n")
-
-    def write_to_terminal(self, text: str):
-        self.terminal.write(text)
-        self.terminal.flush()
-
-    def write_to_textbox(self, text: str):
-        timestamp: str = ""
-        timestamp = datetime.now().strftime("%H:%M:%S") + ">"
-
-        padded_text = text[:-1].replace("\n", "\n" + len(timestamp) * " ") + text[-1]
-
-        self.textbox["state"] = "normal"
-        self.textbox.insert("end", timestamp, self.timestamp_tag, padded_text, self.tag)
-        self.textbox["state"] = "disabled"
-        self.textbox.yview(tk.END)
+        # write to textbox
+        timestamp: str = datetime.now().strftime("%H:%M:%S") + ">"
+        padded_text: str = text.replace("\n", "\n" + len(timestamp) * " ") + "\n"
+        insert_args = (timestamp, self.timestamp_tag, padded_text, self.tag)
+        self.console_queue.put(insert_args)
 
     def flush(self):
-        self.terminal.flush()
+        if self.terminal:
+            self.terminal.flush()
 
 
 if __name__ == "__main__":

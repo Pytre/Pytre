@@ -1,5 +1,6 @@
 import tkinter as tk
 from threading import Thread
+from queue import Queue as ThreadQueue
 from multiprocessing import Queue, Event as proc_get_event
 from multiprocessing.synchronize import Event as ProcEvent
 from tkinter import Event as tkEvent, ttk, messagebox, font
@@ -21,6 +22,7 @@ import logs_central
 from about import APP_NAME, APP_VERSION, APP_STATUS
 
 import ui.ui_utils as ui_utils
+from ui.ui_utils_thread import tk_call_when_ready
 from ui.save_as import save_as
 from ui.MsgDialog import MsgDialog
 from ui.MsgOverlay import MsgOverlay
@@ -66,10 +68,10 @@ class App(tk.Toplevel):
         self.setup_ui()
         self.setup_events_binds()
 
+        self.console_start()
+
         self.check_min_version()  # quitte l'application si pas ok
         self.check_user_access()  # quitte l'application si pas d'accès
-
-        self.console_start()
 
         self._queries_first_load: bool = True
         self.refresh_queries(reload_servers=True)
@@ -709,16 +711,17 @@ class App(tk.Toplevel):
         self.output_msg("")
         self.queries_filter_text.set("")
 
+        self.refresh_servers(reload_servers)
+
         def worker():
             queries_all, errors = [], []
             try:
-                self.refresh_servers(reload_servers)
                 queries_all, errors = sql_query.get_queries(self.app_settings.queries_folder)
             except Exception as err:
                 queries_all, errors = [], [str(err)]
             finally:
                 # retour dans le thread principal pour mettre à jour l'UI et finaliser
-                self.after(0, lambda: refresh_end(queries_all, errors))
+                result_queue.put((queries_all, errors))
 
         def refresh_end(queries_all, errors):
             self.queries_all = queries_all
@@ -737,7 +740,9 @@ class App(tk.Toplevel):
             else:
                 self._queries_first_load = False
 
+        result_queue = ThreadQueue()
         Thread(target=worker, daemon=True).start()
+        tk_call_when_ready(self, result_queue, refresh_end)
 
     def refresh_servers(self, reload_servers: bool = False):
         grp_authorized = self.user.grp_authorized if not self.user.admin else None

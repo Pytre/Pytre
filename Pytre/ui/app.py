@@ -1,8 +1,6 @@
 import tkinter as tk
 from threading import Thread
 from queue import Queue as ThreadQueue
-from multiprocessing import Queue, Event as proc_get_event
-from multiprocessing.synchronize import Event as ProcEvent
 from tkinter import Event as tkEvent, ttk, messagebox, font
 
 from pathlib import Path
@@ -57,10 +55,7 @@ class App(tk.Toplevel):
         self.output_file: Path = ""
 
         self.process_running: bool = False
-        self.queue: Queue = Queue()
-        self.can_stop: ProcEvent = proc_get_event()
-        self.force_stop: ProcEvent = proc_get_event()
-        self.query_worker: sql_query.QueryWorker = sql_query.QueryWorker(self.queue, self.force_stop, self.can_stop)
+        self.query_worker: sql_query.QueryWorker = sql_query.QueryWorker()
 
         self.date_format = sql_query.PRINT_DATE_FORMAT
 
@@ -523,11 +518,13 @@ class App(tk.Toplevel):
     def exec_start(self):
         def init_query_run(try_counter: int = 0):
             # initaliser l'execution de la requête si le worker est disponible
-            if not self.query_worker.creating_worker:
+            if self.query_worker.worker_ready:
                 serialized_query = self.query.serialize()
                 self.query_worker.input_task(self.server_id, serialized_query)
                 self.exec_check_queue()
                 return
+            elif not self.query_worker.creating_worker:
+                self.query_worker.create_worker()
 
             # sinon attendre
             if try_counter == 0:
@@ -542,10 +539,10 @@ class App(tk.Toplevel):
                     "Lancement de la requête annulée !",
                     "end",
                 ) # fmt: skip
-                self.force_stop.set()
+                self.query_worker.stop_requested.set()
 
             # procéder à l'arrêt si demandé
-            if self.force_stop.is_set():
+            if self.query_worker.stop_requested.is_set():
                 self.exec_force_stop(kill_worker=False)
                 return
 
@@ -554,8 +551,6 @@ class App(tk.Toplevel):
         # reset parameters
         self.rows_number: int = 0
         self.output_file = ""
-        self.can_stop.set()
-        self.force_stop.clear()
         self.process_running = True
 
         print("UI - Execution starting")
@@ -565,8 +560,8 @@ class App(tk.Toplevel):
     def exec_check_queue(self):
         done: bool = False
         try:
-            while not self.queue.empty():
-                msg_type, data = self.queue.get_nowait()
+            while not self.query_worker.queue_result.empty():
+                msg_type, data = self.query_worker.queue_result.get_nowait()
                 if msg_type == "msg_print":
                     print(data)
                 elif msg_type == "msg_output":
@@ -595,7 +590,7 @@ class App(tk.Toplevel):
             return
 
         # si demande d'interruption et que l'execution n'est pas déjà finie
-        if self.force_stop.is_set() and self.process_running:
+        if self.query_worker.stop_requested.is_set() and self.process_running:
             self.exec_force_stop()
 
         # auto relance toutes les x ms
@@ -617,7 +612,7 @@ class App(tk.Toplevel):
         print("UI - Execution ending")
 
         # si arrêt forcé
-        if self.force_stop.is_set():
+        if self.query_worker.task_killed:
             messagebox.showwarning("Fin execution", "Execution interrompue !", parent=self)
             return
 
@@ -777,7 +772,7 @@ class App(tk.Toplevel):
 
         # si une requête est en cours d'execution alors la stopper
         if self.query_worker.process and self.process_running:
-            self.force_stop.set()
+            self.query_worker.stop_requested.set()
             return False
 
         self.output_msg("")

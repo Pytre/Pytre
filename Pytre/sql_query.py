@@ -4,6 +4,7 @@ from datetime import datetime
 from dateutil.relativedelta import relativedelta
 from pathlib import Path
 from threading import Thread
+from queue import Empty as QueueIsEmpty
 from multiprocessing import Process, Queue, Event as proc_get_event
 from multiprocessing.synchronize import Event as ProcEvent
 
@@ -28,8 +29,8 @@ class Query:
         self.last_extracted_file = ""  # info du dernier fichier extrait
 
         self.queue: Queue = Queue()  # pour transmettre les messages à l'UI
-        self.force_stop: ProcEvent = proc_get_event()  # pour signaler que l'execution doit être stoppée
-        self.can_stop: ProcEvent = proc_get_event()  # pour savoir si l'execution peut stopper proprement
+        self.stop_requested: ProcEvent = proc_get_event()  # pour signaler que l'execution doit être stoppée
+        self.cannot_stop: ProcEvent = proc_get_event()  # pour savoir si l'execution ne peut pas stopper proprement
 
         self.filename = filename
         self.file_content = self._init_file_content(encoding_format)
@@ -523,20 +524,20 @@ class _QueryExecute:
         self.cmd_parameters = cmd_parameters
         self.extract_file = extract_file
 
-        if self.cmd_template == "" or self.parent.force_stop.is_set():
+        if self.cmd_template == "" or self.parent.stop_requested.is_set():
             return False
 
         starting_date = datetime.now()
         self._broadcast(starting_date.strftime(self.print_date_format) + " - Connexion à la base de données...")
 
-        self.parent.can_stop.clear()
+        self.parent.cannot_stop.set()
         with self.server.get_connection() as conn:
             with conn.cursor() as cursor:
                 # execution de la requête et gestion des erreurs liées
                 self._broadcast(self._time_log() + " - Requête en cours d'execution...")
                 try:
                     cursor.execute(self.cmd_template, self.cmd_parameters)
-                    self.parent.can_stop.set()
+                    self.parent.cannot_stop.clear()
                 except (pymssql._pymssql.ProgrammingError, psycopg2.ProgrammingError) as err:
                     error_code = err.args[0]
                     error_msg = str(err.args[1])[2:-2]
@@ -617,7 +618,7 @@ class _QueryExecute:
 
         for row_number, record in enumerate(cursor):
             # si arrêt demandé, sortie
-            if self.parent.force_stop.is_set():
+            if self.parent.stop_requested.is_set():
                 return 0, []
 
             # ajout enregistrement courant au buffer
@@ -636,7 +637,7 @@ class _QueryExecute:
 
             for row_number, record in enumerate(cursor):
                 # si arrêt demandé, suppression fichier et sortie
-                if self.parent.force_stop.is_set():
+                if self.parent.stop_requested.is_set():
                     Path(self.extract_file).unlink(missing_ok=True)
                     return 0, ""
 
@@ -701,30 +702,36 @@ class _QueryExecute:
 
 
 class QueryWorker:
-    def __init__(self, queue_result: Queue, force_stop: ProcEvent, can_stop: ProcEvent):
+    def __init__(self):
         self.process: Process = None
         self.queue_task: Queue = Queue()
-
-        self.queue_result: Queue = queue_result
-        self.force_stop: ProcEvent = force_stop
-        self.can_stop: ProcEvent = can_stop
+        self.queue_result: Queue = Queue()
+        self.stop_requested: ProcEvent = proc_get_event()
+        self.cannot_stop: ProcEvent = proc_get_event()
 
         self.creating_worker: bool = False
+        self.worker_ready: bool = False
+        self.task_killed: bool = False
 
         self.create_worker()
 
     def create_worker(self):
         def create():
-            args = (self.queue_task, self.queue_result, self.force_stop, self.can_stop)
+            args = (self.queue_task, self.queue_result, self.stop_requested, self.cannot_stop)
             self.process = Process(target=self._worker, args=args, daemon=True)
             self.process.start()
 
-            if self.queue_result.get():
-                print("Worker ready")
-
-            self.creating_worker = False
+            try:
+                if self.queue_result.get(timeout=10.0):
+                    self.worker_ready = True
+                    print("Worker ready")
+            except QueueIsEmpty:
+                print("Worker failed to initialize")
+            finally:
+                self.creating_worker = False
 
         if not self.process or not self.process.is_alive():
+            self.worker_ready = False
             self.creating_worker = True
             print("Worker initializing")
             Thread(target=create, daemon=True).start()
@@ -732,42 +739,79 @@ class QueryWorker:
     def kill_and_restart(self):
         print("Task has been asked to stop")
 
-        if self.can_stop.is_set():
-            print("Task, stopping normally")
-            self.force_stop.set()
-            self.process.join()
+        self.worker_ready = False
 
-        if self.process.is_alive():
-            print("Task, stopping by terminating process")
-            self.process.terminate()  # SIGTERM
-            self.process.join(timeout=2.0)
+        if not self.process:
+            print("Task, stopping error : worker process does not exist")
+        else:
+            if not self.cannot_stop.is_set():
+                print("Trying to stop task normally")
+                self.stop_requested.set()
+                self.queue_task.put(("stop", "", ""))
+                self.process.join(timeout=5.0)
 
-        if self.process.is_alive():
-            print("Task, stopping by killing process")
-            self.process.kill()  # SIGKILL
-            self.process.join()
+            if self.process.is_alive():
+                print("Trying to stop task by terminating process")
+                self.process.terminate()  # SIGTERM
+                self.process.join(timeout=2.0)
 
-        print("Task stopped")
+            if self.process.is_alive():
+                print("Trying to stop task by killing process")
+                self.process.kill()  # SIGKILL
+                self.process.join()
 
+            print("Task stopped")
+
+        # flag task as killed
+        self.task_killed = True
+
+        # reset events and queues
+        self.cannot_stop.clear()
+        self.stop_requested.clear()
+        for queue in (self.queue_result, self.queue_task):
+            while not queue.empty():
+                try:
+                    queue.get_nowait()
+                except QueueIsEmpty:
+                    break
+
+        # recreate worker
         self.create_worker()
 
     def input_task(self, server_id: str, query_data):
+        if not self.worker_ready:
+            raise RuntimeError("Can't run query task, worker process not ready")
+        if not self.process or not self.process.is_alive():
+            raise RuntimeError("Can't run query task, worker process not alive")
+
+        self.task_killed = False
         self.queue_task.put(("start", server_id, query_data))
 
-    def _worker(self, queue_task: Queue, queue_result: Queue, force_stop: ProcEvent, can_stop: ProcEvent):
+    def _worker(self, queue_task: Queue, queue_result: Queue, stop_requested: ProcEvent, cannot_stop: ProcEvent):
         self.queue_task: Queue = queue_task
         self.queue_result: Queue = queue_result
-        self.force_stop: ProcEvent = force_stop
-        self.can_stop: ProcEvent = can_stop
+        self.stop_requested: ProcEvent = stop_requested
+        self.cannot_stop: ProcEvent = cannot_stop
 
-        self.queue_result.put(True)
+        try:
+            self.queue_result.put(True)
+        except Exception as e:
+            print(f"Worker failed to signal ready state : {e}")
+            return
 
-        while True:
-            msg_type, self.server_id, self.query_data = self.queue_task.get()
-            if msg_type == "stop":
-                break
-            elif msg_type == "start":
-                self._task()
+        try:
+            while True:
+                msg_type, self.server_id, self.query_data = self.queue_task.get()
+                if msg_type == "stop":
+                    break
+                elif msg_type == "start":
+                    self._task()
+                    self.cannot_stop.clear()
+                    self.stop_requested.clear()
+        except Exception as e:
+            print(f"Worker unexpected error : {e}")
+        finally:
+            print("Worker process ending")
 
     def _task(self):
         try:
@@ -775,8 +819,8 @@ class QueryWorker:
 
             query: Query = Query.deserialize(self.query_data)
             query.queue = self.queue_result
-            query.force_stop = self.force_stop
-            query.can_stop = self.can_stop
+            query.stop_requested = self.stop_requested
+            query.cannot_stop = self.cannot_stop
 
             result = query.execute_cmd(True, self.server_id)
             rows_number, output_file = result if isinstance(result, tuple) else (0, "")

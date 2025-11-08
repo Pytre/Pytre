@@ -512,6 +512,11 @@ class _QueryExecute:
         return self.server
 
     def execute(self, server_id, cmd_template, cmd_parameters, extract_file):
+        # controles validité du fichier d'extraction
+        if extract_file != "" and Path(extract_file).exists():
+            raise FileExistsError(f"Le fichier {extract_file} existe déjà.")
+
+        # controles validité de server_id
         if not self.get_server(server_id):
             return False
 
@@ -528,6 +533,7 @@ class _QueryExecute:
         self.parent.can_stop.clear()
         with self.server.get_connection() as conn:
             with conn.cursor() as cursor:
+                # execution de la requête et gestion des erreurs liées
                 self._broadcast(self._time_log() + " - Requête en cours d'execution...")
                 try:
                     cursor.execute(self.cmd_template, self.cmd_parameters)
@@ -541,13 +547,33 @@ class _QueryExecute:
                     self._broadcast(self._time_log() + f" - Erreur d'execution inattendue :\n{', '.join(err.args)}")
                     return False
 
-                self._broadcast(self._time_log() + " - Début récupération des lignes...")
-                rows_count, execute_output = self._extract_to_file(cursor)
+                # si pas de fichier d'extraction alors renvoi des données dans une liste
+                if extract_file == "":
+                    rows_count, execute_output = self._extract_to_list(cursor)
+                    return rows_count, execute_output
 
-        ending_date = datetime.now()
-        self._execute_end(starting_date, ending_date, rows_count)
+                # sinon extraction des données dans un fichier
+                try:
+                    self._broadcast(self._time_log() + " - Début récupération des lignes...")
+                    rows_count, execute_output = self._extract_to_file(cursor)
+                    ending_date = datetime.now()
+                    self._execute_end(starting_date, ending_date, rows_count)
+                    return rows_count, execute_output
+                except PermissionError:
+                    self._broadcast(self._time_log() + f" - Ecriture refusée pour : {self.extract_file}")
+                except (FileNotFoundError, OSError) as e:
+                    error_msg = str(e).split("]")[1].strip() if "]" in str(e) else str(e)
+                    self._broadcast(
+                        self._time_log()
+                        + f" - Erreur ouverture de : {Path(self.extract_file).name}\n"
+                        + f"Détail : {error_msg}"
+                    )
 
-        return rows_count, execute_output
+        # si erreur lors de l'extraction dans un fichier alors suppression du fichier créé
+        if extract_file != "":
+            Path(self.extract_file).unlink(missing_ok=True)
+
+        return False
 
     def _execute_end(self, starting_date: datetime, ending_date: datetime, rows_count: int):
         # writing user log
@@ -582,51 +608,65 @@ class _QueryExecute:
         else:
             self._broadcast("Fichier extrait : aucune ligne de récupérée, pas de fichier\n" + str("=") * 50)
 
-    def _extract_to_file(self, cursor):
-        if cursor is None:
-            return 0, ""
-
-        buffer_block_size = 50000  # nombre de lignes pour déclencher écriture dans fichier
+    def _extract_to_list(self, cursor):
         buffer = []
+        row_number = -1
 
-        row_headers = [colname[0] for colname in cursor.description]  # ligne des entêtes de colonnes
-        buffer.append(row_headers)  # stockage des entêtes de colonne dans le buffer
+        # ajout entête au buffer
+        row_headers = [colname[0] for colname in cursor.description]
+        buffer.append(row_headers)
 
-        row_number = None
-        for row_number, record in enumerate(cursor):  # parcours résultats
+        for row_number, record in enumerate(cursor):
+            # si arrêt demandé, sortie
+            if self.parent.force_stop.is_set():
+                return 0, []
+
+            # ajout enregistrement courant au buffer
             row_content = self._sql_record_to_text(record)
             buffer.append(row_content)
-            if (
-                self.extract_file != "" and row_number != 0 and (row_number + 1) % buffer_block_size == 0
-            ):  # écriture dans le fichier par blocs
-                block_start = row_number + 1 - buffer_block_size + 1
-                block_end = row_number + 1
-                self._broadcast(
-                    self._time_log()
-                    + " - Ecriture lignes "
-                    + "{:,}".format(block_start).replace(",", " ")
-                    + " à "
-                    + "{:,}".format(block_end).replace(",", " ")
-                    + "..."
-                )
-                self._file_write(buffer)
+
+        return row_number + 1, buffer
+
+    def _extract_to_file(self, cursor):
+        buffer = []  # buffer pour stocker les lignes avant écriture dans le fichier
+        buffer_max_size = 50_000  # nombre de lignes pour déclencher écriture dans fichier
+        row_number = -1
+
+        with open(self.extract_file, mode="w", encoding="windows-1252", errors="replace", newline="") as f:
+            csv_writer = csv.writer(f, delimiter=self.field_separator, quotechar='"', quoting=csv.QUOTE_MINIMAL)
+
+            for row_number, record in enumerate(cursor):
+                # si arrêt demandé, suppression fichier et sortie
+                if self.parent.force_stop.is_set():
+                    Path(self.extract_file).unlink(missing_ok=True)
+                    return 0, ""
+
+                # ajout entête au buffer si première ligne
+                if row_number == 0:
+                    row_headers = [colname[0] for colname in cursor.description]
+                    buffer.append(row_headers)
+
+                # écriture enregistrement courant
+                row_content = self._sql_record_to_text(record)
+                buffer.append(row_content)
+
+                # écriture du buffer si plein
+                if (row_number + 1) % buffer_max_size == 0:
+                    self._broadcast(
+                        self._time_log() + " - Ecriture ligne : {:,}...".format(row_number + 1).replace(",", " ")
+                    )
+                    csv_writer.writerows(buffer)
+                    buffer.clear()
+
+            # écriture des lignes restantes du buffer
+            if buffer:
+                self._broadcast(self._time_log() + " - Ecriture des dernières lignes...")
+                csv_writer.writerows(buffer)
                 buffer.clear()
 
-            if self.parent.force_stop.is_set():
-                return 0, ""
-
-        if self.extract_file != "" and len(buffer) > 1:  # si buffer (et pas que entête) alors écrire ce qui reste
-            self._broadcast(self._time_log() + " - Ecriture des dernières lignes...")
-            self._file_write(buffer)
-            buffer.clear()
-
         self._broadcast(self._time_log() + " - Ecriture finie")
-        row_number = row_number + 1 if row_number is not None else 0
 
-        if self.extract_file != "":
-            return row_number, self.extract_file
-        else:
-            return row_number, buffer
+        return row_number + 1, self.extract_file
 
     def _sql_record_to_text(self, record) -> list:
         row_buffer = []
@@ -644,12 +684,6 @@ class _QueryExecute:
 
     def _broadcast(self, msg_to_display: str) -> None:
         self.parent._broadcast(msg_to_display)
-
-    def _file_write(self, rows: list[list[str]]) -> None:
-        filename = self.extract_file
-        with open(filename, mode="a", encoding="windows-1252", errors="replace", newline="") as f:
-            csv_writer = csv.writer(f, delimiter=self.field_separator, quotechar='"', quoting=csv.QUOTE_MINIMAL)
-            csv_writer.writerows(rows)
 
     def _time_log(self) -> str:
         return datetime.now().strftime(self.print_date_format)

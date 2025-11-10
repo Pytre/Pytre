@@ -258,8 +258,7 @@ class Query:
 
         return var_pos
 
-    def _broadcast(self, msg_to_broadcast: str) -> None:
-        msg_type: str = "msg_output"
+    def _broadcast(self, msg_to_broadcast: str, msg_type: str = "msg_output") -> None:
         self.queue.put((msg_type, msg_to_broadcast))
         print(msg_to_broadcast)
 
@@ -682,8 +681,8 @@ class _QueryExecute:
 
         return row_buffer
 
-    def _broadcast(self, msg_to_display: str) -> None:
-        self.parent._broadcast(msg_to_display)
+    def _broadcast(self, msg_to_display: str, msg_type: str = "msg_output") -> None:
+        self.parent._broadcast(msg_to_display, msg_type)
 
     def _time_log(self) -> str:
         return datetime.now().strftime(self.print_date_format)

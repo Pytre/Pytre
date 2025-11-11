@@ -535,9 +535,11 @@ class _QueryExecute:
             with conn.cursor() as cursor:
                 # execution de la requête et gestion des erreurs liées
                 self._broadcast(self._time_log() + " - Requête en cours d'execution...")
+                self.parent.queue.put(("start_timer", ""))
                 try:
                     cursor.execute(self.cmd_template, self.cmd_parameters)
                     self.parent.cannot_stop.clear()
+                    self.parent.queue.put(("stop_timer", ""))
                 except (pymssql._pymssql.ProgrammingError, psycopg2.ProgrammingError) as err:
                     error_code = err.args[0]
                     error_msg = str(err.args[1])[2:-2]

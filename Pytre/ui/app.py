@@ -56,6 +56,7 @@ class App(tk.Toplevel):
 
         self.process_running: bool = False
         self.query_worker: sql_query.QueryWorker = sql_query.QueryWorker()
+        self.start_time: datetime = None
 
         self.date_format = sql_query.PRINT_DATE_FORMAT
 
@@ -551,11 +552,25 @@ class App(tk.Toplevel):
         # reset parameters
         self.rows_number: int = 0
         self.output_file = ""
+        self.start_time = None
         self.process_running = True
 
         print("UI - Execution starting")
         self.lock_ui(query_exec=True)
         init_query_run()
+
+    def exec_timer(self, stop: bool = False):
+        timer_tag = "timer_tag"
+        elapsed = (datetime.now() - self.start_time).total_seconds() if self.start_time else 0
+        timer_str = f" ({int(elapsed) // 60:02d}:{int(elapsed) % 60:02d})"
+
+        if self.output_textbox.tag_ranges(timer_tag):
+            self.output_msg("", f"{timer_tag}.first", f"{timer_tag}.last")
+
+        if stop:
+            self.start_time = None
+        elif elapsed > 60:
+            self.output_msg(timer_str, "end-1c", "", timer_tag)
 
     def exec_check_queue(self):
         done: bool = False
@@ -570,6 +585,10 @@ class App(tk.Toplevel):
                     if self.output_textbox.get("1.0", "end-1c"):
                         data = "\n" + data
                     self.output_msg(data, "end")
+                elif msg_type == "start_timer":
+                    self.start_time = datetime.now()
+                elif msg_type == "stop_timer":
+                    self.exec_timer(stop=True)
                 elif msg_type == "result":
                     self.rows_number, self.output_file = data
                 elif msg_type == "error":
@@ -579,18 +598,24 @@ class App(tk.Toplevel):
                 elif msg_type == "central_log" and self.instanciate_logs():
                     self.central_logs.trigger_sync(**data)
                 elif msg_type == "done":
+                    self.exec_timer(stop=True)
                     done = True
         except Exception as e:
             print(f"Error reading queue: {e}")
             done = True
 
-        # si traitemnent fini ou erreur alors passer aux étapes de fin
+        # si start_time pas vide alors mettre à jour le timer
+        if self.start_time:
+            self.exec_timer()
+
+        # si traitement fini ou erreur alors passer aux étapes de fin
         if done:
             self.exec_finish()
             return
 
         # si demande d'interruption et que l'execution n'est pas déjà finie
         if self.query_worker.stop_requested.is_set() and self.process_running:
+            self.exec_timer(stop=True)
             self.exec_force_stop()
 
         # auto relance toutes les x ms
@@ -824,10 +849,15 @@ class App(tk.Toplevel):
 
         self.quit()
 
-    def output_msg(self, txt_message: str, start_pos: str = "1.0", end_pos: str = "end"):
+    def output_msg(self, txt_message: str, start_pos: str = "1.0", end_pos: str = "end", tag: str = ""):
         try:  # erreur à l'initialisation quand le ctrl n'existe pas encore
             self.output_textbox["state"] = "normal"
-            self.output_textbox.replace(start_pos, end_pos, str(txt_message))
+
+            if not tag:
+                self.output_textbox.replace(start_pos, end_pos, str(txt_message))
+            else:
+                self.output_textbox.insert(start_pos, txt_message, tag)
+
             self.output_textbox.see(tk.END)
             self.output_textbox["state"] = "disabled"
         except AttributeError:

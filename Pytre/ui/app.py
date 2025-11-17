@@ -57,6 +57,7 @@ class App(tk.Toplevel):
         self.process_running: bool = False
         self.query_worker: sql_query.QueryWorker = sql_query.QueryWorker()
         self.start_time: datetime = None
+        self._timer_after_id: str = None
 
         self.date_format = sql_query.PRINT_DATE_FORMAT
 
@@ -519,22 +520,27 @@ class App(tk.Toplevel):
     def exec_start(self):
         def init_query_run(try_counter: int = 0):
             # initaliser l'execution de la requête si le worker est disponible
-            if self.query_worker.worker_ready:
-                serialized_query = self.query.serialize()
-                self.query_worker.input_task(self.server_id, serialized_query)
-                self.exec_check_queue()
-                return
-            elif not self.query_worker.creating_worker:
+            try:
+                if self.query_worker.worker_ready:
+                    self.exec_timer(stop=True)  # reset timer si démarré pour création worker
+                    serialized_query = self.query.serialize()
+                    self.query_worker.input_task(self.server_id, serialized_query)
+                    self.exec_check_queue()
+                    return
+            except RuntimeError as e:
+                print(f"Erreur lors du lancement de la requête : {e}")
+
+            if not self.query_worker.creating_worker:
                 self.query_worker.create_worker()
 
-            # sinon attendre
+            # sinon attendre la création du worker
             if try_counter == 0:
-                self.output_msg("En attente de la création d'un nouveau sous processus.", "end")
-            else:
-                self.output_msg(".", "end")
+                self.start_time = datetime.now()
+                self.output_msg("En attente de la création d'un nouveau sous processus...", "end")
+                self.exec_timer(wait_in_sec=15)
 
-            # demander l'arrêt si l'attente est anormalement longue
-            if try_counter == 10:
+            # demander l'arrêt si l'attente est anormalement longue (timeout creation worker à 90 secondes)
+            if try_counter == 95:
                 self.output_msg(
                     "\nEchec ! Le sous processus ne semble pas disponible...\n" +
                     "Lancement de la requête annulée !",
@@ -559,18 +565,31 @@ class App(tk.Toplevel):
         self.lock_ui(query_exec=True)
         init_query_run()
 
-    def exec_timer(self, stop: bool = False):
+    def exec_timer(self, stop: bool = False, wait_in_sec: int = 0):
         timer_tag = "timer_tag"
         elapsed = (datetime.now() - self.start_time).total_seconds() if self.start_time else 0
         timer_str = f" ({int(elapsed) // 60:02d}:{int(elapsed) % 60:02d})"
 
+        # clear previous timer display
         if self.output_textbox.tag_ranges(timer_tag):
             self.output_msg("", f"{timer_tag}.first", f"{timer_tag}.last")
 
+        # cancel previous scheduled timer to avoid multiple timers
+        if self._timer_after_id is not None:
+            self.after_cancel(self._timer_after_id)
+            self._timer_after_id = None
+
+        # stop timer if requested (no rescheduling)
         if stop:
             self.start_time = None
-        elif elapsed > 60:
+            return
+
+        # display timer if wait time exceeded
+        if elapsed >= wait_in_sec:
             self.output_msg(timer_str, "end-1c", "", timer_tag)
+
+        # schedule next timer update
+        self._timer_after_id = self.after(1000, self.exec_timer, stop, wait_in_sec)
 
     def exec_check_queue(self):
         done: bool = False
@@ -587,6 +606,7 @@ class App(tk.Toplevel):
                     self.output_msg(data, "end")
                 elif msg_type == "start_timer":
                     self.start_time = datetime.now()
+                    self.exec_timer(wait_in_sec=60)
                 elif msg_type == "stop_timer":
                     self.exec_timer(stop=True)
                 elif msg_type == "result":
@@ -604,10 +624,6 @@ class App(tk.Toplevel):
             print(f"Error reading queue: {e}")
             done = True
 
-        # si start_time pas vide alors mettre à jour le timer
-        if self.start_time:
-            self.exec_timer()
-
         # si traitement fini ou erreur alors passer aux étapes de fin
         if done:
             self.exec_finish()
@@ -615,7 +631,6 @@ class App(tk.Toplevel):
 
         # si demande d'interruption et que l'execution n'est pas déjà finie
         if self.query_worker.stop_requested.is_set() and self.process_running:
-            self.exec_timer(stop=True)
             self.exec_force_stop()
 
         # auto relance toutes les x ms
@@ -628,10 +643,10 @@ class App(tk.Toplevel):
         if not self.output_textbox.index("end-1c").split(".")[1] == "0":  # si on est pas en début de ligne
             msg = "\n" + msg
         self.output_msg(msg, "end")
-
         self.exec_finish()
 
     def exec_finish(self):
+        self.exec_timer(stop=True)
         self.unlock_ui(query_exec=True)
         self.process_running = False
         print("UI - Execution ending")

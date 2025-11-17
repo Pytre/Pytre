@@ -724,15 +724,27 @@ class QueryWorker:
             self.process.start()
 
             try:
-                if self.queue_result.get(timeout=10.0):
+                if self.queue_result.get(timeout=90.0):  # long timeout to allow for slow init (network, antivirus...)
                     self.worker_ready = True
                     print("Worker ready")
             except QueueIsEmpty:
                 print("Worker failed to initialize")
+                if self.process and self.process.is_alive():
+                    print("Terminating stuck worker process...")
+                    self.process.terminate()
+                    self.process.join(timeout=2.0)
+                    if self.process.is_alive():
+                        self.process.kill()
             finally:
                 self.creating_worker = False
 
-        if not self.process or not self.process.is_alive():
+        if self.creating_worker:
+            print("Worker already being created")
+            return
+        elif self.process and self.process.is_alive():
+            print("Worker already exists and is alive")
+            return
+        else:
             self.worker_ready = False
             self.creating_worker = True
             print("Worker initializing")
@@ -781,10 +793,13 @@ class QueryWorker:
         self.create_worker()
 
     def input_task(self, server_id: str, query_data):
+        if self.creating_worker:
+            raise RuntimeError("Can't run query task worker process being created...")
         if not self.worker_ready:
-            raise RuntimeError("Can't run query task, worker process not ready")
+            raise RuntimeError("Can't run query task worker process not ready...")
         if not self.process or not self.process.is_alive():
-            raise RuntimeError("Can't run query task, worker process not alive")
+            self.create_worker()
+            raise RuntimeError("Can't run query task worker process not alive, recreating...")
 
         self.task_killed = False
         self.queue_task.put(("start", server_id, query_data))

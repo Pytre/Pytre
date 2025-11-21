@@ -557,9 +557,13 @@ class _QueryExecute:
             try:
                 self._broadcast(self._time_log() + " - Début récupération des lignes...")
                 rows_count, execute_output = self._extract_to_file(cursor)
+                if execute_output == "" and self.parent.stop_requested.is_set():
+                    raise InterruptedError()
                 ending_date = datetime.now()
                 self._execute_end(starting_date, ending_date, rows_count)
                 return rows_count, execute_output
+            except InterruptedError:
+                self._broadcast(self._time_log() + " - Extraction interrompue")
             except PermissionError:
                 self._broadcast(self._time_log() + f" - Ecriture refusée pour : {self.extract_file}")
             except (FileNotFoundError, OSError) as e:
@@ -571,7 +575,7 @@ class _QueryExecute:
                 )
 
         # si erreur lors de l'extraction dans un fichier alors suppression du fichier créé
-        if extract_file != "":
+        if extract_file:
             Path(self.extract_file).unlink(missing_ok=True)
 
         return False
@@ -637,9 +641,8 @@ class _QueryExecute:
             csv_writer = csv.writer(f, delimiter=self.field_separator, quotechar='"', quoting=csv.QUOTE_MINIMAL)
 
             for row_number, record in enumerate(cursor):
-                # si arrêt demandé, suppression fichier et sortie
+                # si arrêt demandé, stopper l'extraction
                 if self.parent.stop_requested.is_set():
-                    Path(self.extract_file).unlink(missing_ok=True)
                     return 0, ""
 
                 # ajout entête au buffer si première ligne

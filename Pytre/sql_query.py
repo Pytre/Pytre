@@ -531,45 +531,44 @@ class _QueryExecute:
         self._broadcast(starting_date.strftime(self.print_date_format) + " - Connexion à la base de données...")
 
         self.parent.cannot_stop.set()
-        with self.server.get_connection() as conn:
-            with conn.cursor() as cursor:
-                # execution de la requête et gestion des erreurs liées
-                self._broadcast(self._time_log() + " - Requête en cours d'execution...")
-                self.parent.queue.put(("start_timer", ""))
-                try:
-                    cursor.execute(self.cmd_template, self.cmd_parameters)
-                    self.parent.cannot_stop.clear()
-                    self.parent.queue.put(("stop_timer", ""))
-                except (pymssql._pymssql.ProgrammingError, psycopg2.ProgrammingError) as err:
-                    error_code = err.args[0]
-                    error_msg = str(err.args[1])[2:-2]
-                    self._broadcast(self._time_log() + f" - Erreur {error_code} : {error_msg}")
-                    return False
-                except Exception as err:
-                    self._broadcast(self._time_log() + f" - Erreur d'execution inattendue :\n{', '.join(err.args)}")
-                    return False
+        with self.server.get_connection() as conn, conn.cursor() as cursor:
+            # execution de la requête et gestion des erreurs liées
+            self._broadcast(self._time_log() + " - Requête en cours d'execution...")
+            self.parent.queue.put(("start_timer", ""))
+            try:
+                cursor.execute(self.cmd_template, self.cmd_parameters)
+                self.parent.cannot_stop.clear()
+                self.parent.queue.put(("stop_timer", ""))
+            except (pymssql._pymssql.ProgrammingError, psycopg2.ProgrammingError) as err:
+                error_code = err.args[0]
+                error_msg = str(err.args[1])[2:-2]
+                self._broadcast(self._time_log() + f" - Erreur {error_code} : {error_msg}")
+                return False
+            except Exception as err:
+                self._broadcast(self._time_log() + f" - Erreur d'execution inattendue :\n{', '.join(err.args)}")
+                return False
 
-                # si pas de fichier d'extraction alors renvoi des données dans une liste
-                if extract_file == "":
-                    rows_count, execute_output = self._extract_to_list(cursor)
-                    return rows_count, execute_output
+            # si pas de fichier d'extraction alors renvoi des données dans une liste
+            if extract_file == "":
+                rows_count, execute_output = self._extract_to_list(cursor)
+                return rows_count, execute_output
 
-                # sinon extraction des données dans un fichier
-                try:
-                    self._broadcast(self._time_log() + " - Début récupération des lignes...")
-                    rows_count, execute_output = self._extract_to_file(cursor)
-                    ending_date = datetime.now()
-                    self._execute_end(starting_date, ending_date, rows_count)
-                    return rows_count, execute_output
-                except PermissionError:
-                    self._broadcast(self._time_log() + f" - Ecriture refusée pour : {self.extract_file}")
-                except (FileNotFoundError, OSError) as e:
-                    error_msg = str(e).split("]")[1].strip() if "]" in str(e) else str(e)
-                    self._broadcast(
-                        self._time_log()
-                        + f" - Erreur ouverture de : {Path(self.extract_file).name}\n"
-                        + f"Détail : {error_msg}"
-                    )
+            # sinon extraction des données dans un fichier
+            try:
+                self._broadcast(self._time_log() + " - Début récupération des lignes...")
+                rows_count, execute_output = self._extract_to_file(cursor)
+                ending_date = datetime.now()
+                self._execute_end(starting_date, ending_date, rows_count)
+                return rows_count, execute_output
+            except PermissionError:
+                self._broadcast(self._time_log() + f" - Ecriture refusée pour : {self.extract_file}")
+            except (FileNotFoundError, OSError) as e:
+                error_msg = str(e).split("]")[1].strip() if "]" in str(e) else str(e)
+                self._broadcast(
+                    self._time_log()
+                    + f" - Erreur ouverture de : {Path(self.extract_file).name}\n"
+                    + f"Détail : {error_msg}"
+                )
 
         # si erreur lors de l'extraction dans un fichier alors suppression du fichier créé
         if extract_file != "":

@@ -864,7 +864,7 @@ class App(tk.Toplevel):
 
         self.prefs.set(user_prefs.UserPrefsEnum.last_server, self.server_id)
 
-        self.quit()
+        self.destroy()
 
     def output_msg(self, txt_message: str, start_pos: str = "1.0", end_pos: str = "end", tag: str = ""):
         try:  # erreur à l'initialisation quand le ctrl n'existe pas encore

@@ -241,7 +241,9 @@ class App(tk.Toplevel):
         menubar.add_cascade(label="?", menu=menu_about)
 
         if theme_is_on():
-            menus: list[tk.Menu] = [menubar, self.menu_query, menu_admin, menu_about]
+            menus: list[tk.Menu] = [menubar, self.menu_query, menu_about]
+            if self.user.admin:
+                menus.append(menu_admin)
             set_menus(menus)
 
     def setup_ui_paned_window(self):

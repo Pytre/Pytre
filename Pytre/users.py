@@ -147,23 +147,25 @@ class Users(metaclass=Singleton):
         for u_entry in self.kee_grp.entries:
             entries_dict[u_entry.username.upper()] = u_entry
 
-        # défininition des colonnes attendues dans le fichier à importer
-        cols_std = ["username", "title", "superuser", "grp_authorized", "msg_login"]
-        cols_cust = self.get_cust_attribs_list()
-        cols_all = cols_std + cols_cust
+        # colonnes attendues dans le fichier à importer
+        cols_std = ["id", "description", "admin", "groups", "login message"]
+        cols_cust = {col: col.lower() for col in self.get_cust_attribs_list()}
+        cols_required = cols_std + list(cols_cust.values())
 
         # traitement du fichier à importer
         with open(filename, mode="r", encoding="latin-1") as csv_file:
             csv_reader = csv.DictReader(csv_file, delimiter=delimiter, quotechar=quotechar)
 
+            # normalisation des fieldnames pour les colonnes standard
+            csv_reader.fieldnames = [header.strip().lower() for header in csv_reader.fieldnames]
+
             # vérification de la présence des colonnes
-            csv_headers = [header.strip() for header in csv_reader.fieldnames]
-            missing_cols = [col for col in cols_all if col not in csv_headers]
+            missing_cols = [col for col in cols_required if col not in csv_reader.fieldnames]
             if missing_cols:
                 raise ValueError(f"Missing columns in file to import : {', '.join(missing_cols)}")
 
             for row_num, row in enumerate(csv_reader, start=2):
-                username = row["username"].strip()
+                username = row["id"].strip()
                 if not username:
                     print(f"Ligne {row_num} ignorée : aucun id renseigné")
                     continue
@@ -176,17 +178,17 @@ class Users(metaclass=Singleton):
                     u_entry = self.kee.db.add_entry(self.kee_grp, "", username, "")
 
                 # modification des propriétés obligatoires
-                u_entry.title = row.get("title", "").strip()
+                u_entry.title = row.get("description", "").strip()
 
-                if row["superuser"].strip().lower() == "true":
+                if row["admin"].strip() == "1":
                     u_entry.set_custom_property("superuser", "true")
                 else:
                     u_entry.set_custom_property("superuser", "false")
 
-                u_entry.set_custom_property("msg_login", row["msg_login"].strip())
+                u_entry.set_custom_property("msg_login", row["login message"].strip())
 
                 # récup des groupes en utilisant csv.reader pour parser les cas de groupe entre guillemets
-                grp_authorized = row["grp_authorized"].strip()
+                grp_authorized = row["groups"].strip()
                 if grp_authorized:
                     grp_reader = csv.reader([grp_authorized], delimiter=delimiter, quotechar=quotechar)
                     u_entry.tags = [grp.strip() for grp in next(grp_reader) if grp.strip().lower() not in ["all", ""]]
@@ -195,9 +197,10 @@ class Users(metaclass=Singleton):
                 else:
                     u_entry.tags = []
 
-                # modification des propriétés custom
-                for prop in cols_cust:
-                    u_entry.set_custom_property(prop, row[prop].strip())
+                # modification des propriétés custom si présentes dans le fichier importé
+                for prop, csv_header in cols_cust.items():
+                    if csv_header in row:
+                        u_entry.set_custom_property(prop, row[csv_header].strip())
 
             # une fois que toutes les entries sont à jour, sauvegarde de la base
             self.kee.save_db()
@@ -213,7 +216,7 @@ class Users(metaclass=Singleton):
         items_std = ["superuser", "group", "msg_login"]
         items_cust = self.get_cust_attribs_list()
 
-        rows = [["Id", "Libellé"] + ["Admin", "Groupes", "Login Message"] + items_cust]
+        rows = [["Id", "Description"] + ["Admin", "Groups", "Login Message"] + items_cust]
         self.open_db(True)
         u_entry: Entry | None
         for u_entry in self.kee_grp.entries:
@@ -241,6 +244,9 @@ class Users(metaclass=Singleton):
                     value = u_entry.get_custom_property(item)
 
                 value = value if value is not None else ""
+                if item == "superuser":
+                    value = 1 if value.lower() == "true" else 0
+
                 row.append(value)
 
             rows.append(row)

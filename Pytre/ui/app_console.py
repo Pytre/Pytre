@@ -18,7 +18,8 @@ class ConsoleWindow(tk.Toplevel):
         self.parent = parent
         if self.parent is None:
             self.master.withdraw()
-        elif hide:
+
+        if hide:
             self.withdraw()
         else:
             self.focus_set()
@@ -151,5 +152,5 @@ class TextRedirector:
 
 
 if __name__ == "__main__":
-    my_app = ConsoleWindow(hide=True, test=True)
+    my_app = ConsoleWindow(hide=False, test=True)
     my_app.mainloop()

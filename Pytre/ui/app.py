@@ -38,8 +38,10 @@ from ui.app_theme import set_theme, set_menus, theme_is_on
 class App(tk.Toplevel):
     def __init__(self):
         super().__init__()
-        self.focus_set()
         self.master.withdraw()
+        self.withdraw()  # hide until initialization is complete to avoid visual artifacts
+
+        self.console_app: ConsoleWindow = ConsoleWindow(parent=self, hide=True)
 
         self.user: users.CurrentUser = users.CurrentUser()
         self.prefs: user_prefs.UserPrefs = user_prefs.UserPrefs()
@@ -61,11 +63,12 @@ class App(tk.Toplevel):
 
         self.date_format = sql_query.PRINT_DATE_FORMAT
 
+        self.setup_app_identity()
         self.setup_style()
         self.setup_ui()
         self.setup_events_binds()
 
-        self.console_start()
+        self.deiconify()  # show the window after initialization is complete
 
         self.check_min_version()  # quitte l'application si pas ok
         self.check_user_access()  # quitte l'application si pas d'accès
@@ -171,8 +174,17 @@ class App(tk.Toplevel):
                 self.open_folder(extract_folder)
 
     # ------------------------------------------------------------------------------------------
-    # Définition des styles / thème
+    # Définition de l'identité de l'appli et des styles / thème
     # ------------------------------------------------------------------------------------------
+    def setup_app_identity(self):
+        app_version = APP_VERSION if not APP_STATUS else f"{APP_VERSION} ({APP_STATUS})"
+        self.title(f"{APP_NAME} - V.{app_version}")
+
+        icon_file = self.app_settings.app_path / "res" / "app.png"
+        icon_img = tk.PhotoImage(file=icon_file)
+        self.iconphoto(True, icon_img)
+        self.console_app.iconphoto(True, icon_img)  # setting icon for console is also needed
+
     def setup_style(self):
         set_theme(self)
         default_font = font.nametofont("TkDefaultFont")
@@ -186,13 +198,6 @@ class App(tk.Toplevel):
     # Création de l'interface
     # ------------------------------------------------------------------------------------------
     def setup_ui(self):
-        app_version = APP_VERSION if not APP_STATUS else f"{APP_VERSION} ({APP_STATUS})"
-        self.title(f"{APP_NAME} - V.{app_version}")
-
-        icon_file = self.app_settings.app_path / "res" / "app.png"
-        icon_img = tk.PhotoImage(file=icon_file)
-        self.iconphoto(True, icon_img)
-
         self.minsize(width=1020, height=740)
         self.resizable(True, True)
 
@@ -868,6 +873,8 @@ class App(tk.Toplevel):
 
         self.prefs.set(user_prefs.UserPrefsEnum.last_server, self.server_id)
 
+        self.console_app.app_exit()
+
         self.destroy()
         self.quit()
 
@@ -1074,18 +1081,20 @@ class App(tk.Toplevel):
     def manage_password(self):
         PasswordWindow(self)
 
-    def console_start(self):
-        self.console: tk.Toplevel = ConsoleWindow(self, hide=True)
-
     def console(self):
-        if not self.console.winfo_exists():
-            self.console_start()
-        self.console.deiconify()
+        self.console_app.deiconify()
 
     def about_info(self):
         AboutWindow(self)
 
 
+def app_start():
+    try:
+        my_app = App()
+        my_app.mainloop()
+    except SystemExit:
+        pass
+
+
 if __name__ == "__main__":
-    my_app = App()
-    my_app.mainloop()
+    app_start()

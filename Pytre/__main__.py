@@ -7,7 +7,6 @@ if __name__ == "__main__":
 
     multiprocessing.set_start_method("spawn", force=True)
 
-    from ui.app import App  # import after managing multiprocess for it to work when frozen
+    from ui.app import app_start  # import after managing multiprocess for it to work when frozen
 
-    my_app = App()
-    my_app.mainloop()
+    app_start()

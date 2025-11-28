@@ -85,6 +85,7 @@ class App(tk.Toplevel):
                 parent=self,
             )
             self.app_exit()
+            raise SystemExit
 
     def version_used_gte_mini(self, used: str, mini: str) -> bool:
         """ctrl si version utilisé supérieure ou égale à version mini"""
@@ -113,6 +114,7 @@ class App(tk.Toplevel):
                 parent=self,
             )
             if not self.user.admin:
+                self.app_exit()
                 raise SystemExit
             return
 
@@ -126,6 +128,7 @@ class App(tk.Toplevel):
                 parent=self,
             )
             if not self.user.admin:
+                self.app_exit()
                 raise SystemExit
 
         if not self.version_used_gte_mini(APP_VERSION, self.app_settings.min_version_pytre):
@@ -138,6 +141,7 @@ class App(tk.Toplevel):
                 parent=self,
             )
             if not self.user.admin:
+                self.app_exit()
                 raise SystemExit
 
     def extract_folder_cleaning(self):
@@ -865,6 +869,7 @@ class App(tk.Toplevel):
         self.prefs.set(user_prefs.UserPrefsEnum.last_server, self.server_id)
 
         self.destroy()
+        self.quit()
 
     def output_msg(self, txt_message: str, start_pos: str = "1.0", end_pos: str = "end", tag: str = ""):
         try:  # erreur à l'initialisation quand le ctrl n'existe pas encore

@@ -136,7 +136,7 @@ class Users(metaclass=Singleton):
             self.kee.save_db()
 
     def csv_import(self, filename: Path, delimiter: str = ";", quotechar: str = '"') -> bool:
-        if not filename.exists():
+        if not Path(filename).exists():
             raise FileNotFoundError(f"File to import users does not exist : {filename}")
 
         self.open_db(True)

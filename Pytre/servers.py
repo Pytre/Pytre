@@ -59,7 +59,7 @@ class Servers(metaclass=Singleton):
         return self.groups
 
     def csv_import(self, filename: Path, delimiter: str = ";", quotechar: str = '"') -> bool:
-        if not filename.exists():
+        if not Path(filename).exists():
             raise FileNotFoundError(f"File to import servers does not exist : {filename}")
 
         self.open_db(True)

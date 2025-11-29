@@ -481,7 +481,6 @@ class UsersWindow(tk.Toplevel):
                 result_queue.put((result, error))
 
         def end(result, error):
-            self.tree_refresh()
             overlay.hide(callback=self.unlock_ui)
             if result:
                 msg = "Fin de l'import des utilisateurs"
@@ -489,6 +488,7 @@ class UsersWindow(tk.Toplevel):
             else:
                 msg = "Quelque chose ne s'est pas bien passé lors de l'import :\n" + str(error)
                 messagebox.showerror(title="Import", message=msg, parent=self, type=messagebox.OK)
+            self.tree_refresh()
 
         result_queue = Queue()
         Thread(target=worker, daemon=True).start()

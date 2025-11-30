@@ -774,8 +774,10 @@ class App(tk.Toplevel):
             self.queries_filter()
             self.tree_autosize()
 
-            if self._queries_first_load and self.user.msg_login:
-                self.output_msg(str(self.user.msg_login) + "\n", "1.0", "1.0")
+            if self._queries_first_load:
+                default_msg = f"Bonjour {self.user.title.split(' ')[0]} !" if self.user.title else "Bonjour !"
+                custom_msg = self.user.msg_login
+                self.output_msg(str(custom_msg or default_msg) + "\n", "1.0", "1.0")
 
             if errors:
                 self.output_msg("\n".join(errors))

@@ -132,8 +132,9 @@ class Servers(metaclass=Singleton):
             if tags:
                 output = io.StringIO()
                 grp_writer = csv.writer(output, delimiter=delimiter, quotechar=quotechar, quoting=csv.QUOTE_MINIMAL)
-                grp_writer.writerows(tags)
-                groups = output.getvalue().rstrip("\n")
+                grp_writer.writerow(tags)
+                return_size = len(grp_writer.dialect.lineterminator)
+                groups = output.getvalue()[:-return_size]  # suppression du retour à la ligne
             else:
                 groups = ""
             row.append(groups)

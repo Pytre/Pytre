@@ -73,8 +73,8 @@ class Users(metaclass=Singleton):
 
         return self.groups
 
-    def get_cust_attribs_list(self) -> list[str]:
-        self.open_db(False)
+    def get_cust_attribs_list(self, reload: bool = False) -> list[str]:
+        self.open_db(reload)
 
         u_entry: Entry | None = None
         attribs_set: set[str] = set()
@@ -134,6 +134,49 @@ class Users(metaclass=Singleton):
 
         if save:
             self.kee.save_db()
+
+    def modify_custom_attribs(self, fields: list[str], new_value: str = None):
+        """
+        Modify custom fields for all users
+        Args:
+            fields (list[str]): List of custom field names to modify or create.
+            new_value (str, optional): None set to an empty string if the field doesn't exist.
+        """
+
+        self.open_db()
+
+        save: bool = False
+
+        u_entry: Entry | None = None
+        for u_entry in self.kee_grp.entries:
+            for field in fields:
+                if field not in u_entry.custom_properties:
+                    u_entry.set_custom_property(field, new_value or "")
+                    save = True
+                elif new_value is not None and u_entry.get_custom_property(field) != new_value:
+                    u_entry.set_custom_property(field, new_value)
+                    save = True
+
+        if save:
+            self.kee.save_db()
+
+        self.attribs_cust = list(set(self.attribs_cust + fields))
+
+    def remove_custom_attribs(self, fields: list[str]):
+        self.open_db()
+
+        save: bool = False
+        u_entry: Entry | None = None
+        for u_entry in self.kee_grp.entries:
+            for field in fields:
+                if field in u_entry.custom_properties:
+                    u_entry.delete_custom_property(field)
+                    save = True
+
+        if save:
+            self.kee.save_db()
+
+        self.attribs_cust = [attr for attr in self.attribs_cust if attr not in fields]
 
     def csv_import(self, filename: Path, delimiter: str = ";", quotechar: str = '"') -> bool:
         if not Path(filename).exists():
@@ -227,8 +270,9 @@ class Users(metaclass=Singleton):
             if tags:
                 output = io.StringIO()
                 grp_writer = csv.writer(output, delimiter=delimiter, quotechar=quotechar, quoting=csv.QUOTE_MINIMAL)
-                grp_writer.writerows(tags)
-                group = output.getvalue().rstrip("\n")
+                grp_writer.writerow(tags)
+                return_size = len(grp_writer.dialect.lineterminator)
+                group = output.getvalue()[:-return_size]  # suppression du retour à la ligne
             else:
                 group = ""
 
@@ -291,7 +335,6 @@ class User:
         self.title: str = ""
         self.admin: bool = False
         self.grp_authorized: list[str] = ["all"]  # par défaut un utilisateur appartient au groupe all
-        self.msg_login_cust: str = ""
         self.msg_login: str = ""
         self.attribs_cust: dict[str, str] = {}  # dictionnaire des attributs spéciaux
 
@@ -359,8 +402,6 @@ class User:
 
             if property == "superuser":
                 self.admin = True if value and value.lower() == "true" else False
-            elif property == "msg_login":
-                self.msg_login_cust = value
             elif property in self.users.attribs_std:
                 setattr(self, property, value)
             else:
@@ -371,14 +412,6 @@ class User:
         for tag in tags:
             group = tag.lower().strip()
             self.grp_authorized.append(group)
-
-        # ajustement message d'accueil
-        if self.msg_login_cust:
-            self.msg_login = self.msg_login_cust
-        elif self.title:
-            self.msg_login = f"Bonjour {self.title.split(' ')[0]} !"
-        else:
-            self.msg_login = "Bonjour !"
 
         return True
 
@@ -403,7 +436,7 @@ class User:
         u_entry.title = self.title
         admin_val = "true" if self.admin else "false"
         u_entry.set_custom_property("superuser", admin_val)
-        u_entry.set_custom_property("msg_login", self.msg_login_cust)
+        u_entry.set_custom_property("msg_login", self.msg_login)
 
         for attr, val in self.attribs_cust.items():
             u_entry.set_custom_property(attr, val)

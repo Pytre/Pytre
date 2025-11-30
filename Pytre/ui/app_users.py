@@ -28,7 +28,6 @@ class UsersWindow(tk.Toplevel):
         self.filter_var: tk.StringVar
 
         self.users: Users = Users()
-        self.default_filter_cols = ["username", "title", "grp_authorized", "x3_id"]
         self.default_sort_col: str = "title"
         self.sort_info: dict[str, str | bool] = {"col": None, "reverse": None}
         self.groups: set = set()
@@ -81,11 +80,12 @@ class UsersWindow(tk.Toplevel):
         self.menubar.add_cascade(label="Utilisateurs", menu=menu_users)
 
         menu_groups = tk.Menu(self.menubar, tearoff=False)
-        # menu_groups.add_command(label="Gestion...", command=None)
-        # menu_groups.add_separator()
-        menu_groups.add_command(label="Affecter à la sélection...", command=self.groups_add)
-        menu_groups.add_command(label="Retirer de la sélection...", command=self.groups_remove)
-        self.menubar.add_cascade(label="Groupes", menu=menu_groups)
+        menu_groups.add_command(label="Affecter groupes...", command=self.groups_add)
+        menu_groups.add_command(label="Retirer groupes...", command=self.groups_remove)
+        menu_groups.add_separator()
+        menu_groups.add_command(label="Ajouter un champs...", command=self.attribs_add)
+        menu_groups.add_command(label="Supprimer un champs...", command=self.attribs_remove)
+        self.menubar.add_cascade(label="Groupes et champs", menu=menu_groups)
 
         if theme_is_on():
             menus: list[tk.Menu] = [self.menubar, menu_users, menu_groups]
@@ -113,13 +113,8 @@ class UsersWindow(tk.Toplevel):
         self.tree_frame.grid_rowconfigure(0, weight=1)
         self.tree_frame.grid_columnconfigure(0, weight=1)
 
-        cols = self._tree_cols()
-        self.tree = ttk.Treeview(self.tree_frame, columns=list(cols.keys()), show="headings", selectmode="extended")
-        for col, attr in cols.items():
-            self.tree.heading(col, text=attr["text"], command=lambda c=col: self.tree_header_click(c))
-            self.tree.column(col, minwidth=attr["minwidth"], stretch=attr["stretch"])
-            if col in ["admin"]:
-                self.tree.column(col, anchor=tk.CENTER)
+        self.tree = ttk.Treeview(self.tree_frame, show="headings", selectmode="extended")
+        self.tree_cols_config()
 
         xbar = ttk.Scrollbar(self.tree_frame, orient=tk.HORIZONTAL, command=self.tree.xview)
         self.tree.configure(xscroll=xbar.set)
@@ -136,14 +131,10 @@ class UsersWindow(tk.Toplevel):
             "title": {"text": "Libellé", "minwidth": 200, "stretch": False},
             "admin": {"text": "Admin", "minwidth": 75, "stretch": False},
             "grp_authorized": {"text": "Groupes", "minwidth": 60, "stretch": True},
-            "msg_login_cust": {"text": "Login Message", "minwidth": 100, "stretch": False},
+            "msg_login": {"text": "Login Message", "minwidth": 100, "stretch": False},
         }
 
-        # if attribs_cust need to be initialized
-        if not self.users.attribs_cust:
-            cust_attribs = self.users.get_cust_attribs_list()
-        else:
-            cust_attribs = self.users.attribs_cust
+        cust_attribs = self.users.get_cust_attribs_list()
 
         for attr in cust_attribs:
             cols[attr] = {"text": attr, "minwidth": 60, "stretch": False}
@@ -168,8 +159,21 @@ class UsersWindow(tk.Toplevel):
     # ------------------------------------------------------------------------------------------
     # Mise à jour interface
     # ------------------------------------------------------------------------------------------
+    def tree_cols_config(self):
+        cols = self._tree_cols()
+
+        # mettre à jour la configuration des colonnes
+        self.tree.configure(columns=list(cols.keys()))
+
+        # configurer chaque colonne et son entête
+        for col, attr in cols.items():
+            self.tree.heading(col, text=attr["text"], command=lambda c=col: self.tree_header_click(c))
+            self.tree.column(col, minwidth=attr["minwidth"], stretch=attr["stretch"])
+            if col in ["admin"]:
+                self.tree.column(col, anchor=tk.CENTER)
+
     def tree_filter(self, cols: list[str] = []):
-        cols = cols if cols else self.default_filter_cols
+        cols = cols if cols else list(self.users.attribs_std) + self.users.attribs_cust
         i = 0
         while i < len(cols):
             if cols[i] not in self.tree["columns"]:
@@ -459,6 +463,12 @@ class UsersWindow(tk.Toplevel):
         else:
             GroupsDialog.remove(self, items)
 
+    def attribs_add(self):
+        AttribsDialog.modify(self)
+
+    def attribs_remove(self):
+        AttribsDialog.remove(self)
+
     def import_users(self):
         title = "Fichier à importer"
         types = (("Fichier csv", "*.csv"), ("Tous les fichiers", "*.*"))
@@ -585,7 +595,7 @@ class UserDialog(tk.Toplevel):
             "username": {"text": "Id"},
             "title": {"text": "Libellé"},
             "admin": {"text": "Admin"},
-            "msg_login_cust": {"text": "Login Message"},
+            "msg_login": {"text": "Login Message"},
         }
         for attr in self.users.attribs_cust:
             self.entries[attr] = {"text": attr}
@@ -834,18 +844,21 @@ class GroupsDialog(tk.Toplevel):
             self.listbox.insert(tk.END, group)
 
     def group_add(self):
-        curr_groups = self.listbox.get(0, tk.END)
+        curr_groups: list[str] = self.listbox.get(0, tk.END)
         new_group = InputDialog.ask("Nouveau groupe", "Groupe à ajouter :", parent=self)
-        if new_group and new_group not in curr_groups:
-            pos = 0
-            for line in curr_groups:
-                if new_group > line:
-                    pos += 1
-                else:
-                    break
 
-            self.listbox.insert(pos, new_group)
-            self.listbox.selection_set(pos)
+        if not new_group or any(new_group.lower() == group.lower() for group in curr_groups):
+            return
+
+        pos = 0
+        for line in curr_groups:
+            if new_group > line:
+                pos += 1
+            else:
+                break
+
+        self.listbox.insert(pos, new_group)
+        self.listbox.selection_set(pos)
 
     def users_update_groups(self):
         groups = [self.listbox.get(line) for line in self.listbox.curselection()]
@@ -867,6 +880,167 @@ class GroupsDialog(tk.Toplevel):
         ui_utils.ui_undisable_parent(self, self.parent)
 
         if refresh_tree:
+            self.parent.tree_refresh()
+        self.parent.focus_set()
+
+        self.destroy()
+
+
+class AttribsDialog(tk.Toplevel):
+    @classmethod
+    def modify(cls, parent: UserDialog):
+        dialog = AttribsDialog(parent=parent, remove_mode=False)
+        cls.wait_window(dialog)
+        return
+
+    @classmethod
+    def remove(cls, parent: UserDialog):
+        dialog = AttribsDialog(parent=parent, remove_mode=True)
+        cls.wait_window(dialog)
+        return
+
+    def __init__(self, parent, remove_mode: bool = False):
+        super().__init__(master=parent)
+        self.parent: UsersWindow = parent
+        self.users: Users = self.parent.users
+
+        self.focus_set()
+        ui_utils.ui_disable_parent(self, self.parent)
+        self.transient(self.parent)
+
+        self.remove_mode: bool = remove_mode
+
+        set_theme(self)
+        self._setup_ui()
+        self._events_binds()
+
+        if self.remove_mode:
+            self.attribs_set()
+
+    # ------------------------------------------------------------------------------------------
+    # Création de l'interface
+    # ------------------------------------------------------------------------------------------
+    def _setup_ui(self):
+        if not self.remove_mode:
+            self.title(f"{APP_NAME} - Modifier champs")
+        else:
+            self.title(f"{APP_NAME} - Supprimer champs")
+
+        self.minsize(width=400, height=100)
+        self.geometry(f"+{self.parent.winfo_x() + 200}+{self.parent.winfo_y() + 150}")
+        self.resizable(True, True)
+
+        self.attribs_frame = ttk.Frame(self, padding=2, borderwidth=2)
+        self.buttons_frame = ttk.Frame(self, padding=2, borderwidth=2)
+
+        self.attribs_frame.grid(row=0, column=0, padx=0, pady=0, sticky="nswe")
+        self.buttons_frame.grid(row=1, column=0, padx=0, pady=0, sticky="nswe")
+
+        self.rowconfigure(0, weight=1)
+        self.columnconfigure(0, weight=1)
+
+        self._setup_attribs()
+        self._setup_buttons()
+
+    def _setup_attribs(self):
+        self.attribs_frame.columnconfigure(0, weight=1)
+        self.attribs_frame.rowconfigure(1, weight=1)
+
+        if not self.remove_mode:
+            title_text = "Sélection des champs à ajouter :"
+            select_bg_color = "#B4FFB4"
+        else:
+            title_text = "Sélection des champs à supprimer :"
+            select_bg_color = "#FFC8C8"
+
+        title_label = ttk.Label(self.attribs_frame, text=title_text)
+        self.new_attrib = ttk.Button(self.attribs_frame, text="+", width=3, command=self.attrib_add)
+
+        self.listbox = tk.Listbox(self.attribs_frame, selectmode=tk.MULTIPLE, activestyle="none", relief="groove")
+        if theme_is_on():
+            self.listbox.configure(selectbackground=ThemeColors.accent, selectforeground=ThemeColors.text_secondary)
+        ybar = ttk.Scrollbar(self.attribs_frame, orient="vertical", command=self.listbox.yview)
+        self.listbox.configure(yscroll=ybar.set)
+        self.listbox.configure(selectbackground=select_bg_color, selectforeground="black")
+
+        title_label.grid(row=0, column=0, padx=2, pady=2, sticky="nswe")
+        if not self.remove_mode:
+            self.new_attrib.grid(row=0, column=1, padx=2, pady=2, sticky="nswe")
+        self.listbox.grid(row=1, column=0, columnspan=2, padx=2, pady=2, sticky="nswe")
+        ybar.grid(row=1, column=1, sticky="nse")
+
+    def _setup_buttons(self):
+        self.buttons_frame.columnconfigure(0, weight=1)
+
+        save_txt = "Ajouter" if not self.remove_mode else "Supprimer"
+        self.btn_save = ttk.Button(self.buttons_frame, text=save_txt, command=self.users_update_attribs)
+        self.btn_cancel = ttk.Button(self.buttons_frame, text="Annuler", command=self.close)
+
+        self.btn_save.grid(row=0, column=1, padx=2, pady=2, sticky="nse")
+        self.btn_cancel.grid(row=0, column=2, padx=2, pady=2, sticky="nse")
+
+    # ------------------------------------------------------------------------------------------
+    # Définition des évènements générer par les traitements
+    # ------------------------------------------------------------------------------------------
+    def _events_binds(self):
+        self.protocol("WM_DELETE_WINDOW", self.close)  # arrêter le programme quand fermeture de la fenêtre
+
+    # ------------------------------------------------------------------------------------------
+    # Autres traitements
+    # ------------------------------------------------------------------------------------------
+    def attribs_set(self):
+        for attrib in sorted(self.parent.users.attribs_cust):
+            self.listbox.insert(tk.END, attrib)
+
+    def attrib_add(self):
+        new_list: list[str] = self.listbox.get(0, tk.END)
+        tree_labels: list[str] = [self.parent.tree.heading(col)["text"] for col in self.parent.tree["columns"]]
+        curr_attribs: list[str] = tree_labels + self.parent.users.attribs_cust
+
+        new_attrib = InputDialog.ask("Nouveau champs", "Champs à ajouter :", parent=self)
+
+        if not new_attrib or any(new_attrib.lower() == attrib.lower() for attrib in new_list):
+            return
+        elif any(new_attrib.lower() == attrib.lower() for attrib in curr_attribs):
+            msg = f"{new_attrib} existe déjà."
+            messagebox.showerror(title="Erreur ajout champs", message=msg, parent=self, type=messagebox.OK)
+            return
+        elif any(new_attrib.lower() == attrib.lower() for attrib in list(self.users.attribs_std)):
+            msg = f"{new_attrib} est déjà utilisé en interne."
+            messagebox.showerror(title="Erreur ajout champs", message=msg, parent=self, type=messagebox.OK)
+            return
+
+        pos = 0
+        for line in new_list:
+            if new_attrib > line:
+                pos += 1
+            else:
+                break
+
+        self.listbox.insert(pos, new_attrib)
+        self.listbox.selection_set(pos)
+
+    def users_update_attribs(self):
+        attribs = [self.listbox.get(line) for line in self.listbox.curselection()]
+
+        if not attribs:
+            action = "ajouter" if not self.remove_mode else "retirer"
+            msg = f"Aucun champs à {action} sélectionné !"
+            messagebox.showerror(title="Erreur modification", message=msg, parent=self, type=messagebox.OK)
+            return
+
+        if not self.remove_mode:
+            self.users.modify_custom_attribs(attribs)
+        else:
+            self.users.remove_custom_attribs(attribs)
+
+        self.close(refresh_tree=True)
+
+    def close(self, _: Event = None, refresh_tree: bool = False):
+        ui_utils.ui_undisable_parent(self, self.parent)
+
+        if refresh_tree:
+            self.parent.tree_cols_config()
             self.parent.tree_refresh()
         self.parent.focus_set()
 

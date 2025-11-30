@@ -314,18 +314,21 @@ class ServersWindow(tk.Toplevel):
                 self.listbox.selection_set(i)
 
     def group_add(self):
-        curr_groups = self.listbox.get(0, tk.END)
+        curr_groups: list[str] = self.listbox.get(0, tk.END)
         new_group = InputDialog.ask("Nouveau groupe", "Groupe à ajouter :", parent=self)
-        if new_group and new_group not in curr_groups:
-            pos = 0
-            for line in curr_groups:
-                if new_group > line:
-                    pos += 1
-                else:
-                    break
 
-            self.listbox.insert(pos, new_group)
-            self.listbox.selection_set(pos)
+        if not new_group or any(new_group.lower() == group.lower() for group in curr_groups):
+            return
+
+        pos = 0
+        for line in curr_groups:
+            if new_group > line:
+                pos += 1
+            else:
+                break
+
+        self.listbox.insert(pos, new_group)
+        self.listbox.selection_set(pos)
 
     # ------------------------------------------------------------------------------------------
     # Autres traitements

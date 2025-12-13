@@ -40,6 +40,9 @@ class Servers(metaclass=Singleton):
     def get_all_servers(self, reload: bool = False, grp_filter: list[str] = None) -> dict:
         self.open_db(reload)
 
+        if self.kee_grp is None:
+            return {}
+
         self.servers_dict = {}
         for entry in self.kee_grp.entries:
             server = Server(entry=entry, servers=self)
@@ -50,6 +53,9 @@ class Servers(metaclass=Singleton):
 
     def get_all_groups(self, reload: bool = False) -> set:
         self.open_db(reload)
+
+        if self.kee_grp is None or self.kee_users_grp is None:
+            return set()
 
         self.groups = set()
         for entry in self.kee_grp.entries + self.kee_users_grp.entries:

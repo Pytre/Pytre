@@ -22,6 +22,7 @@ from about import APP_NAME, APP_VERSION, APP_STATUS
 import ui.ui_utils as ui_utils
 from ui.ui_utils_thread import tk_call_when_ready
 from ui.save_as import save_as
+from ui.InputDialog import InputDialog
 from ui.MsgDialog import MsgDialog
 from ui.MsgOverlay import MsgOverlay
 from ui.app_logs import LogsWindow
@@ -56,6 +57,9 @@ class App(tk.Toplevel):
         self.params_widgets: dict[str, ttk.Widget] = {}
         self.output_file: Path = ""
 
+        self.setup_app_identity()
+        self.check_database_access()
+
         self.process_running: bool = False
         self.query_worker: sql_query.QueryWorker = sql_query.QueryWorker()
         self.start_time: datetime = None
@@ -63,7 +67,6 @@ class App(tk.Toplevel):
 
         self.date_format = sql_query.PRINT_DATE_FORMAT
 
-        self.setup_app_identity()
         self.setup_style()
         self.setup_ui()
         self.setup_events_binds()
@@ -78,6 +81,38 @@ class App(tk.Toplevel):
         self.refresh_queries(reload_servers=True)
 
         self.extract_folder_cleaning()
+
+    def check_database_access(self, max_attempts=5):
+        kee = self.servers.kee
+        if not kee.is_ko:
+            return
+
+        remaining = max_attempts
+        title = "Mot de passe"
+        for _ in range(max_attempts):
+            pwd = InputDialog.ask(title, "Accès aux paramètres impossible !\nMot de passe :")
+
+            # si aucun mot de passe saisi, on quitte
+            if not pwd:
+                messagebox.showerror(title, "Aucun mot de passe saisie.\nFermeture de l'application.")
+                break
+            # si réussite ouverture de la base, on sort
+            if kee.pwd_try([pwd]):
+                messagebox.showinfo(title, "Accès restauré.\nL'application va fermer, merci de la réouvrir.")
+                break
+
+            # si échéc l'utilisateur peut réessayer jusqu'à épuisement des essais
+            remaining -= 1
+            msg_singular = "Mot de passe invalide !\n1 essai restant."
+            msg_plural = f"Mot de passe invalide !\n{remaining} essais restants."
+            if remaining > 0:
+                msg = msg_singular if remaining == 1 else msg_plural
+                messagebox.showerror(title=title, message=msg)
+            else:
+                messagebox.showerror(title, "Ouverture impossible des paramètres.\nFermeture de l'application.")
+
+        self.app_exit()
+        raise SystemExit
 
     def ensure_admin_exists(self):
         if not self.user.users.users_admin_exists():
@@ -104,8 +139,11 @@ class App(tk.Toplevel):
 
     def version_used_gte_mini(self, used: str, mini: str) -> bool:
         """ctrl si version utilisé supérieure ou égale à version mini"""
-        used_nums = list(map(lambda i: int(i), used.split(".")))
-        mini_nums = list(map(lambda i: int(i), mini.split(".")))
+        try:
+            used_nums = list(map(lambda i: int(i), used.split(".")))
+            mini_nums = list(map(lambda i: int(i), mini.split(".")))
+        except ValueError:
+            return True  # si erreur format, ne pas bloquer
 
         if not len(used_nums) == len(mini_nums):
             return False
@@ -133,6 +171,7 @@ class App(tk.Toplevel):
                 raise SystemExit
             return
 
+        # vérification version settings
         if not self.version_used_gte_mini(self.app_settings.settings_version, self.app_settings.min_version_settings):
             messagebox.showerror(
                 "Version settings.db",
@@ -146,6 +185,7 @@ class App(tk.Toplevel):
                 self.app_exit()
                 raise SystemExit
 
+        # vérification version application
         if not self.version_used_gte_mini(APP_VERSION, self.app_settings.min_version_pytre):
             messagebox.showerror(
                 f"Version {APP_NAME}",

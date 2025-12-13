@@ -65,6 +65,9 @@ class Users(metaclass=Singleton):
     def get_all_groups(self, reload: bool = False) -> set:
         self.open_db(reload)
 
+        if self.kee_grp is None or self.kee_servers_grp is None:
+            return set()
+
         self.groups = set()
         for entry in self.kee_grp.entries + self.kee_servers_grp.entries:
             tags = set(map(lambda val: val.lower().strip(), entry.tags)) if entry.tags else []

@@ -2,7 +2,6 @@ import sys
 import os
 
 from pathlib import Path
-from tkinter import messagebox
 
 from pykeepass import PyKeePass
 from pykeepass.exceptions import CredentialsError
@@ -10,7 +9,6 @@ from pykeepass.entry import Entry
 from pykeepass.group import Group
 
 from singleton_metaclass import Singleton
-from ui.InputDialog import InputDialog
 from credentials import crypted_file_pwd_get, crypted_file_pwd_history, crypted_file_pwd_change
 
 
@@ -32,9 +30,9 @@ def get_app_path() -> Path:
 
 
 class Kee(metaclass=Singleton):
-    def __init__(self):
+    def __init__(self, password: str = ""):
         self.file: str = KEE_FILE
-        self.pwd: str = ""
+        self.pwd: str = password
         self.db: PyKeePass = None
         self.is_open: bool = False
         self.is_ko: bool = False
@@ -58,9 +56,14 @@ class Kee(metaclass=Singleton):
             try:
                 self.db = PyKeePass(self.file, password=self.pwd)
             except FileNotFoundError:
+                print(f"Base des paramètres introuvable : '{self.file}'")
                 self.create_db()
             except CredentialsError:  # si erreur mot de passe, tentative avec les précédents
-                self.pwd_try_old_ones()
+                self.is_ko = True
+                db_unlocked = self.pwd_try()
+                if not db_unlocked:
+                    print("Accès base des paramètres impossible : mot de passe invalide.")
+                    return
 
             self.is_open = True
             self.opening_count += 1
@@ -83,37 +86,30 @@ class Kee(metaclass=Singleton):
                 + "Vos modifications n'ont pas pu être enregistées.\n\n"
                 + "Merci d'alerter les administateurs."
             )
-            messagebox.showerror(title="Erreur enregistrement", message=msg)
+            print(msg)
 
-    def create_db(self):
+    def create_db(self, password: str = ""):
         self.is_ko = True
 
-        msg = "La base des paramètres n'a pas été trouvée !\n" + "Une nouvelle base va être créée."
-        messagebox.showwarning(title="Base introuvable", message=msg)
-
-        pwd = InputDialog.ask("Mot de passe, accès paramètres ?", "Mot de passe :")
-        pwd = pwd if pwd else BLANK_PWD
+        print("Création d'une nouvelle base en cours...")
 
         self.db = PyKeePass(get_app_path() / BLANK_FILE, password=BLANK_PWD)
         self.db.filename = self.file
-        self.pwd_change(pwd, True)
-
+        self.pwd_change(password, True)
         self._create_db_set_default()
 
-        msg = "Une base des paramètres par défaut a été créée.\nMettez les à jour à l'aide du menu admin."
-        messagebox.showinfo(title="Base créée", message=msg)
+        print("Nouvelle base créée ! Mettez à jour les paramètres à l'aide du menu admin.")
 
         self.is_ko = False
 
-    def _create_db_set_default(self):
+    def _create_db_set_default(self, queries_folder: str = "./queries"):
         self.db.root_group.name = "settings"
 
         grps = {"Paramètres": None, "Serveurs": None, "Utilisateurs": None}
         for grp in grps.keys():
             grps[grp] = self.db.add_group(self.db.root_group, grp)
 
-        queries_folder = InputDialog.ask("Dossier des requêtes ?", "Dossier des requêtes :")
-        queries_folder = queries_folder if queries_folder else "."
+        Path(queries_folder).mkdir(parents=True, exist_ok=True)
 
         params = {
             "DATE_FORMAT": "%d/%m/%Y",
@@ -132,13 +128,7 @@ class Kee(metaclass=Singleton):
 
         self.save_db()
 
-    def access_is_ko(self) -> bool:
-        return self.is_ko
-
-    def pwd_try_old_ones(self, pwds_list: list[str] = [], _iter: int = 0) -> bool:
-        if self.is_ko:
-            return  # une fois que l'accès est ko, plus d'essai
-
+    def pwd_try(self, pwds_list: list[str] = []) -> bool:
         if not pwds_list:
             pwds_list = crypted_file_pwd_history()[1:]
 
@@ -147,35 +137,12 @@ class Kee(metaclass=Singleton):
                 self.db = PyKeePass(self.file, password=pwd)
                 self.pwd_change(pwd, True)
                 self.is_ko = False
-                msg = (
-                    "Le mot de passe d'accès aux paramètres n'était pas valide !\n"
-                    + "L'accès a pu être possible à l'aide d'un ancien mot de passe.\n\n"
-                    + "Merci d'alerter les administateurs, surtout si vous avez eu "
-                    + "une erreur d'enregistrement lorsque le programme à tenter de "
-                    + "le mettre à jour."
-                )
-                messagebox.showwarning(title="Récupération mot de passe", message=msg)
+                print("Accès à la base restauré")
                 return True
             except CredentialsError:
                 pass
 
-        # si aucun des anciens mots de passe ne marche alors on demande à l'utilisateur le bon mot de passe
-        pwd = InputDialog.ask("Mot de passe, accès paramètres ?", "Mot de passe :")
-        if pwd and self.pwd_try_old_ones([pwd], _iter + 1):
-            self.is_ko = False
-            return True
-        # si l'utilisateur n'en a pas été capable alors on affiche une erreur
-        elif _iter == 0:
-            self.is_ko = True
-            msg = (
-                "Le mot de passe d'accès aux paramètres n'était pas valide !\n"
-                + "L'accès même avec les anciens mots de passe ne fonctionne pas.\n\n"
-                + "Merci d'alerter les administateurs."
-            )
-            messagebox.showerror(title="Récupération mot de passe", message=msg)
-            return False
-        else:
-            return False
+        return False
 
     def pwd_get(self) -> str:
         pwd = crypted_file_pwd_get()
@@ -186,8 +153,12 @@ class Kee(metaclass=Singleton):
         return history
 
     def pwd_change(self, new_pwd: str, force_save: bool = False):
-        if force_save or not new_pwd == self.pwd:
-            self.pwd = new_pwd
-            self.db.password = self.pwd
+        if new_pwd == self.pwd:
+            return
+
+        self.pwd = new_pwd
+        self.db.password = new_pwd
+        crypted_file_pwd_change(new_pwd)
+
+        if force_save:
             self.save_db()
-            crypted_file_pwd_change(new_pwd)

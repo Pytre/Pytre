@@ -71,12 +71,24 @@ class App(tk.Toplevel):
         self.deiconify()  # show the window after initialization is complete
 
         self.check_min_version()  # quitte l'application si pas ok
+        self.ensure_admin_exists()  # crée un admin si aucun n'existe
         self.check_user_access()  # quitte l'application si pas d'accès
 
         self._queries_first_load: bool = True
         self.refresh_queries(reload_servers=True)
 
         self.extract_folder_cleaning()
+
+    def ensure_admin_exists(self):
+        if not self.user.users.users_admin_exists():
+            msg = (
+                "Aucun administrateur n'existe !\n"
+                + "Vous allez être ajouté en tant qu'administrateur par défaut.\n"
+                + "Pensez à mettre à jour les utilisateurs après."
+            )
+            messagebox.showinfo(title="Base créée", message=msg)
+            self.user.admin = True
+            self.user.save()
 
     def check_user_access(self):
         if not self.user.is_authorized:

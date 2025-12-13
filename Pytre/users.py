@@ -7,7 +7,6 @@ import csv
 import io
 from uuid import UUID
 from pathlib import Path
-from tkinter import messagebox
 
 from pykeepass.entry import Entry
 from pykeepass.group import Group
@@ -343,16 +342,6 @@ class User:
         elif username or detect_user:
             self.username = username if username else self.users.get_current_username()
             self.load()
-
-        if not self.users.users_admin_exists():
-            msg = (
-                "Aucun administrateur n'existe !\n"
-                + "Vous allez être ajouté en tant qu'administrateur par défaut.\n"
-                + "Pensez à mettre à jour les utilisateurs après."
-            )
-            messagebox.showinfo(title="Base créée", message=msg)
-            self.admin = True
-            self.save()
 
     def to_dict(self) -> dict:
         attribs = {

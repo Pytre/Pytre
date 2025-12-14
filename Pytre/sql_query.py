@@ -34,187 +34,76 @@ class ExecuteConfig:
 
 
 class Query:
-    def __init__(self, filename: Path = Path("dummy"), encoding_format: str = "utf-8"):
-        self.query_execute: QueryExecute = QueryExecute()
+    def __init__(self, filename: Path = Path(), encoding: str = "utf-8"):
+        parser = FileParser(filename, encoding)
 
-        self.filename = filename
-        self.file_content = self._init_file_content(encoding_format)
-
-        self.infos: dict = self._init_infos()
-        self.cmd_params = {}
-        self.params_obj: dict[str, _Param] = self._init_params()
-
-        self.raw_cmd = self._init_raw_cmd()
-        self.cmd_template = self._init_template_cmd()
+        self.filename: Path = filename
+        self.file_content: str = parser.content
+        self.infos: dict = parser.extract_header_infos()
+        self.raw_cmd: str = parser.extract_raw_command()
 
         self.name: str = self.infos.get("code", self.filename.stem)
-
-        hide: str = self.infos.get("hide", "0")
-        self.hide: int = int(hide) if hide.isdigit() else 0
-
-        self.description: str = ""
-        if self.hide:
-            self.description = "(" + "*" * self.hide + ") " + self.infos.get("description", "")
-        else:
-            self.description = self.infos.get("description", "")
-
+        self.hide: int = self._set_hide_level()
+        self.description: str = self._set_description()
         self.grp_authorized: list[str] = self.infos.get("grp_authorized", [])
         all_servers_id = list(servers.Servers().servers_dict.keys())
         self.servers_id: list[str] = self.infos.get("servers", all_servers_id)
 
-    def _init_file_content(self, encoding_format: str = "utf-8") -> str:
-        file_content = ""
+        self.parameters = SqlParameters(self.file_content)
+        self.cmd_builder = CmdBuilder(self.raw_cmd, self.parameters)
+        self.query_execute: QueryExecute = QueryExecute()
 
-        # if filename has not been set then immediatly return without error
-        if self.filename.name == "dummy":
-            return file_content
+    def _set_hide_level(self) -> int:
+        hide: str = self.infos.get("hide", "0")
+        return int(hide) if hide.isdigit() else 0
 
-        # set alternative encoding to try if failing to decode
-        encodings: list = ["utf-8", "cp1252", "ansi"]
-        encodings.remove(encoding_format) if encoding_format in encodings else None
-        encodings.insert(0, encoding_format)
+    def _set_description(self) -> str:
+        description: str = self.infos.get("description", "")
+        if self.hide:
+            description = f"({'*' * self.hide}) {description}"
 
-        # test all possible decoding formats
-        decoded: bool = False
-        for encoding in encodings:
-            try:
-                with open(self.filename, mode="r", encoding=encoding) as f:
-                    file_content = f.read()
-                decoded = True
-                break
-            except (UnicodeDecodeError, LookupError):  # LookupError if format doesn't exist (eg : ansi on linux)
-                pass
+        return description
 
-        # if all try failed raise an exception
-        if not decoded:
-            raise TypeError(f"couldn't decode file using {', '.join(encodings)}")
-
-        return file_content
-
-    def _init_infos(self) -> dict:
-        infos = {}
-        regex_match = re.search(
-            r"^\/\*[^\n]*?\n(.*?)\n^\*\/", self.file_content, re.MULTILINE | re.DOTALL
-        )  # récupération des infos d'entête de la requete (premier bloc de commentaires)
-
-        if regex_match is not None:
-            for line in regex_match.group(1).splitlines():
-                regex_infos = re.search(r"^([^:]*?)\s*:\s*(.*$)", line)
-                if regex_infos is not None:
-                    info_key = regex_infos.group(1).lower()
-
-                    convert_to_list = ["grp_authorized", "servers"]
-                    if info_key in convert_to_list:
-                        info_value = [item.lower().strip() for item in regex_infos.group(2).split(",")]
-                    else:
-                        info_value = regex_infos.group(2)
-
-                    infos[info_key] = info_value  # rajout dans un dictionnaire de l'info
-
-        return infos
-
-    def _init_params(self) -> dict:
-        regex_match = re.search(r"^(DECLARE[^;]*;)", self.file_content, re.MULTILINE | re.DOTALL)  # section DECLARE
-
-        params = {}
-        params_txt = regex_match.group(1) if regex_match is not None else ""
-        for line in params_txt.splitlines():
-            if line[0:1] == "@":
-                my_param = _Param(line)
-                params[my_param.var_name] = my_param
-                self.cmd_params[my_param.var_name] = my_param.value_cmd
-
-        return params
-
-    def _init_raw_cmd(self) -> str:
-        regex_match = re.search(r"^DECLARE[^;]*;[\s]*(.*)", self.file_content, re.MULTILINE | re.DOTALL)
-        raw_cmd = regex_match.group(1) if regex_match is not None else self.file_content
-        return raw_cmd
-
-    def _init_template_cmd(self) -> str:
-        def replace_func(match: re.Match):
-            # replace only variables which are parameters
-            if match.group(0) in self.cmd_params.keys():
-                return f"%({match.group(0)})s"
-            else:
-                return match.group(0)
-
-        cmd_template = re.sub(r"(?<![\d\w#_\$@])(@[\d\w#_\$@]+)", replace_func, self.raw_cmd)
-        return cmd_template
-
+    # ------------------------------------------------------------------------------------------
+    # Gestion des paramètres avec SqlParameters
+    # ------------------------------------------------------------------------------------------
     def reset_values(self):
-        for k, v in self.params_obj.items():
-            v.reset_param()
-            self.cmd_params[k] = ""
+        self.parameters.reset_values()
 
     def update_values(self, key: str = None) -> bool:
         """
         If key is none then update all key
         """
-        my_list = [key] if key is not None else self.params_obj.keys()
-
-        for key in my_list:
-            param = self.params_obj[key]
-            self.cmd_params[key] = param.update_value_cmd()
-
-        return True
+        return self.parameters.update_values(key)
 
     def values_ok(self, key: str = None) -> bool:
-        my_list = [key] if key is not None else self.params_obj.keys()
+        """
+        If key is none then update all key
+        """
+        return self.parameters.validate(key)
 
-        for key in my_list:
-            if not self.params_obj[key].value_is_ok:
-                return False
+    # ------------------------------------------------------------------------------------------
+    # Construction requête à executer avec SqlCmdBuilder
+    # ------------------------------------------------------------------------------------------
+    def get_cmd_for_debug(self) -> str:
+        return self.cmd_builder.build_debug_command()
 
-        return True
+    def get_params_for_debug(self, only_not_parameterized: bool = False) -> dict[int, int]:
+        """position et longueur des paramètres après remplacement par leurs valeurs"""
+        return self.cmd_builder.params_pos_for_debug(only_not_parameterized)
 
-    def execute_config(self, file_output: bool = True, server_id: str = "") -> ExecuteConfig:
-        # détermination du server_id à utiliser
+    def get_exec_config(self, server_id: str = "", file_output: bool = True) -> ExecuteConfig:
         select_server_id: str = server_id or (self.servers_id[0] if self.servers_id else "")
+        return self.cmd_builder.build_exec_config(self.name, select_server_id, file_output)
 
-        # template de la commande
-        cmd_template: str = self.cmd_template
-
-        # paramètres de la commande
-        cmd_parameters: dict = {}
-        for k, v in self.cmd_params.items():
-            if k[0:2] != "@!":  # si une variable
-                cmd_parameters[k] = v
-            else:  # sinon valeur à remplacer en dur
-                cmd_template = re.sub(rf"{k}", rf"{v}", cmd_template)
-
-        # fichier d'extraction à utiliser
-        extract_file: Path = Path()
-        if file_output:
-            file_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            prefs: user_prefs.UserPrefs = user_prefs.UserPrefs()
-            extract_file = prefs.extract_folder / (f"{self.name}_{file_stamp}.csv")
-
-        # metadata des paramètres
-        params_metadata: dict = {}
-        param: _Param
-        for key, param in self.params_obj.items():
-            params_metadata[key] = {
-                "description": param.description,
-                "val_cmd": param.value_cmd,
-                "val_display": param.display_value,
-            }
-
-        # renvoi de l'objet config
-        return ExecuteConfig(
-            query_name=self.name,
-            server_id=select_server_id,
-            cmd_template=cmd_template,
-            cmd_parameters=cmd_parameters,
-            extract_file=extract_file,
-            params_metadata=params_metadata,
-        )
-
-    def execute(self, file_output: bool = True, server_id: str = "") -> bool | tuple:
+    # ------------------------------------------------------------------------------------------
+    # Gestion execution requête et autres fonctions
+    # ------------------------------------------------------------------------------------------
+    def execute(self, server_id: str = "", file_output: bool = True) -> bool | tuple:
         self.update_values()
 
         if self.values_ok():
-            exec_config = self.execute_config(file_output, server_id)
+            exec_config = self.get_exec_config(server_id, file_output)
             try:
                 result = self.query_execute.execute(exec_config)
                 return result
@@ -242,95 +131,119 @@ class Query:
         err_msg += str("=") * 50
         self._broadcast(err_msg)
 
-    def get_cmd_for_debug(self):
-        cmd_debug = self.cmd_template
-        for k, v in self.cmd_params.items():
-            if k[0:2] == "@!":  # pas une variable
-                cmd_debug = re.sub(rf"{k}", rf"{v}", cmd_debug)
-                continue
-            elif isinstance(v, str):
-                value = "'" + v.replace("'", "''") + "'"
-            else:
-                value = str(v)
-
-            cmd_debug = re.sub(rf"%\({k}\)s", rf"{value}", cmd_debug)
-
-        return cmd_debug
-
-    def get_params_for_debug(self, only_not_parameterized: bool = False) -> dict[int, int]:
-        """position et longueur des paramètres après remplacement par leurs valeurs"""
-        offset: int = 0
-        var_pos: dict[int, int] = {}
-
-        for match in re.finditer(r"(?<![\d\w#_\$@])(@!?[\d\w#_\$@]+)", self.raw_cmd):
-            param = match.group(0)
-            if param not in self.cmd_params.keys():
-                continue
-            if only_not_parameterized and not param[0:2] == "@!":
-                continue
-
-            value = self.cmd_params.get(param, "")
-            if isinstance(value, str) and not param[0:2] == "@!":
-                value = "'" + value.replace("'", "''") + "'"
-            else:
-                value = str(value)
-
-            start = offset + match.start()
-            end = offset + match.end() + len(value) - len(param)
-            var_pos[start] = end - start
-            offset += len(value) - len(param)
-
-        return var_pos
-
     def _broadcast(self, msg_to_broadcast: str, msg_type: str = "msg_output") -> None:
         self.query_execute.queue.put((msg_type, msg_to_broadcast))
         print(msg_to_broadcast)
 
     def serialize(self) -> dict:
         display_params: dict[str, str] = {}
-        param: _Param
-        for key, param in self.params_obj.items():
+        param: SqlParam
+        for key, param in self.parameters.params.items():
             display_params[key] = param.display_value
 
         return {
             "filename": str(self.filename),
             "file_content": self.file_content,
-            "cmd_params": self.cmd_params,
-            "display_params": display_params,
             "infos": self.infos,
             "raw_cmd": self.raw_cmd,
-            "cmd_template": self.cmd_template,
             "name": self.name,
             "hide": self.hide,
             "description": self.description,
             "grp_authorized": self.grp_authorized,
             "servers_id": self.servers_id,
+            "display_params": display_params,
+            "cmd_template": self.cmd_builder.template,
         }
 
     @classmethod
     def deserialize(cls, data: dict) -> "Query":
         query: Query = cls()
+
         query.filename = Path(data["filename"])
         query.file_content = data["file_content"]
         query.infos = data["infos"]
         query.raw_cmd = data["raw_cmd"]
-        query.cmd_template = data["cmd_template"]
         query.name = data["name"]
         query.hide = data["hide"]
         query.description = data["description"]
         query.grp_authorized = data["grp_authorized"]
         query.servers_id = data["servers_id"]
 
-        query.params_obj = query._init_params()
-        for key, val in data["display_params"].items():
-            param_obj: _Param = query.params_obj[key]
-            param_obj.display_value = val
-            query.update_values(key)
+        query.parameters = SqlParameters(query.file_content)
+        query.cmd_builder = CmdBuilder(query.raw_cmd, query.parameters)
+
+        display_params: dict[str, str] = data["display_params"]
+        for key, val in display_params.items():
+            query.parameters.params[key].display_value = val
+
+        query.update_values()
 
         return query
 
 
-class _Param:
+class FileParser:
+    def __init__(self, filename: Path = Path(), encoding: str = "utf-8"):
+        self.filename: Path = filename
+        self.content: str = self._read_file(encoding)
+
+    def _read_file(self, encoding: str) -> str:
+        file_content = ""
+
+        # if filename has not been set then immediatly return without error
+        if self.filename == Path():
+            return file_content
+
+        # set alternative encoding to try if failing to decode
+        encodings: list = ["utf-8", "cp1252", "ansi"]
+        encodings.remove(encoding) if encoding in encodings else None
+        encodings.insert(0, encoding)
+
+        # test all possible decoding formats
+        decoded: bool = False
+        for encoding in encodings:
+            try:
+                with open(self.filename, mode="r", encoding=encoding) as f:
+                    file_content = f.read()
+                decoded = True
+                break
+            except (UnicodeDecodeError, LookupError):  # LookupError if format doesn't exist (eg : ansi on linux)
+                pass
+
+        # if all try failed raise an exception
+        if not decoded:
+            raise TypeError(f"couldn't decode file using {', '.join(encodings)}")
+
+        return file_content
+
+    def extract_header_infos(self) -> dict:
+        infos = {}
+        regex_match = re.search(
+            r"^\/\*[^\n]*?\n(.*?)\n^\*\/", self.content, re.MULTILINE | re.DOTALL
+        )  # récupération des infos d'entête de la requete (premier bloc de commentaires)
+
+        if regex_match is not None:
+            for line in regex_match.group(1).splitlines():
+                regex_infos = re.search(r"^([^:]*?)\s*:\s*(.*$)", line)
+                if regex_infos is not None:
+                    info_key = regex_infos.group(1).lower()
+
+                    convert_to_list = ["grp_authorized", "servers"]
+                    if info_key in convert_to_list:
+                        info_value = [item.lower().strip() for item in regex_infos.group(2).split(",")]
+                    else:
+                        info_value = regex_infos.group(2)
+
+                    infos[info_key] = info_value  # rajout dans un dictionnaire de l'info
+
+        return infos
+
+    def extract_raw_command(self) -> str:
+        regex_match = re.search(r"^DECLARE[^;]*;[\s]*(.*)", self.content, re.MULTILINE | re.DOTALL)
+        raw_cmd = regex_match.group(1) if regex_match is not None else self.content
+        return raw_cmd
+
+
+class SqlParam:
     def __init__(self, sql_declare: str):
         app_settings: settings.Settings = settings.Settings()
         self.converter = Convert(
@@ -342,10 +255,15 @@ class _Param:
         self.set_default()
 
     def set_default(self) -> None:
-        self.var_name = re.search(r"^@!?[\d\w#_\$@]+", self.sql_declare)[0]
-        self.type_name = re.search(r"^[^(=]+as\s+([^(\s=]+)", self.sql_declare, re.IGNORECASE)[1].lower()
+        match = re.search(r"^@!?[\d\w#_\$@]+", self.sql_declare)
+        self.var_name = match.group(0) if match else ""
+
+        match = re.search(r"^[^(=]+as\s+([^(\s=]+)", self.sql_declare, re.IGNORECASE)
+        self.type_name = match.group(1).lower() if match else ""
         self.type_args = self._get_type_args()
-        self.display_value = re.search(r"^[^=]*=\s*('.*?'|[^,\s]*)", self.sql_declare)[1].replace("'", "").strip()
+
+        match = re.search(r"^[^=]*=\s*('.*?'|[^,\s]*)", self.sql_declare)
+        self.display_value = match.group(1).replace("'", "").strip() if match else ""
 
         # infos additionnelles
         self.description = ""
@@ -504,10 +422,176 @@ class _Param:
 
         self.value_is_ok = True
 
-        if not val_to_test or not self.ctrl_pattern or re.match(self.ctrl_pattern, val_to_test):
-            self.ctr_pattern_is_ok = True
+        try:
+            if not val_to_test or not self.ctrl_pattern or re.match(self.ctrl_pattern, val_to_test):
+                self.ctr_pattern_is_ok = True
+        except re.error as e:
+            raise ValueError(f"Regex invalide pour {self.var_name} : {self.ctrl_pattern}") from e
 
         return self.value_cmd
+
+
+class SqlParameters:
+    def __init__(self, file_content: str):
+        self.params: dict[str, SqlParam] = self._parse_declare(file_content)
+
+    def _parse_declare(self, file_content: str) -> dict[str, SqlParam]:
+        regex_match = re.search(r"^(DECLARE[^;]*;)", file_content, re.MULTILINE | re.DOTALL)  # section DECLARE
+
+        params_dict = {}
+        params_txt = regex_match.group(1) if regex_match is not None else ""
+        for line in params_txt.splitlines():
+            if line[0:1] == "@":
+                param = SqlParam(line)
+                params_dict[param.var_name] = param
+
+        return params_dict
+
+    def get_cmd_dict(self) -> dict:
+        return {key: param.value_cmd for key, param in self.params.items()}
+
+    def update_values(self, key: str = None) -> bool:
+        """
+        If key is none then update all key
+        """
+        if key is not None and key not in self.params:
+            return False
+
+        my_list = [key] if key is not None else self.params.keys()
+
+        for key in my_list:
+            self.params[key].update_value_cmd()
+
+        return True
+
+    def validate(self, key: str = None) -> bool:
+        """
+        If key is none then update all key
+        """
+        if key is not None and key not in self.params:
+            return False
+
+        my_list = [key] if key is not None else self.params.keys()
+
+        for key in my_list:
+            if not self.params[key].value_is_ok:
+                return False
+
+        return True
+
+    def reset_values(self):
+        for _, param in self.params.items():
+            param.set_default()
+
+
+class CmdBuilder:
+    def __init__(self, raw_cmd: str, parameters: SqlParameters):
+        self.raw_cmd: str = raw_cmd
+        self.parameters: SqlParameters = parameters
+        self.template: str = self._build_template()
+
+    def _build_template(self) -> str:
+        """Crée le template avec %(var)s"""
+
+        def replace_func(match: re.Match):
+            # replace only variables which are parameters
+            if match.group(0) in cmd_dict:
+                return f"%({match.group(0)})s"
+            else:
+                return match.group(0)
+
+        cmd_dict = self.parameters.get_cmd_dict()
+        cmd_template = re.sub(r"(?<![\d\w#_\$@])(@[\d\w#_\$@]+)", replace_func, self.raw_cmd)
+
+        return cmd_template
+
+    def build_exec_config(self, query_name: str, server_id: str, file_output: bool = True) -> ExecuteConfig:
+        # template et paramètres de la commande
+        cmd_template: str
+        cmd_parameters: dict = {}
+        cmd_template, cmd_parameters = self.build_command()
+
+        # fichier d'extraction à utiliser
+        extract_file: Path = Path()
+        if file_output:
+            file_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            prefs: user_prefs.UserPrefs = user_prefs.UserPrefs()
+            extract_file = prefs.extract_folder / (f"{query_name}_{file_stamp}.csv")
+
+        # metadata des paramètres
+        params_metadata: dict = {}
+        param: SqlParam
+        for key, param in self.parameters.params.items():
+            params_metadata[key] = {
+                "description": param.description,
+                "val_cmd": param.value_cmd,
+                "val_display": param.display_value,
+            }
+
+        # renvoi de l'objet config
+        return ExecuteConfig(
+            query_name=query_name,
+            server_id=server_id,
+            cmd_template=cmd_template,
+            cmd_parameters=cmd_parameters,
+            extract_file=extract_file,
+            params_metadata=params_metadata,
+        )
+
+    def build_command(self) -> tuple[str, dict]:
+        """Construit la commande finale avec remplacement des @! variables"""
+        cmd_template = self.template
+        cmd_parameters = {}
+
+        for k, v in self.parameters.get_cmd_dict().items():
+            if k[0:2] != "@!":
+                cmd_parameters[k] = v
+            else:
+                cmd_template = cmd_template.replace(k, str(v))
+
+        return cmd_template, cmd_parameters
+
+    def build_debug_command(self) -> str:
+        """Retourne la commande pour debug"""
+        cmd_debug = self.template
+        for k, v in self.parameters.get_cmd_dict().items():
+            if k[0:2] == "@!":  # pas une variable
+                cmd_debug = cmd_debug.replace(k, str(v))
+                continue
+            elif isinstance(v, str):
+                value = "'" + v.replace("'", "''") + "'"
+            else:
+                value = str(v)
+
+            cmd_debug = cmd_debug.replace(f"%({k})s", value)
+
+        return cmd_debug
+
+    def params_pos_for_debug(self, only_not_parameterized: bool = False) -> dict[int, int]:
+        """Position et longueur des paramètres après remplacement par leurs valeurs"""
+        offset: int = 0
+        var_pos: dict[int, int] = {}
+        cmd_params: dict = self.parameters.get_cmd_dict()
+
+        for match in re.finditer(r"(?<![\d\w#_\$@])(@!?[\d\w#_\$@]+)", self.raw_cmd):
+            param = match.group(0)
+            if param not in cmd_params.keys():
+                continue
+            if only_not_parameterized and not param[0:2] == "@!":
+                continue
+
+            value = cmd_params.get(param, "")
+            if isinstance(value, str) and not param[0:2] == "@!":
+                value = "'" + value.replace("'", "''") + "'"
+            else:
+                value = str(value)
+
+            start = offset + match.start()
+            end = offset + match.end() + len(value) - len(param)
+            var_pos[start] = end - start
+            offset += len(value) - len(param)
+
+        return var_pos
 
 
 class QueryExecute:
@@ -804,11 +888,11 @@ class QueryWorker:
         self.cannot_stop.clear()
         self.stop_requested.clear()
         for queue in (self.queue_result, self.queue_task):
-            while not queue.empty():
-                try:
+            try:
+                while True:
                     queue.get_nowait()
-                except QueueIsEmpty:
-                    break
+            except QueueIsEmpty:
+                break
 
         # recreate worker
         self.create_worker()
@@ -860,7 +944,7 @@ class QueryWorker:
             query.query_execute.stop_requested = self.stop_requested
             query.query_execute.cannot_stop = self.cannot_stop
 
-            result = query.execute(True, self.server_id)
+            result = query.execute(server_id=self.server_id, file_output=True)
             rows_number, output_file = result if isinstance(result, tuple) else (0, "")
             self.queue_result.put(("result", (rows_number, output_file)))
 
@@ -965,9 +1049,9 @@ if __name__ == "__main__":
 
     my_query = Query(sql_script)
     my_query.update_values()
-    print(my_query.execute_config())
+    print(my_query.get_exec_config())
     print(my_query.get_cmd_for_debug())
-    print(my_query.cmd_params)
+    print(my_query.parameters.get_cmd_dict())
     my_query.execute(file_output=True)
 
     orphan_queries(settings.Settings().queries_folder)

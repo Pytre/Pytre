@@ -473,7 +473,7 @@ class App(tk.Toplevel):
 
         self.params_widgets = {}
 
-    def ui_params_update(self, params: dict[str, sql_query._Param] = None):
+    def ui_params_update(self, params: dict[str, sql_query.SqlParam] = None):
         self.ui_params_reset()
 
         params_number_not_hidden = 0
@@ -486,7 +486,7 @@ class App(tk.Toplevel):
         else:
             self._ui_with_params_update(params)
 
-    def _ui_with_params_update(self, params: dict[str, sql_query._Param] = None):
+    def _ui_with_params_update(self, params: dict[str, sql_query.SqlParam] = None):
         for i, key in enumerate(params):
             my_widgets = {}
 
@@ -892,19 +892,19 @@ class App(tk.Toplevel):
             w_check = self.params_widgets[key].get("check", None)
 
             if w_entry_var is not None:
-                self.query.params_obj[key].display_value = w_entry_var.get()
+                self.query.parameters.params[key].display_value = w_entry_var.get()
                 try:
                     self.query.update_values(key)
-                    if self.query.params_obj[key].ctr_pattern_is_ok:
+                    if self.query.parameters.params[key].ctr_pattern_is_ok:
                         w_check["background"] = "green"
                     else:
                         w_check["background"] = "darkorange"
-                        ctrl_pattern = self.query.params_obj[key].ctrl_pattern
+                        ctrl_pattern = self.query.parameters.params[key].ctrl_pattern
                         msg = f"{w_entry_var.get()} ne correspond pas au format attendu : {ctrl_pattern}"
                         self.output_msg(msg)
                 except ValueError as err:
                     w_check["background"] = "red"
-                    msg = "    - " + self.query.params_obj[key].description + " : " + str(err) + "\n"
+                    msg = "    - " + self.query.parameters.params[key].description + " : " + str(err) + "\n"
                     self.output_msg(msg, "end")
 
         return self.query.values_ok()
@@ -1032,7 +1032,7 @@ class App(tk.Toplevel):
             for query in self.queries:
                 if selected_iid == str(id(query)):
                     self.query = query
-                    self.ui_params_update(self.query.params_obj)
+                    self.ui_params_update(self.query.parameters.params)
                     break
 
         self.params_canvas.yview_moveto(0)
@@ -1070,7 +1070,7 @@ class App(tk.Toplevel):
         self._param_input(name)
 
     def _param_input(self, key: str):
-        self.query.params_obj[key].display_value = self.params_widgets[key]["entry_var"].get()
+        self.query.parameters.params[key].display_value = self.params_widgets[key]["entry_var"].get()
 
         try:
             self.query.update_values(key)
@@ -1078,14 +1078,14 @@ class App(tk.Toplevel):
 
             # verif si affichage correcte, sinon MAJ (cas des saisies dates notamment)
             if self.params_widgets[key]["entry"].widgetName == "ttk::entry":
-                correct_display = self.query.params_obj[key].display_value
+                correct_display = self.query.parameters.params[key].display_value
                 if self.params_widgets[key]["entry_var"].get() != correct_display:
                     self.params_widgets[key]["entry_var"].set(correct_display)
 
             # si valeur ne correspond pas au pattern de ctrl alors couleur orange
-            if not self.query.params_obj[key].ctr_pattern_is_ok:
+            if not self.query.parameters.params[key].ctr_pattern_is_ok:
                 color = "darkorange"
-                ctrl_pattern = self.query.params_obj[key].ctrl_pattern
+                ctrl_pattern = self.query.parameters.params[key].ctrl_pattern
                 msg = f"{correct_display} ne correspond pas au format attendu : {ctrl_pattern}"
                 self.output_msg(msg)
 

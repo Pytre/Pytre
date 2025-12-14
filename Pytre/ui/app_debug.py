@@ -93,7 +93,7 @@ class DebugWindow(tk.Toplevel):
             params_lst.append(f"{param} : {val}")
 
         self.output_to_textbox(self.tabs["debug"]["textbox"], self.query.get_cmd_for_debug())
-        self.output_to_textbox(self.tabs["template"]["textbox"], self.query.get_infos_for_exec()[0])
+        self.output_to_textbox(self.tabs["template"]["textbox"], self.query.execute_config().cmd_template)
         self.output_to_textbox(self.tabs["params"]["textbox"], "\n".join(params_lst))
 
         self.syntax_color(self.tabs["debug"]["textbox"], self.query.get_params_for_debug())

@@ -7,6 +7,7 @@ from threading import Thread
 from queue import Empty as QueueIsEmpty
 from multiprocessing import Process, Queue, Event as proc_get_event
 from multiprocessing.synchronize import Event as ProcEvent
+from dataclasses import dataclass, field
 
 import pymssql
 import psycopg2
@@ -22,15 +23,19 @@ from convert import Convert
 PRINT_DATE_FORMAT: str = "%d/%m/%Y à %H:%M:%S"  # pour le format de la date pour les logs / output
 
 
+@dataclass(frozen=True)
+class ExecuteConfig:
+    query_name: str = ""
+    server_id: str = ""
+    cmd_template: str = ""
+    cmd_parameters: dict = field(default_factory=dict)
+    extract_file: Path = field(default_factory=Path)
+    params_metadata: dict = field(default_factory=dict)
+
+
 class Query:
     def __init__(self, filename: Path = Path("dummy"), encoding_format: str = "utf-8"):
-        self.query_execute = _QueryExecute(self)
-
-        self.last_extracted_file = ""  # info du dernier fichier extrait
-
-        self.queue: Queue = Queue()  # pour transmettre les messages à l'UI
-        self.stop_requested: ProcEvent = proc_get_event()  # pour signaler que l'execution doit être stoppée
-        self.cannot_stop: ProcEvent = proc_get_event()  # pour savoir si l'execution ne peut pas stopper proprement
+        self.query_execute: QueryExecute = QueryExecute()
 
         self.filename = filename
         self.file_content = self._init_file_content(encoding_format)
@@ -163,42 +168,58 @@ class Query:
 
         return True
 
-    def execute_cmd(self, file_output: bool = True, server_id: str = "") -> bool | tuple:
-        self.last_extracted_file = ""
+    def execute_config(self, file_output: bool = True, server_id: str = "") -> ExecuteConfig:
+        # détermination du server_id à utiliser
+        select_server_id: str = server_id or (self.servers_id[0] if self.servers_id else "")
+
+        # template de la commande
+        cmd_template: str = self.cmd_template
+
+        # paramètres de la commande
+        cmd_parameters: dict = {}
+        for k, v in self.cmd_params.items():
+            if k[0:2] != "@!":  # si une variable
+                cmd_parameters[k] = v
+            else:  # sinon valeur à remplacer en dur
+                cmd_template = re.sub(rf"{k}", rf"{v}", cmd_template)
+
+        # fichier d'extraction à utiliser
+        extract_file: Path = Path()
+        if file_output:
+            file_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            prefs: user_prefs.UserPrefs = user_prefs.UserPrefs()
+            extract_file = prefs.extract_folder / (f"{self.name}_{file_stamp}.csv")
+
+        # metadata des paramètres
+        params_metadata: dict = {}
+        param: _Param
+        for key, param in self.params_obj.items():
+            params_metadata[key] = {
+                "description": param.description,
+                "val_cmd": param.value_cmd,
+                "val_display": param.display_value,
+            }
+
+        # renvoi de l'objet config
+        return ExecuteConfig(
+            query_name=self.name,
+            server_id=select_server_id,
+            cmd_template=cmd_template,
+            cmd_parameters=cmd_parameters,
+            extract_file=extract_file,
+            params_metadata=params_metadata,
+        )
+
+    def execute(self, file_output: bool = True, server_id: str = "") -> bool | tuple:
         self.update_values()
 
         if self.values_ok():
-            server_id = server_id or (self.servers_id[0] if self.servers_id else "")
-            cmd_exec, cmd_params = self.get_infos_for_exec()
-
-            if file_output:
-                file_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                prefs: user_prefs.UserPrefs = user_prefs.UserPrefs()
-                extract_file = prefs.extract_folder / (f"{self.name}_{file_stamp}.csv")
-            else:
-                extract_file = ""
-
+            exec_config = self.execute_config(file_output, server_id)
             try:
-                result = self.query_execute.execute(server_id, cmd_exec, cmd_params, extract_file)
-                self.last_extracted_file = extract_file if file_output else ""
+                result = self.query_execute.execute(exec_config)
                 return result
-            except KeyError:
-                return False
-            except pymssql._pymssql.OperationalError as err:
-                err_msg = str("=") * 50 + "\n"
-                err_msg += err.args[0][1].decode("utf-8", errors="replace")
-                if not err_msg[-1] == "\n":
-                    err_msg += "\n"
-                err_msg += str("=") * 50
-                self._broadcast(err_msg)
-                return False
-            except psycopg2.OperationalError as err:
-                err_msg = str("=") * 50 + "\n"
-                err_msg += "".join(err.args[0])
-                if not err_msg[-1] == "\n":
-                    err_msg += "\n"
-                err_msg += str("=") * 50
-                self._broadcast(err_msg)
+            except (pymssql._pymssql.OperationalError, psycopg2.OperationalError) as err:
+                self._execute_operational_errors(err)
                 return False
             except Exception as err:
                 self._broadcast(f"Erreur inattendue : {err}")
@@ -208,16 +229,18 @@ class Query:
             self._broadcast(err_msg)
             return False
 
-    def get_infos_for_exec(self):
-        cmd_exec = self.cmd_template
-        cmd_params = {}
-        for k, v in self.cmd_params.items():
-            if k[0:2] != "@!":  # si une variable
-                cmd_params[k] = v
-            else:  # sinon valeur à remplacer en dur
-                cmd_exec = re.sub(rf"{k}", rf"{v}", cmd_exec)
+    def _execute_operational_errors(self, err: Exception):
+        err_msg = str("=") * 50 + "\n"
 
-        return cmd_exec, cmd_params
+        if isinstance(err, pymssql._pymssql.OperationalError):
+            err_msg += err.args[0][1].decode("utf-8", errors="replace")
+        if isinstance(err, psycopg2.OperationalError):
+            err_msg += "".join(err.args[0])
+
+        if not err_msg[-1] == "\n":
+            err_msg += "\n"
+        err_msg += str("=") * 50
+        self._broadcast(err_msg)
 
     def get_cmd_for_debug(self):
         cmd_debug = self.cmd_template
@@ -260,7 +283,7 @@ class Query:
         return var_pos
 
     def _broadcast(self, msg_to_broadcast: str, msg_type: str = "msg_output") -> None:
-        self.queue.put((msg_type, msg_to_broadcast))
+        self.query_execute.queue.put((msg_type, msg_to_broadcast))
         print(msg_to_broadcast)
 
     def serialize(self) -> dict:
@@ -487,19 +510,37 @@ class _Param:
         return self.value_cmd
 
 
-class _QueryExecute:
-    def __init__(self, parent: Query):
+class QueryExecute:
+    def __init__(self):
         self.converter = Convert()
-        self.parent = parent  # pour retourner des messages pour l'interface graphique
 
-        self.cmd_template = ""
-        self.cmd_parameters = {}
+        self.config: ExecuteConfig = None
         self.server: servers.Server = None
-        self.extract_file = ""
 
         self.app_settings: settings.Settings = settings.Settings()
         self.field_separator = self.app_settings.field_separator
         self.print_date_format = PRINT_DATE_FORMAT
+
+        self.queue: Queue = Queue()  # pour transmettre les messages à l'UI
+        self.stop_requested: ProcEvent = proc_get_event()  # pour signaler que l'execution doit être stoppée
+        self.cannot_stop: ProcEvent = proc_get_event()  # pour savoir si l'execution ne peut pas stopper proprement
+
+    def load_infos(self, config: ExecuteConfig) -> bool:
+        # controle validité du fichier d'extraction
+        if config.extract_file != Path() and config.extract_file.exists():
+            raise FileExistsError(f"Le fichier {config.extract_file} existe déjà.")
+
+        # controle validité de server_id
+        if not self.get_server(config.server_id):
+            return False
+
+        # controle qu'une commande existe bien
+        if config.cmd_template == "":
+            return False
+
+        self.config = config
+
+        return True
 
     def get_server(self, server_id) -> servers.Server:
         try:
@@ -511,34 +552,24 @@ class _QueryExecute:
 
         return self.server
 
-    def execute(self, server_id, cmd_template, cmd_parameters, extract_file):
-        # controles validité du fichier d'extraction
-        if extract_file != "" and Path(extract_file).exists():
-            raise FileExistsError(f"Le fichier {extract_file} existe déjà.")
-
-        # controles validité de server_id
-        if not self.get_server(server_id):
+    def execute(self, config: ExecuteConfig):
+        if not self.load_infos(config):
             return False
-
-        self.cmd_template = cmd_template
-        self.cmd_parameters = cmd_parameters
-        self.extract_file = extract_file
-
-        if self.cmd_template == "" or self.parent.stop_requested.is_set():
+        if self.stop_requested.is_set():
             return False
 
         starting_date = datetime.now()
         self._broadcast(starting_date.strftime(self.print_date_format) + " - Connexion à la base de données...")
 
-        self.parent.cannot_stop.set()
+        self.cannot_stop.set()
         with self.server.get_connection() as conn, conn.cursor() as cursor:
             # execution de la requête et gestion des erreurs liées
             self._broadcast(self._time_log() + " - Requête en cours d'execution...")
-            self.parent.queue.put(("start_timer", ""))
+            self.queue.put(("start_timer", ""))
             try:
-                cursor.execute(self.cmd_template, self.cmd_parameters)
-                self.parent.cannot_stop.clear()
-                self.parent.queue.put(("stop_timer", ""))
+                cursor.execute(self.config.cmd_template, self.config.cmd_parameters)
+                self.cannot_stop.clear()
+                self.queue.put(("stop_timer", ""))
             except (pymssql._pymssql.ProgrammingError, psycopg2.ProgrammingError) as err:
                 error_code = err.args[0]
                 error_msg = str(err.args[1])[2:-2]
@@ -549,7 +580,7 @@ class _QueryExecute:
                 return False
 
             # si pas de fichier d'extraction alors renvoi des données dans une liste
-            if extract_file == "":
+            if self.config.extract_file == Path():
                 rows_count, execute_output = self._extract_to_list(cursor)
                 return rows_count, execute_output
 
@@ -557,7 +588,7 @@ class _QueryExecute:
             try:
                 self._broadcast(self._time_log() + " - Début récupération des lignes...")
                 rows_count, execute_output = self._extract_to_file(cursor)
-                if execute_output == "" and self.parent.stop_requested.is_set():
+                if execute_output == "" and self.stop_requested.is_set():
                     raise InterruptedError()
                 ending_date = datetime.now()
                 self._execute_end(starting_date, ending_date, rows_count)
@@ -565,40 +596,39 @@ class _QueryExecute:
             except InterruptedError:
                 self._broadcast(self._time_log() + " - Extraction interrompue")
             except PermissionError:
-                self._broadcast(self._time_log() + f" - Ecriture refusée pour : {self.extract_file}")
+                self._broadcast(self._time_log() + f" - Ecriture refusée pour : {self.config.extract_file}")
             except (FileNotFoundError, OSError) as e:
                 error_msg = str(e).split("]")[1].strip() if "]" in str(e) else str(e)
                 self._broadcast(
                     self._time_log()
-                    + f" - Erreur ouverture de : {Path(self.extract_file).name}\n"
+                    + f" - Erreur ouverture de : {self.config.extract_file.name}\n"
                     + f"Détail : {error_msg}"
                 )
 
         # si erreur lors de l'extraction dans un fichier alors suppression du fichier créé
-        if extract_file:
-            Path(self.extract_file).unlink(missing_ok=True)
+        if self.config.extract_file != Path():
+            self.config.extract_file.unlink(missing_ok=True)
 
         return False
 
     def _execute_end(self, starting_date: datetime, ending_date: datetime, rows_count: int):
         # writing user log
         user_log: logs_user.UserDb = logs_user.UserDb()
-        params_for_log = self._params_for_log()
         user_log.insert_exec(
             self.server.id,
-            self.parent.name,
+            self.config.query_name,
             starting_date,
             ending_date,
             rows_count,
-            params_for_log,
-            self.extract_file,
+            self.config.params_metadata,
+            self.config.extract_file,
         )
 
         # if on, launch central log
         if self.app_settings.logs_are_on:
             user: users.CurrentUser = users.CurrentUser()
             log_infos: dict = {"user_db": user_log.user_db, "user_id": user.username, "user_name": user.title}
-            self.parent.queue.put(("central_log", log_infos))
+            self.queue.put(("central_log", log_infos))
 
         # notify end result
         self._broadcast(
@@ -609,7 +639,7 @@ class _QueryExecute:
             + f"\nFin : {ending_date.strftime(self.print_date_format)}"
         )
         if rows_count > 0:
-            self._broadcast(f"Fichier extrait : {self.extract_file}\n" + str("=") * 50)
+            self._broadcast(f"Fichier extrait : {self.config.extract_file}\n" + str("=") * 50)
         else:
             self._broadcast("Fichier extrait : aucune ligne de récupérée, pas de fichier\n" + str("=") * 50)
 
@@ -623,7 +653,7 @@ class _QueryExecute:
 
         for row_number, record in enumerate(cursor):
             # si arrêt demandé, sortie
-            if self.parent.stop_requested.is_set():
+            if self.stop_requested.is_set():
                 return 0, []
 
             # ajout enregistrement courant au buffer
@@ -637,12 +667,12 @@ class _QueryExecute:
         buffer_max_size = 50_000  # nombre de lignes pour déclencher écriture dans fichier
         row_number = -1
 
-        with open(self.extract_file, mode="w", encoding="windows-1252", errors="replace", newline="") as f:
+        with open(self.config.extract_file, mode="w", encoding="windows-1252", errors="replace", newline="") as f:
             csv_writer = csv.writer(f, delimiter=self.field_separator, quotechar='"', quoting=csv.QUOTE_MINIMAL)
 
             for row_number, record in enumerate(cursor):
                 # si arrêt demandé, stopper l'extraction
-                if self.parent.stop_requested.is_set():
+                if self.stop_requested.is_set():
                     return 0, ""
 
                 # ajout entête au buffer si première ligne
@@ -670,7 +700,7 @@ class _QueryExecute:
 
         self._broadcast(self._time_log() + " - Ecriture finie")
 
-        return row_number + 1, self.extract_file
+        return row_number + 1, self.config.extract_file
 
     def _sql_record_to_text(self, record) -> list:
         row_buffer = []
@@ -687,22 +717,11 @@ class _QueryExecute:
         return row_buffer
 
     def _broadcast(self, msg_to_display: str, msg_type: str = "msg_output") -> None:
-        self.parent._broadcast(msg_to_display, msg_type)
+        self.queue.put((msg_type, msg_to_display))
+        print(msg_to_display)
 
     def _time_log(self) -> str:
         return datetime.now().strftime(self.print_date_format)
-
-    def _params_for_log(self) -> dict:
-        params: dict = {}
-        param: _Param
-        for k, param in self.parent.params_obj.items():
-            params[k] = {
-                "description": param.description,
-                "val_cmd": param.value_cmd,
-                "val_display": param.display_value,
-            }
-
-        return params
 
 
 class QueryWorker:
@@ -837,11 +856,11 @@ class QueryWorker:
             self.queue_result.put(("msg_print", "Query task starting"))
 
             query: Query = Query.deserialize(self.query_data)
-            query.queue = self.queue_result
-            query.stop_requested = self.stop_requested
-            query.cannot_stop = self.cannot_stop
+            query.query_execute.queue = self.queue_result
+            query.query_execute.stop_requested = self.stop_requested
+            query.query_execute.cannot_stop = self.cannot_stop
 
-            result = query.execute_cmd(True, self.server_id)
+            result = query.execute(True, self.server_id)
             rows_number, output_file = result if isinstance(result, tuple) else (0, "")
             self.queue_result.put(("result", (rows_number, output_file)))
 
@@ -946,9 +965,9 @@ if __name__ == "__main__":
 
     my_query = Query(sql_script)
     my_query.update_values()
-    print(my_query.get_infos_for_exec())
+    print(my_query.execute_config())
     print(my_query.get_cmd_for_debug())
     print(my_query.cmd_params)
-    my_query.execute_cmd(file_output=True)
+    my_query.execute(file_output=True)
 
     orphan_queries(settings.Settings().queries_folder)

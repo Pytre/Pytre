@@ -3,7 +3,7 @@ import csv
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
 from pathlib import Path
-from threading import Thread
+from threading import Thread, Lock
 from queue import Empty as QueueIsEmpty
 from multiprocessing import Process, Queue, Event as proc_get_event
 from multiprocessing.synchronize import Event as ProcEvent
@@ -868,6 +868,8 @@ class QueryWorker:
         self.stop_requested: ProcEvent = proc_get_event()
         self.cannot_stop: ProcEvent = proc_get_event()
 
+        self._create_lock: Lock = Lock()
+
         self.creating_worker: bool = False
         self.worker_ready: bool = False
         self.task_killed: bool = False
@@ -877,12 +879,13 @@ class QueryWorker:
     def create_worker(self):
         def create():
             args = (self.queue_task, self.queue_result, self.stop_requested, self.cannot_stop)
-            self.process = Process(target=self._worker, args=args, daemon=True)
+            self.process = Process(target=query_worker_process, args=args, daemon=True)
             self.process.start()
 
             try:
                 if self.queue_result.get(timeout=90.0):  # long timeout to allow for slow init (network, antivirus...)
-                    self.worker_ready = True
+                    with self._create_lock:
+                        self.worker_ready = True
                     print("Worker ready")
             except QueueIsEmpty:
                 print("Worker failed to initialize")
@@ -893,32 +896,35 @@ class QueryWorker:
                     if self.process.is_alive():
                         self.process.kill()
             finally:
-                self.creating_worker = False
+                with self._create_lock:
+                    self.creating_worker = False
 
-        if self.creating_worker:
-            print("Worker already being created")
-            return
-        elif self.process and self.process.is_alive():
-            print("Worker already exists and is alive")
-            return
-        else:
+        with self._create_lock:
+            if self.creating_worker:
+                print("Worker already being created")
+                return
+            elif self.process and self.process.is_alive():
+                print("Worker already exists and is alive")
+                return
+
             self.worker_ready = False
             self.creating_worker = True
-            print("Worker initializing")
-            Thread(target=create, daemon=True).start()
+
+        print("Worker initializing")
+        Thread(target=create, daemon=True).start()
 
     def kill_and_restart(self):
         print("Task has been asked to stop")
 
-        self.worker_ready = False
+        with self._create_lock:
+            self.worker_ready = False
 
         if not self.process:
             print("Task, stopping error : worker process does not exist")
         else:
             if not self.cannot_stop.is_set():
                 print("Trying to stop task normally")
-                self.stop_requested.set()
-                self.queue_task.put(("stop", "", ""))
+                self.stop_worker_process()
                 self.process.join(timeout=5.0)
 
             if self.process.is_alive():
@@ -934,7 +940,8 @@ class QueryWorker:
             print("Task stopped")
 
         # flag task as killed
-        self.task_killed = True
+        with self._create_lock:
+            self.task_killed = True
 
         # reset events and queues
         self.cannot_stop.clear()
@@ -950,23 +957,36 @@ class QueryWorker:
         self.create_worker()
 
     def input_task(self, server_id: str, query_data):
-        if self.creating_worker:
-            raise RuntimeError("Can't run query task worker process being created...")
-        if not self.worker_ready:
-            raise RuntimeError("Can't run query task worker process not ready...")
+        with self._create_lock:
+            if self.creating_worker:
+                raise RuntimeError("Can't run query task worker process being created...")
+            if not self.worker_ready:
+                raise RuntimeError("Can't run query task worker process not ready...")
+
         if not self.process or not self.process.is_alive():
             self.create_worker()
             raise RuntimeError("Can't run query task worker process not alive, recreating...")
 
-        self.task_killed = False
+        with self._create_lock:
+            self.task_killed = False
+
+        self.cannot_stop.clear()
+        self.stop_requested.clear()
         self.queue_task.put(("start", server_id, query_data))
 
-    def _worker(self, queue_task: Queue, queue_result: Queue, stop_requested: ProcEvent, cannot_stop: ProcEvent):
+    def stop_worker_process(self):
+        self.stop_requested.set()
+        self.queue_task.put(("stop", "", ""))
+
+
+class QueryWorkerProcess:
+    def __init__(self, queue_task: Queue, queue_result: Queue, stop_requested: ProcEvent, cannot_stop: ProcEvent):
         self.queue_task: Queue = queue_task
         self.queue_result: Queue = queue_result
         self.stop_requested: ProcEvent = stop_requested
         self.cannot_stop: ProcEvent = cannot_stop
 
+    def start(self):
         try:
             self.queue_result.put(True)
         except Exception as e:
@@ -975,28 +995,26 @@ class QueryWorker:
 
         try:
             while True:
-                msg_type, self.server_id, self.query_data = self.queue_task.get()
+                msg_type, server_id, query_data = self.queue_task.get()
                 if msg_type == "stop":
                     break
                 elif msg_type == "start":
-                    self._task()
-                    self.cannot_stop.clear()
-                    self.stop_requested.clear()
+                    self.run_task(server_id, query_data)
         except Exception as e:
             print(f"Worker unexpected error : {e}")
         finally:
             print("Worker process ending")
 
-    def _task(self):
+    def run_task(self, server_id: str, query_data: dict):
         try:
             self.queue_result.put(("msg_print", "Query task starting"))
 
-            query: Query = Query.deserialize(self.query_data)
+            query: Query = Query.deserialize(query_data)
             query.query_execute.queue = self.queue_result
             query.query_execute.stop_requested = self.stop_requested
             query.query_execute.cannot_stop = self.cannot_stop
 
-            result = query.execute(server_id=self.server_id, file_output=True)
+            result = query.execute(server_id=server_id, file_output=True)
             rows_number, output_file = result if isinstance(result, tuple) else (0, "")
             self.queue_result.put(("result", (rows_number, output_file)))
 
@@ -1005,6 +1023,11 @@ class QueryWorker:
             self.queue_result.put(("error", str(e)))
         finally:
             self.queue_result.put(("done", None))
+
+
+def query_worker_process(queue_task: Queue, queue_result: Queue, stop_requested: ProcEvent, cannot_stop: ProcEvent):
+    worker = QueryWorkerProcess(queue_task, queue_result, stop_requested, cannot_stop)
+    worker.start()
 
 
 def get_queries(folder: Path) -> tuple[list[Query], list[str]]:

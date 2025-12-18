@@ -895,7 +895,7 @@ class App(tk.Toplevel):
                 self.query.parameters.params[key].display_value = w_entry_var.get()
                 try:
                     self.query.update_values(key)
-                    if self.query.parameters.params[key].ctr_pattern_is_ok:
+                    if self.query.parameters.params[key].ctrl_pattern_is_ok:
                         w_check["background"] = "green"
                     else:
                         w_check["background"] = "darkorange"
@@ -1083,7 +1083,7 @@ class App(tk.Toplevel):
                     self.params_widgets[key]["entry_var"].set(correct_display)
 
             # si valeur ne correspond pas au pattern de ctrl alors couleur orange
-            if not self.query.parameters.params[key].ctr_pattern_is_ok:
+            if not self.query.parameters.params[key].ctrl_pattern_is_ok:
                 color = "darkorange"
                 ctrl_pattern = self.query.parameters.params[key].ctrl_pattern
                 msg = f"{correct_display} ne correspond pas au format attendu : {ctrl_pattern}"

@@ -88,9 +88,9 @@ class Query:
     def get_cmd_for_debug(self) -> str:
         return self.cmd_builder.build_debug_command()
 
-    def get_params_for_debug(self, only_not_parameterized: bool = False) -> dict[int, int]:
+    def get_params_for_debug(self, only_inlined: bool = False) -> dict[int, int]:
         """position et longueur des paramètres après remplacement par leurs valeurs"""
-        return self.cmd_builder.params_pos_for_debug(only_not_parameterized)
+        return self.cmd_builder.params_pos_for_debug(only_inlined)
 
     def get_exec_config(self, server_id: str = "", file_output: bool = True) -> ExecuteConfig:
         select_server_id: str = server_id or (self.servers_id[0] if self.servers_id else "")
@@ -245,15 +245,40 @@ class FileParser:
 
 class SqlParam:
     def __init__(self, sql_declare: str):
+        self.sql_declare = sql_declare
+
         app_settings: settings.Settings = settings.Settings()
         self.converter = Convert(
             date_txt_format=app_settings.date_format,
             field_separator=app_settings.field_separator,
             decimal_separator=app_settings.decimal_separator,
-        )  # objet pour conversions string en valeurs et l'inverse
-        self.sql_declare = sql_declare
+        )  # object to convert string to value or value to string
+
+        self.var_name: str = ""
+        self.type_name: str = ""
+        self.type_args: list = []
+
+        self.description: str = ""
+        self.is_optional: bool = False
+        self.is_hidden: bool = False
+        self.ui_control: str = ""
+        self.authorized_values: dict = {}
+        self.ctrl_pattern: str = ""
+        self.is_inlined: bool = False
+
+        self.display_value: str = ""
+        self.value_cmd: str | int | float = ""
+
+        self.value_is_ok: bool = False
+        self.ctrl_pattern_is_ok: bool = False
+
+        self.func_dict: dict = self._funcs_init()
+
         self.set_default()
 
+    # ------------------------------------------------------------------------------------------
+    # Default value initialization
+    # ------------------------------------------------------------------------------------------
     def set_default(self) -> None:
         match = re.search(r"^@!?[\d\w#_\$@]+", self.sql_declare)
         self.var_name = match.group(0) if match else ""
@@ -265,24 +290,13 @@ class SqlParam:
         match = re.search(r"^[^=]*=\s*('.*?'|[^,\s]*)", self.sql_declare)
         self.display_value = match.group(1).replace("'", "").strip() if match else ""
 
-        # infos additionnelles
-        self.description = ""
-        self.is_optional = False
-        self.is_hidden = False
-        self.value_cmd = ""
-        self.value_is_ok = False
-        self.ui_control = ""
-        self.authorized_values = {}
-        self.ctrl_pattern = ""
-        self.ctr_pattern_is_ok = False
-
         self._infos_from_comment()
 
-        # conversion valeur affichage défaut pour vérifier si bien ok
+        # Convert default display value to default format and validate with converter
         self.display_value = self.authorized_values.get(self.display_value, self.display_value)
         self.display_value = self.converter.to_display(self.type_name, self.display_value)
 
-        # mettre à jour la val pour cmd => sinon risque que value_is_ok ne soit jamais mis à jour
+        # Update value_cmd to ensure value_is_ok is properly initialized
         self.update_value_cmd()
 
     def _get_type_args(self) -> list:
@@ -297,16 +311,16 @@ class SqlParam:
 
         comment_infos = comment[1].split("|")
 
-        # libellé
+        # description
         if comment_infos[0]:
             self.description = comment_infos[0]
 
-        # infos optionnel ou UI contrôle
+        # optional information or UI control
         if len(comment_infos) > 1 and comment_infos[1]:
             infos = re.sub(r"(\(.*?\))|(,)", r"\1^^^", comment_infos[1])
             infos = [m.strip() for m in re.split(r"\^{3,6}", infos) if m.strip()]
 
-            ui_funcs = ("entry", "list", "check")
+            ui_controls = ("entry", "list", "check")
             calc_funcs = ("user_info", "fiscal_year", "month_end", "today")
 
             for info in infos:
@@ -320,15 +334,42 @@ class SqlParam:
                     self.is_hidden = True
                 elif info_func in calc_funcs:  # self.func_dict:
                     self.display_value = self._calc_func(info_func, info_args)
-                elif info_func in ui_funcs or info_func == "":
+                elif info_func in ui_controls or info_func == "":
                     self.ui_control = info_func
                     self._authorized_values(info_func, info_args)
 
-        # pattern regex pour ctrl valeur
+        # should parameter be hardcoded and not parameterized
+        if self.var_name.startswith("@!"):
+            allowed_for_inlined = ("list", "check")
+            if self.ui_control not in allowed_for_inlined:
+                raise ValueError(
+                    f"{self.var_name} is not parameterized. " + f"Only {allowed_for_inlined} can be used as control"
+                )
+
+            self.is_inlined = True
+
+        # ctrl pattern regex for display value validation
         if len(comment_infos) > 2 and comment_infos[2]:
             self.ctrl_pattern = ("|").join(comment_infos[2:])
 
-    def _calc_func(self, func: str, func_args: str) -> str:
+    def _authorized_values(self, ctrl: str, args: str) -> None:
+        my_args = args.split(",")
+
+        for i, arg in enumerate(my_args):
+            key_val = arg.split(":")
+            key = key_val[0].strip()
+
+            if ctrl != "check":
+                val = key_val[1].strip() if len(key_val) > 1 else key
+            else:
+                val = "on" if i == 0 else "off"
+
+            self.authorized_values[key] = val
+
+    # ------------------------------------------------------------------------------------------
+    # Dynamic default value functions
+    # ------------------------------------------------------------------------------------------
+    def _funcs_init(self) -> dict:
         def user_info(attr: str) -> str:
             user: users.CurrentUser = users.CurrentUser()
             if attr in user.users.attribs_std:
@@ -375,60 +416,74 @@ class SqlParam:
 
             return datetime.strftime(my_date, self.converter.date_val_format)
 
-        self.func_dict = {"user_info": user_info, "fiscal_year": fiscal_year, "month_end": month_end, "today": today}
+        return {"user_info": user_info, "fiscal_year": fiscal_year, "month_end": month_end, "today": today}
 
+    def _calc_func(self, func: str, func_args: str) -> str:
         my_args = func_args.lower().split(",") if func_args else None
         my_str = self.func_dict.get(func)(*my_args) if func in self.func_dict else self.display_value
-
         return my_str
 
-    def _authorized_values(self, ctrl: str, args: str) -> None:
-        my_args = args.split(",")
-
-        for i, arg in enumerate(my_args):
-            key_val = arg.split(":")
-            key = key_val[0].strip()
-
-            if ctrl != "check":
-                val = key_val[1].strip() if len(key_val) > 1 else key
-            else:
-                val = "on" if i == 0 else "off"
-
-            self.authorized_values[key] = val
-
+    # ------------------------------------------------------------------------------------------
+    # Display value conversion and validation
+    # ------------------------------------------------------------------------------------------
     def update_value_cmd(self) -> str | int | float:
-        self.value_is_ok = False
-        self.ctr_pattern_is_ok = False
+        """
+        Updates value_cmd from display_value.
+
+        Validates that value is within authorized values and provided if mandatory (blocking).
+        Tests ctrl_pattern match (non-blocking, for UI warning only).
+
+        Returns:
+            Converted value for SQL command
+        Raises:
+            ValueError: if validation fails or ctrl_pattern regex is invalid
+        """
+
         self.value_cmd = ""
-        val_to_test = self.display_value
+        self.ctrl_pattern_is_ok = False
+        self.value_is_ok = False
 
-        if self.authorized_values != {}:
-            if val_to_test not in self.authorized_values.values():
-                raise ValueError(
-                    f"{val_to_test}, ne fait pas partie des valeurs autorisées : "
-                    + ", ".join(self.authorized_values.values())
-                )
-            else:
-                val_to_test = [k for k, v in self.authorized_values.items() if v == val_to_test][0]
+        self.value_cmd = self.convert_display_value_to_cmd(self.display_value)  # ValueError if validation fails
+        self.ctrl_pattern_is_ok = self.test_ctrl_pattern(self.display_value)  # ValueError if ctrl_pattern invalid
 
-        if not val_to_test and not self.is_optional:
-            raise ValueError(f"paramètre obligatoire pour {self.var_name}")
-        else:
-            self.value_cmd = self.converter.to_cmd(self.type_name, val_to_test, self.type_args)
-
-            # modif valeur affichage pour dates qui peuvent être saisie sur un format different que voulue
-            if self.type_name in ("date", "datetime") and self.display_value != "":
-                self.display_value = self.converter.to_display(self.type_name, self.value_cmd)
+        # update display_value for date to default format
+        if self.type_name in ("date", "datetime") and self.display_value != "":
+            self.display_value = self.converter.to_display(self.type_name, self.value_cmd)
 
         self.value_is_ok = True
 
+        return self.value_cmd
+
+    def convert_display_value_to_cmd(self, val_to_convert: str) -> str:
+        """ValueError: if value is not valid, or missing and not optional"""
+
+        if self.authorized_values:
+            if val_to_convert not in self.authorized_values.values():
+                raise ValueError(
+                    f"{val_to_convert}, ne fait pas partie des valeurs autorisées : "
+                    + ", ".join(self.authorized_values.values())
+                )
+            else:
+                val_to_convert = [k for k, v in self.authorized_values.items() if v == val_to_convert][0]
+
+        if not val_to_convert and not self.is_optional:
+            raise ValueError(f"paramètre obligatoire pour {self.var_name}")
+
+        return self.converter.to_cmd(self.type_name, val_to_convert, self.type_args)
+
+    def test_ctrl_pattern(self, val_to_test: str) -> bool:
+        """ValueError: if ctrl_pattern is not a valid one"""
+
+        if not val_to_test or not self.ctrl_pattern:
+            return True
+
         try:
-            if not val_to_test or not self.ctrl_pattern or re.match(self.ctrl_pattern, val_to_test):
-                self.ctr_pattern_is_ok = True
+            if re.match(self.ctrl_pattern, val_to_test):
+                return True
         except re.error as e:
             raise ValueError(f"Regex invalide pour {self.var_name} : {self.ctrl_pattern}") from e
 
-        return self.value_cmd
+        return False
 
 
 class SqlParameters:
@@ -446,9 +501,6 @@ class SqlParameters:
                 params_dict[param.var_name] = param
 
         return params_dict
-
-    def get_cmd_dict(self) -> dict:
-        return {key: param.value_cmd for key, param in self.params.items()}
 
     def update_values(self, key: str = None) -> bool:
         """
@@ -495,12 +547,11 @@ class CmdBuilder:
 
         def replace_func(match: re.Match):
             # replace only variables which are parameters
-            if match.group(0) in cmd_dict:
+            if match.group(0) in self.parameters.params:
                 return f"%({match.group(0)})s"
             else:
                 return match.group(0)
 
-        cmd_dict = self.parameters.get_cmd_dict()
         cmd_template = re.sub(r"(?<![\d\w#_\$@])(@[\d\w#_\$@]+)", replace_func, self.raw_cmd)
 
         return cmd_template
@@ -543,53 +594,54 @@ class CmdBuilder:
         cmd_template = self.template
         cmd_parameters = {}
 
-        for k, v in self.parameters.get_cmd_dict().items():
-            if k[0:2] != "@!":
-                cmd_parameters[k] = v
+        for key, param in self.parameters.params.items():
+            if param.is_inlined:
+                cmd_template = cmd_template.replace(key, str(param.value_cmd))
             else:
-                cmd_template = cmd_template.replace(k, str(v))
+                cmd_parameters[key] = param.value_cmd
 
         return cmd_template, cmd_parameters
 
     def build_debug_command(self) -> str:
         """Retourne la commande pour debug"""
         cmd_debug = self.template
-        for k, v in self.parameters.get_cmd_dict().items():
-            if k[0:2] == "@!":  # pas une variable
-                cmd_debug = cmd_debug.replace(k, str(v))
+        for key, param in self.parameters.params.items():
+            if param.is_inlined:  # pas une variable
+                cmd_debug = cmd_debug.replace(key, str(param.value_cmd))
                 continue
-            elif isinstance(v, str):
-                value = "'" + v.replace("'", "''") + "'"
+            elif isinstance(param.value_cmd, str):
+                value = "'" + param.value_cmd.replace("'", "''") + "'"
             else:
-                value = str(v)
+                value = str(param.value_cmd)
 
-            cmd_debug = cmd_debug.replace(f"%({k})s", value)
+            cmd_debug = cmd_debug.replace(f"%({key})s", value)
 
         return cmd_debug
 
-    def params_pos_for_debug(self, only_not_parameterized: bool = False) -> dict[int, int]:
+    def params_pos_for_debug(self, only_inlined: bool = False) -> dict[int, int]:
         """Position et longueur des paramètres après remplacement par leurs valeurs"""
         offset: int = 0
         var_pos: dict[int, int] = {}
-        cmd_params: dict = self.parameters.get_cmd_dict()
 
         for match in re.finditer(r"(?<![\d\w#_\$@])(@!?[\d\w#_\$@]+)", self.raw_cmd):
-            param = match.group(0)
-            if param not in cmd_params.keys():
+            matched_param: str = match.group(0)
+            sql_param: SqlParam = self.parameters.params.get(matched_param, None)
+
+            if not sql_param:
                 continue
-            if only_not_parameterized and not param[0:2] == "@!":
+            if only_inlined and not sql_param.is_inlined:
                 continue
 
-            value = cmd_params.get(param, "")
-            if isinstance(value, str) and not param[0:2] == "@!":
-                value = "'" + value.replace("'", "''") + "'"
+            value_cmd = sql_param.value_cmd
+            if isinstance(value_cmd, str) and not sql_param.is_inlined:
+                value_cmd = "'" + value_cmd.replace("'", "''") + "'"
             else:
-                value = str(value)
+                value_cmd = str(value_cmd)
 
             start = offset + match.start()
-            end = offset + match.end() + len(value) - len(param)
+            end = offset + match.end() + len(value_cmd) - len(matched_param)
             var_pos[start] = end - start
-            offset += len(value) - len(param)
+            offset += len(value_cmd) - len(matched_param)
 
         return var_pos
 
@@ -1051,7 +1103,6 @@ if __name__ == "__main__":
     my_query.update_values()
     print(my_query.get_exec_config())
     print(my_query.get_cmd_for_debug())
-    print(my_query.parameters.get_cmd_dict())
     my_query.execute(file_output=True)
 
     orphan_queries(settings.Settings().queries_folder)

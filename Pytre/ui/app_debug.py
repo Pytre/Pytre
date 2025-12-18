@@ -87,11 +87,11 @@ class DebugWindow(tk.Toplevel):
         except ValueError:
             pass
 
-        cmd_dict: dict = self.query.parameters.get_cmd_dict()
         params_lst = []
-        for param, value in cmd_dict.items():
-            val = str(value) if not isinstance(value, str) or param[0:2] == "@!" else "'" + value + "'"
-            params_lst.append(f"{param} : {val}")
+        for key, param in self.query.parameters.params.items():
+            value_cmd = param.value_cmd
+            value_cmd = str(value_cmd) if not isinstance(value_cmd, str) or param.is_inlined else "'" + value_cmd + "'"
+            params_lst.append(f"{key} : {value_cmd}")
 
         self.output_to_textbox(self.tabs["debug"]["textbox"], self.query.get_cmd_for_debug())
         self.output_to_textbox(self.tabs["template"]["textbox"], self.query.get_exec_config().cmd_template)

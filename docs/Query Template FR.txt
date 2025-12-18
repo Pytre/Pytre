@@ -61,9 +61,8 @@ Les types possibles sont :
 => nb : si pas de types mais juste des valeurs entre parentheses alors il est considéré qu'il s'agit d'une liste des valeurs autorisées.
 
 Les paramètres qui commencent par @! (par ex : "@!TABLE) sont remplacés en dur dans la commande SQL.
-Il est fortement recommendé de ne pas les utiliser avec un contrôle de type ENTRY.
-Ce type de contrôle permettrait de réaliser une injection SQL.
-=> l'objectif des paramètres @! est de pouvoir variabiliser la requête pour par exemple choisir un schéma ou une table.
+Ils ne peuvent pas être utiliser avec un contrôle de type ENTRY. Ce type de contrôle permettrait de réaliser une injection SQL.
+=> l'objectif des paramètres @! est de pouvoir variabiliser une requête pour par exemple choisir un schéma ou une table.
 
 VAL_FORMULE : fonctions possibles pour valeur calculée d'un paramètre
 ---------------------------------------------------------------------

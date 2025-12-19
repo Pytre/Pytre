@@ -1,0 +1,191 @@
+from threading import Thread, Lock
+from queue import Empty as QueueIsEmpty
+from multiprocessing import Process, Queue, Event as proc_get_event
+from multiprocessing.synchronize import Event as ProcEvent
+from dataclasses import dataclass
+
+from sql_query import Query
+
+
+@dataclass(frozen=True)
+class ProcessConfig:
+    queue_task: Queue
+    queue_result: Queue
+    stop_requested: ProcEvent
+    cannot_stop: ProcEvent
+
+
+class ExecutionRunner:
+    def __init__(self):
+        self.process: Process = None
+        self.queue_task: Queue = Queue()
+        self.queue_result: Queue = Queue()
+        self.stop_requested: ProcEvent = proc_get_event()
+        self.cannot_stop: ProcEvent = proc_get_event()
+
+        self._create_lock: Lock = Lock()
+
+        self.creating_process: bool = False
+        self.process_ready: bool = False
+        self.task_killed: bool = False
+
+        self.create_process()
+
+    def create_process(self):
+        def create():
+            config = ProcessConfig(
+                queue_task=self.queue_task,
+                queue_result=self.queue_result,
+                stop_requested=self.stop_requested,
+                cannot_stop=self.cannot_stop,
+            )
+
+            self.process = Process(target=run_execution_process, args=(config,), daemon=True)
+            self.process.start()
+
+            try:
+                if self.queue_result.get(timeout=90.0):  # long timeout : allow slow init (network, antivirus, ...)
+                    with self._create_lock:
+                        self.process_ready = True
+                    print("Execution process ready")
+            except QueueIsEmpty:
+                print("Execution process failed to initialize")
+                if self.process and self.process.is_alive():
+                    print("Terminating stuck execution process...")
+                    self.process.terminate()
+                    self.process.join(timeout=2.0)
+                    if self.process.is_alive():
+                        self.process.kill()
+            finally:
+                with self._create_lock:
+                    self.creating_process = False
+
+        with self._create_lock:
+            if self.creating_process:
+                print("Execution process already being created")
+                return
+            elif self.process and self.process.is_alive():
+                print("Execution process already exists and is alive")
+                return
+
+            self.process_ready = False
+            self.creating_process = True
+
+        print("Execution process initializing")
+        Thread(target=create, daemon=True).start()
+
+    def kill_and_restart(self):
+        print("Task has been asked to stop")
+
+        with self._create_lock:
+            self.process_ready = False
+
+        if not self.process:
+            print("Task, stopping error : execution process does not exist")
+        else:
+            if not self.cannot_stop.is_set():
+                print("Trying to stop task normally")
+                self.stop_process()
+                self.process.join(timeout=5.0)
+
+            if self.process.is_alive():
+                print("Trying to stop task by terminating execution process")
+                self.process.terminate()  # SIGTERM
+                self.process.join(timeout=2.0)
+
+            if self.process.is_alive():
+                print("Trying to stop task by killing execution process")
+                self.process.kill()  # SIGKILL
+                self.process.join()
+
+            print("Task stopped")
+
+        # flag task as killed
+        with self._create_lock:
+            self.task_killed = True
+
+        # reset events and queues
+        self.cannot_stop.clear()
+        self.stop_requested.clear()
+        for queue in (self.queue_result, self.queue_task):
+            try:
+                while True:
+                    queue.get_nowait()
+            except QueueIsEmpty:
+                break
+
+        # recreate process
+        self.create_process()
+
+    def input_task(self, server_id: str, query_data):
+        with self._create_lock:
+            if self.creating_process:
+                raise RuntimeError("Can't run query task execution process being created...")
+            if not self.process_ready:
+                raise RuntimeError("Can't run query task execution process not ready...")
+
+        if not self.process or not self.process.is_alive():
+            self.create_process()
+            raise RuntimeError("Can't execute query, execution process not alive, recreating...")
+
+        with self._create_lock:
+            self.task_killed = False
+
+        self.cannot_stop.clear()
+        self.stop_requested.clear()
+        self.queue_task.put(("start", server_id, query_data))
+
+    def stop_process(self):
+        self.stop_requested.set()
+        self.queue_task.put(("stop", "", ""))
+
+
+class ExecutionProcess:
+    def __init__(self, config: ProcessConfig):
+        self.queue_task: Queue = config.queue_task
+        self.queue_result: Queue = config.queue_result
+        self.stop_requested: ProcEvent = config.stop_requested
+        self.cannot_stop: ProcEvent = config.cannot_stop
+
+    def start(self):
+        try:
+            self.queue_result.put(True)
+        except Exception as e:
+            print(f"Execution process failed to signal ready state : {e}")
+            return
+
+        try:
+            while True:
+                msg_type, server_id, query_data = self.queue_task.get()
+                if msg_type == "stop":
+                    break
+                elif msg_type == "start":
+                    self.run_task(server_id, query_data)
+        except Exception as e:
+            print(f"Execution process unexpected error : {e}")
+        finally:
+            print("Execution process ending")
+
+    def run_task(self, server_id: str, query_data: dict):
+        try:
+            self.queue_result.put(("msg_print", "Query task starting"))
+
+            query: Query = Query.deserialize(query_data)
+            query.query_execute.queue = self.queue_result
+            query.query_execute.stop_requested = self.stop_requested
+            query.query_execute.cannot_stop = self.cannot_stop
+
+            result = query.execute(server_id=server_id, file_output=True)
+            rows_number, output_file = result if isinstance(result, tuple) else (0, "")
+            self.queue_result.put(("result", (rows_number, output_file)))
+
+            self.queue_result.put(("msg_print", "Query task ending"))
+        except Exception as e:
+            self.queue_result.put(("error", str(e)))
+        finally:
+            self.queue_result.put(("done", None))
+
+
+def run_execution_process(config: ProcessConfig):
+    exec_process = ExecutionProcess(config)
+    exec_process.start()

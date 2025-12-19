@@ -17,6 +17,7 @@ import user_prefs
 import servers
 import utils
 import logs_central
+from sql_exec_runner import ExecutionRunner
 from about import APP_NAME, APP_VERSION, APP_STATUS
 
 import ui.ui_utils as ui_utils
@@ -61,7 +62,7 @@ class App(tk.Toplevel):
         self.check_database_access()
 
         self.process_running: bool = False
-        self.query_worker: sql_query.QueryWorker = sql_query.QueryWorker()
+        self.exec_runner: ExecutionRunner = ExecutionRunner()
         self.start_time: datetime = None
         self._timer_after_id: str = None
 
@@ -584,17 +585,17 @@ class App(tk.Toplevel):
         def init_query_run(try_counter: int = 0):
             # initaliser l'execution de la requête si le worker est disponible
             try:
-                if self.query_worker.worker_ready:
+                if self.exec_runner.process_ready:
                     self.exec_timer(stop=True)  # reset timer si démarré pour création worker
                     serialized_query = self.query.serialize()
-                    self.query_worker.input_task(self.server_id, serialized_query)
+                    self.exec_runner.input_task(self.server_id, serialized_query)
                     self.exec_check_queue()
                     return
             except RuntimeError as e:
                 print(f"Erreur lors du lancement de la requête : {e}")
 
-            if not self.query_worker.creating_worker:
-                self.query_worker.create_worker()
+            if not self.exec_runner.creating_process:
+                self.exec_runner.create_process()
 
             # sinon attendre la création du worker
             if try_counter == 0:
@@ -609,10 +610,10 @@ class App(tk.Toplevel):
                     "Lancement de la requête annulée !",
                     "end",
                 ) # fmt: skip
-                self.query_worker.stop_requested.set()
+                self.exec_runner.stop_requested.set()
 
             # procéder à l'arrêt si demandé
-            if self.query_worker.stop_requested.is_set():
+            if self.exec_runner.stop_requested.is_set():
                 self.exec_force_stop(kill_worker=False)
                 return
 
@@ -657,8 +658,8 @@ class App(tk.Toplevel):
     def exec_check_queue(self):
         done: bool = False
         try:
-            while not self.query_worker.queue_result.empty():
-                msg_type, data = self.query_worker.queue_result.get_nowait()
+            while not self.exec_runner.queue_result.empty():
+                msg_type, data = self.exec_runner.queue_result.get_nowait()
                 if msg_type == "msg_print":
                     print(data)
                 elif msg_type == "msg_output":
@@ -693,7 +694,7 @@ class App(tk.Toplevel):
             return
 
         # si demande d'interruption et que l'execution n'est pas déjà finie
-        if self.query_worker.stop_requested.is_set() and self.process_running:
+        if self.exec_runner.stop_requested.is_set() and self.process_running:
             self.exec_force_stop()
 
         # auto relance toutes les x ms
@@ -701,7 +702,7 @@ class App(tk.Toplevel):
 
     def exec_force_stop(self, kill_worker: bool = True):
         if kill_worker:
-            self.query_worker.kill_and_restart()
+            self.exec_runner.kill_and_restart()
         msg = datetime.now().strftime(self.date_format) + " - Requête interrompue"
         if not self.output_textbox.index("end-1c").split(".")[1] == "0":  # si on est pas en début de ligne
             msg = "\n" + msg
@@ -715,7 +716,7 @@ class App(tk.Toplevel):
         print("UI - Execution ending")
 
         # si arrêt forcé
-        if self.query_worker.task_killed:
+        if self.exec_runner.task_killed:
             messagebox.showwarning("Fin execution", "Execution interrompue !", parent=self)
             return
 
@@ -876,8 +877,8 @@ class App(tk.Toplevel):
             return False
 
         # si une requête est en cours d'execution alors la stopper
-        if self.query_worker.process and self.process_running:
-            self.query_worker.stop_requested.set()
+        if self.exec_runner.process and self.process_running:
+            self.exec_runner.stop_requested.set()
             return False
 
         self.output_msg("")

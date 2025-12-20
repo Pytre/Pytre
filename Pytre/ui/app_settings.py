@@ -66,6 +66,7 @@ class SettingsWindow(tk.Toplevel):
             "field_separator": {"text": "Séparateur de champs"},
             "decimal_separator": {"text": "Séparateur décimal"},
             "date_format": {"text": "Format date"},
+            "extract_encoding": {"text": "Encoding format"},
             "queries_folder": {"text": "Dossier des requêtes"},
             "logs_are_on": {"text": "Activer les logs"},
             "logs_folder": {"text": "Dossier des logs"},
@@ -134,7 +135,12 @@ class SettingsWindow(tk.Toplevel):
             val = item["var"].get()
             setattr(self.settings, key, val)
 
-        result = self.settings.save()
+        try:
+            result = self.settings.save()
+        except LookupError as e:
+            messagebox.showerror(title="Mise à jour paramètres", message=e, parent=self, type=messagebox.OK)
+            return
+
         if result:
             self.app_exit()
         else:

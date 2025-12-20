@@ -1,3 +1,4 @@
+import codecs
 import json
 from pathlib import Path, PureWindowsPath
 
@@ -37,6 +38,8 @@ class Settings(metaclass=Singleton):
         self.field_separator: str = ""  # délimitateur de champs pour exports
         self.decimal_separator: str = ""  # séparateur décimal pour exports
         self.date_format: str = ""  # format date pour les exports
+        self.extract_encoding: str = "utf-8-sig"  # encoding format pour les exports
+
         self.queries_folder: Path = Path("")  # répertoire des requêtes SQL
 
         self.load()  # à charger avant min version pour que queries_folder soit initialisé
@@ -50,6 +53,7 @@ class Settings(metaclass=Singleton):
             "FIELD_SEPARATOR": "field_separator",
             "DECIMAL_SEPARATOR": "decimal_separator",
             "DATE_FORMAT": "date_format",
+            "EXTRACT_ENCODING": "extract_encoding",
             "QUERIES_FOLDER": "queries_folder",
             "LOGS_ARE_ON": "logs_are_on",
             "LOGS_FOLDER": "logs_folder",
@@ -91,10 +95,15 @@ class Settings(metaclass=Singleton):
                 info = self.kee.db.add_entry(self.kee_grp, kee_title, username="", password="")
 
             value = getattr(self, attr_name)
-            if kee_title in ("LOGS_ARE_ON",):
+            if kee_title == "LOGS_ARE_ON":
                 value = "true" if value else "false"
             elif kee_title in ("QUERIES_FOLDER", "LOGS_FOLDER"):
                 value = PureWindowsPath(value).as_posix()  # always save path as posix for OSes compatibility
+            elif kee_title == "EXTRACT_ENCODING":
+                try:
+                    codecs.lookup(value)
+                except LookupError:
+                    raise LookupError(f"Format d'encoding non reconnu : '{value}'")
 
             info.username = value
 
@@ -114,6 +123,7 @@ if __name__ == "__main__":
         "field_separator",
         "decimal_separator",
         "date_format",
+        "extract_encoding",
         "queries_folder",
         "logs_are_on",
         "logs_folder",

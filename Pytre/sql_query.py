@@ -1,5 +1,6 @@
 import re
 import csv
+import codecs
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
 from pathlib import Path
@@ -28,6 +29,7 @@ class ExecuteConfig:
     cmd_template: str = ""
     cmd_parameters: dict = field(default_factory=dict)
     extract_file: Path = field(default_factory=Path)
+    extract_encoding: str = "utf-8-sig"
     params_metadata: dict = field(default_factory=dict)
 
 
@@ -583,6 +585,7 @@ class CmdBuilder:
             cmd_template=cmd_template,
             cmd_parameters=cmd_parameters,
             extract_file=extract_file,
+            extract_encoding=settings.Settings().extract_encoding,
             params_metadata=params_metadata,
         )
 
@@ -720,7 +723,7 @@ class QueryExecute:
             # sinon extraction des données dans un fichier
             try:
                 self._broadcast(self._time_log() + " - Début récupération des lignes...")
-                rows_count, execute_output = self._extract_to_file(cursor)
+                rows_count, execute_output = self._extract_to_file(cursor, config.extract_encoding)
                 if execute_output == "" and self.stop_requested.is_set():
                     raise InterruptedError()
                 ending_date = datetime.now()
@@ -796,27 +799,32 @@ class QueryExecute:
 
         return row_number + 1, buffer
 
-    def _extract_to_file(self, cursor):
+    def _extract_to_file(self, cursor, encoding: str):
         buffer = []  # buffer pour stocker les lignes avant écriture dans le fichier
         buffer_max_size = 50_000  # nombre de lignes pour déclencher écriture dans fichier
         row_number = -1
 
-        with open(self.config.extract_file, mode="w", encoding="windows-1252", errors="replace", newline="") as f:
+        try:
+            codecs.lookup(encoding)
+        except LookupError:
+            encoding = "utf-8-sig"
+            self._broadcast(
+                self._time_log() + f" - Encodage pour extraction invalide, utilisation '{encoding}' par défaut"
+            )
+
+        with open(self.config.extract_file, mode="w", encoding=encoding, errors="replace", newline="") as f:
             csv_writer = csv.writer(f, delimiter=self.field_separator, quotechar='"', quoting=csv.QUOTE_MINIMAL)
+
+            # ajout entête au buffer
+            buffer.append([colname[0] for colname in cursor.description])
 
             for row_number, record in enumerate(cursor):
                 # si arrêt demandé, stopper l'extraction
                 if self.stop_requested.is_set():
                     return 0, ""
 
-                # ajout entête au buffer si première ligne
-                if row_number == 0:
-                    row_headers = [colname[0] for colname in cursor.description]
-                    buffer.append(row_headers)
-
-                # écriture enregistrement courant
-                row_content = self._sql_record_to_text(record)
-                buffer.append(row_content)
+                # ajout enregistrement courant au buffer
+                buffer.append(self._sql_record_to_text(record))
 
                 # écriture du buffer si plein
                 if (row_number + 1) % buffer_max_size == 0:
@@ -826,13 +834,16 @@ class QueryExecute:
                     csv_writer.writerows(buffer)
                     buffer.clear()
 
-            # écriture des lignes restantes du buffer
-            if buffer:
+            # écriture du buffer si non vide et si ce n'est pas que l'entête
+            if buffer and row_number != -1:
                 self._broadcast(self._time_log() + " - Ecriture des dernières lignes...")
                 csv_writer.writerows(buffer)
                 buffer.clear()
 
         self._broadcast(self._time_log() + " - Ecriture finie")
+
+        if row_number == -1:
+            self.config.extract_file.unlink(missing_ok=True)
 
         return row_number + 1, self.config.extract_file
 
@@ -847,7 +858,7 @@ class QueryExecute:
             if isinstance(val, str):
                 try:
                     return value_txt.encode(charset).decode("utf-8")
-                except (UnicodeDecodeError, UnicodeEncodeError):
+                except (UnicodeDecodeError, UnicodeEncodeError, LookupError):
                     return value_txt
 
             return value_txt

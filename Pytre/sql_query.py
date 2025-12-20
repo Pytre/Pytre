@@ -836,18 +836,22 @@ class QueryExecute:
         return row_number + 1, self.config.extract_file
 
     def _sql_record_to_text(self, record) -> list:
-        row_buffer = []
+        # mise en cache des éléments de conversion
+        charset = self.server.charset
+        convert_func = self.converter.from_result
 
-        for j in range(len(record)):  # récup champs et conversion valeur récupérée en texte pour export
-            value = record[j]
-            value_txt = self.converter.from_result(value)
-            try:
-                value_txt = value_txt.encode(self.server.charset).decode("utf-8")
-            except UnicodeDecodeError:
-                pass
-            row_buffer.append(value_txt)
+        def clean_value(val):
+            value_txt = convert_func(val)
 
-        return row_buffer
+            if isinstance(val, str):
+                try:
+                    return value_txt.encode(charset).decode("utf-8")
+                except (UnicodeDecodeError, UnicodeEncodeError):
+                    return value_txt
+
+            return value_txt
+
+        return [clean_value(val) for val in record]
 
     def _broadcast(self, msg_to_display: str, msg_type: str = "msg_output") -> None:
         self.queue.put((msg_type, msg_to_display))

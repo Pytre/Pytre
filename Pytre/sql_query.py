@@ -15,7 +15,7 @@ import user_prefs
 import users
 import servers
 import logs_user
-from convert import Convert
+from sql_converter import SqlTypeConverter
 
 
 PRINT_DATE_FORMAT: str = "%d/%m/%Y à %H:%M:%S"  # pour le format de la date pour les logs / output
@@ -246,9 +246,8 @@ class SqlParam:
         self.sql_declare = sql_declare
 
         app_settings: settings.Settings = settings.Settings()
-        self.converter = Convert(
-            date_txt_format=app_settings.date_format,
-            field_separator=app_settings.field_separator,
+        self.converter = SqlTypeConverter(
+            date_display=app_settings.date_format,
             decimal_separator=app_settings.decimal_separator,
         )  # object to convert string to value or value to string
 
@@ -395,7 +394,7 @@ class SqlParam:
                 + relativedelta(days=-1 + days_offset)
             )
 
-            return datetime.strftime(my_date, self.converter.date_val_format)
+            return datetime.strftime(my_date, self.converter.date_cmd_format)
 
         def month_end(month_offset: int = 0, days_offset: int = 0) -> str:
             month_offset = int(month_offset)
@@ -404,7 +403,7 @@ class SqlParam:
             my_date = datetime(datetime.today().year, datetime.today().month, 1)
             my_date += relativedelta(months=month_offset + 1) + relativedelta(days=-1 + days_offset)
 
-            return datetime.strftime(my_date, self.converter.date_val_format)
+            return datetime.strftime(my_date, self.converter.date_cmd_format)
 
         def today(days_offset: int = 0) -> str:
             days_offset = int(days_offset)
@@ -412,7 +411,7 @@ class SqlParam:
             my_date = datetime.today()
             my_date += relativedelta(days=days_offset)
 
-            return datetime.strftime(my_date, self.converter.date_val_format)
+            return datetime.strftime(my_date, self.converter.date_cmd_format)
 
         return {"user_info": user_info, "fiscal_year": fiscal_year, "month_end": month_end, "today": today}
 
@@ -646,7 +645,7 @@ class CmdBuilder:
 
 class QueryExecute:
     def __init__(self):
-        self.converter = Convert()
+        self.converter = SqlTypeConverter()
 
         self.config: ExecuteConfig = None
         self.server: servers.Server = None

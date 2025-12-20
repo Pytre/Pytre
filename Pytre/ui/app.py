@@ -60,6 +60,7 @@ class App(tk.Toplevel):
 
         self.setup_app_identity()
         self.check_database_access()
+        self.ensure_admin_exists()  # crée un admin si aucun n'existe
 
         self.process_running: bool = False
         self.exec_runner: ExecutionRunner = ExecutionRunner()
@@ -75,7 +76,6 @@ class App(tk.Toplevel):
         self.deiconify()  # show the window after initialization is complete
 
         self.check_min_version()  # quitte l'application si pas ok
-        self.ensure_admin_exists()  # crée un admin si aucun n'existe
         self.check_user_access()  # quitte l'application si pas d'accès
 
         self._queries_first_load: bool = True
@@ -120,7 +120,7 @@ class App(tk.Toplevel):
             msg = (
                 "Aucun administrateur n'existe !\n"
                 + "Vous allez être ajouté en tant qu'administrateur par défaut.\n"
-                + "Pensez à mettre à jour les utilisateurs après."
+                + "Pensez à mettre à jour le mot de passe et les utilisateurs après."
             )
             messagebox.showinfo(title="Base créée", message=msg)
             self.user.admin = True

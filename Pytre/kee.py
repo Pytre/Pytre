@@ -88,7 +88,7 @@ class Kee(metaclass=Singleton):
             )
             print(msg)
 
-    def create_db(self, password: str = ""):
+    def create_db(self, password: str = BLANK_PWD):
         self.is_ko = True
 
         print("Création d'une nouvelle base en cours...")
@@ -98,7 +98,7 @@ class Kee(metaclass=Singleton):
         self.pwd_change(password, True)
         self._create_db_set_default()
 
-        print("Nouvelle base créée ! Mettez à jour les paramètres à l'aide du menu admin.")
+        print("Nouvelle base créée ! Mettez à jour les paramètres et changer le mot de passe à l'aide du menu admin.")
 
         self.is_ko = False
 

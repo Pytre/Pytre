@@ -31,8 +31,8 @@ class Settings(metaclass=Singleton):
     def __init__(self):
         self.app_path: Path = get_app_path()
 
-        self.min_version_settings: str = "9999"  # version minimum requises pour les settings
-        self.min_version_pytre: str = "9.999"  # version minimum requises pour Pytre
+        self.min_version_settings: str = "0"  # version minimum requises pour les settings
+        self.min_version_pytre: str = "0.0.0"  # version minimum requises pour Pytre
         self.settings_version: str = ""  # version actuelle des settings
 
         self.field_separator: str = ""  # délimitateur de champs pour exports

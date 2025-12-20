@@ -387,7 +387,7 @@ class User:
         # récup propriétés
         self.uuid = str(u_entry.uuid)
         self.username = u_entry.username
-        self.title = u_entry.title
+        self.title = u_entry.title if u_entry.title else ""
         for property in u_entry.custom_properties:
             value = u_entry.get_custom_property(property)
             value = value if value else ""

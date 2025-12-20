@@ -764,12 +764,13 @@ class QueryExecute:
             self.queue.put(("central_log", log_infos))
 
         # notify end result
+        elapsed_time = (ending_date - starting_date).total_seconds()
         self._broadcast(
             str("=") * 50
-            + "\nLigne(s) extraite(s) : "
-            + "{:,}".format(rows_count).replace(",", " ")
+            + "\nLigne(s) extraite(s) : {:,}".format(rows_count).replace(",", " ")
             + f"\nDébut : {starting_date.strftime(self.print_date_format)}"
             + f"\nFin : {ending_date.strftime(self.print_date_format)}"
+            + f"\nDurée : {int(elapsed_time) // 60:02d}:{int(elapsed_time) % 60:02d}"
         )
         if rows_count > 0:
             self._broadcast(f"Fichier extrait : {self.config.extract_file}\n" + str("=") * 50)

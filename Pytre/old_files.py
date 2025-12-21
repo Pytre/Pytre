@@ -3,11 +3,11 @@ from datetime import datetime
 from dateutil.relativedelta import relativedelta
 
 from logs_user import USER_DB
-from user_prefs import USER_SETTING_FILE
+from user_prefs import SETTING_FILE
 
 
 def old_files_list(folder: Path) -> list[Path]:
-    white_list = (USER_DB, USER_SETTING_FILE)
+    white_list = (USER_DB, SETTING_FILE)
 
     if not folder.exists():
         return []

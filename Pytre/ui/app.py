@@ -13,10 +13,10 @@ import old_files
 import sql_query
 import settings
 import users
-import user_prefs
 import servers
 import utils
 import logs_central
+from user_prefs import UserPrefs, PrefsEnum
 from sql_exec_runner import ExecutionRunner
 from about import APP_NAME, APP_VERSION, APP_STATUS
 
@@ -46,7 +46,7 @@ class App(tk.Toplevel):
         self.console_app: ConsoleWindow = ConsoleWindow(parent=self, hide=True)
 
         self.user: users.CurrentUser = users.CurrentUser()
-        self.prefs: user_prefs.UserPrefs = user_prefs.UserPrefs()
+        self.user_prefs: UserPrefs = UserPrefs()
         self.app_settings: settings.Settings = settings.Settings()
         self.servers: servers.Servers = servers.Servers()
         self.server_id: str = ""
@@ -201,7 +201,7 @@ class App(tk.Toplevel):
                 raise SystemExit
 
     def extract_folder_cleaning(self):
-        extract_folder = self.prefs.extract_folder
+        extract_folder = self.user_prefs.get(PrefsEnum.extract_folder)
 
         files = old_files.old_files_list(extract_folder)  # liste des fichiers à supprimer
         files_nb = len(files)
@@ -273,7 +273,9 @@ class App(tk.Toplevel):
 
         self.menu_query = tk.Menu(menubar, tearoff=False)
         self.menu_query.add_command(label="Executer", state="disabled", command=self.execute_query)
-        self.menu_query.add_command(label="Dossier...", command=lambda: self.open_folder(self.prefs.extract_folder))
+        self.menu_query.add_command(
+            label="Dossier...", command=lambda: self.open_folder(self.user_prefs.get(PrefsEnum.extract_folder))
+        )
         self.menu_query.add_command(label="Journal...", command=lambda: self.open_logs(True))
         self.menu_query.add_command(label="Debug...", state="disabled", command=self.debug_query)
         self.menu_query.add_separator()
@@ -442,7 +444,9 @@ class App(tk.Toplevel):
         self.btn_log = ttk.Button(self.btn_frame, text="\U0001f56e", width=4, command=self.open_logs)
         self.btn_execute = ttk.Button(self.btn_frame, text="Executer", state="disable", command=self.execute_query)
         self.btn_queries_folder = ttk.Button(
-            self.btn_frame, text="Dossier", command=lambda: self.open_folder(self.prefs.extract_folder)
+            self.btn_frame,
+            text="Dossier",
+            command=lambda: self.open_folder(self.user_prefs.get(PrefsEnum.extract_folder)),
         )
         self.btn_debug = ttk.Button(self.btn_frame, text="Debug", state="disable", command=self.debug_query)
 
@@ -854,7 +858,7 @@ class App(tk.Toplevel):
         self.servers_cb["values"] = tuple(servers_name)
         if servers_dict:
             if self.servers_cb.current() == -1:
-                self.server_id = self.prefs.get(user_prefs.UserPrefsEnum.last_server)
+                self.server_id = self.user_prefs.get(PrefsEnum.last_server)
 
             pos = servers_id.index(self.server_id) if self.server_id in servers_id else 0
             self.server_id = servers_id[pos]
@@ -926,7 +930,7 @@ class App(tk.Toplevel):
         if self.instanciate_logs():
             self.central_logs.stop_sync()
 
-        self.prefs.set(user_prefs.UserPrefsEnum.last_server, self.server_id)
+        self.user_prefs.set(PrefsEnum.last_server, self.server_id)
 
         self.console_app.app_exit()
 
@@ -948,7 +952,7 @@ class App(tk.Toplevel):
             pass
 
     def open_folder(self, folder: str):
-        if folder == self.prefs.extract_folder and self.output_file:
+        if folder == self.user_prefs.get(PrefsEnum.extract_folder) and self.output_file:
             utils.showfile(self.output_file)
         else:
             utils.showfile(folder)

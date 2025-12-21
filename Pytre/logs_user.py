@@ -6,7 +6,7 @@ from pathlib import Path
 import user_prefs
 from singleton_metaclass import Singleton
 
-USER_DB: Path = user_prefs.USER_FOLDER / "Pytre_Logs.db"
+USER_DB: Path = user_prefs.CONFIG_FOLDER / "Pytre_Logs.db"
 LATEST_VERSION: int = 2  # latest version model of user database
 LOG_MAX: int = 2500
 

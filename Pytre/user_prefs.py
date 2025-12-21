@@ -1,71 +1,120 @@
 import json
 from enum import Enum
 from pathlib import Path
+from typing import Any
 
 from singleton_metaclass import Singleton
 
-USER_FOLDER: Path = Path.home() / "Pytre"
-USER_SETTING_FILE: Path = USER_FOLDER / "Pytre_Settings.json"
+EXTRACT_FOLDER: Path = Path.home() / "Pytre"
+CONFIG_FOLDER: Path = Path.home() / "Pytre"
+SETTING_FILE: Path = CONFIG_FOLDER / "Pytre_Settings.json"
 
 
-class UserPrefsEnum(Enum):
-    save_as_folder = "save_as_folder"
-    last_server = "last_server_id"
+class PrefsEnum(Enum):
+    """Names for json and to get/set attributes. Values for internal attribute name"""
+
+    extract_folder = "_extract_folder"
+    save_as_folder = "_save_as_folder"
+    last_server = "_last_server"
 
 
 class UserPrefs(metaclass=Singleton):
     def __init__(self):
-        self.file: Path = USER_SETTING_FILE
-        self.extract_folder = self._init_extract_folder()
+        self.file: Path = SETTING_FILE
+        self._extract_folder: Path = EXTRACT_FOLDER
+        self._save_as_folder: Path = EXTRACT_FOLDER
+        self._last_server: str = ""
+        self._cache: dict[str, Any] = {}
 
-    def _init_extract_folder(self) -> str:
-        extract_folder = USER_FOLDER
+        self.load()
 
-        if not extract_folder.exists() or not extract_folder.is_dir():
+    def __repr__(self) -> str:
+        return str(self.to_json())
+
+    def __str__(self) -> str:
+        return json.dumps(self.to_json(), indent=2, ensure_ascii=False)
+
+    def _ensure_extract_folder_exists(self) -> None:
+        if not self._extract_folder.exists() or not self._extract_folder.is_dir():
             try:
-                extract_folder.mkdir(parents=True, exist_ok=True)
-            except FileExistsError:
-                extract_folder = Path.home()
+                self._extract_folder.mkdir(parents=True, exist_ok=True)
+            except (OSError, PermissionError) as e:
+                print(f"Impossible de créer {self._extract_folder} : {e}")
+                if self._extract_folder != EXTRACT_FOLDER:
+                    self._extract_folder = EXTRACT_FOLDER
+                    print(f"Utilisation du dossier par défaut: {self._extract_folder}")
+                else:
+                    print("ATTENTION : Le dossier d'extraction par défaut est inaccessible.")
 
-        return extract_folder
+    def to_json(self) -> dict:
+        return {
+            PrefsEnum.extract_folder.name: str(self._extract_folder),
+            PrefsEnum.save_as_folder.name: str(self._save_as_folder),
+            PrefsEnum.last_server.name: self._last_server,
+        }
 
-    def set(self, key: UserPrefsEnum, value: str | int | float | bool | None):
-        if key not in UserPrefsEnum:
-            raise KeyError(f"'{key}' n'est pas un paramètre existant")
+    def set(self, key: PrefsEnum, value: Any, save: bool = True) -> None:
+        if not isinstance(key, PrefsEnum):
+            raise TypeError(f"'{key}' n'est pas un PrefsEnum valide (type: {type(key).__name__})")
+        if not hasattr(self, key.value):
+            raise AttributeError(f"Attribut interne manquant : {key.value}")
 
-        if not value:
-            new_value = ""
-        elif not isinstance(value, (str, int, float, bool)):
-            new_value = str(value)
+        if key is PrefsEnum.extract_folder:
+            self._extract_folder = Path(value) if value else EXTRACT_FOLDER
+            self._ensure_extract_folder_exists()
+        elif key is PrefsEnum.save_as_folder:
+            self._save_as_folder = Path(value) if value else Path.home()
         else:
-            new_value = value
+            setattr(self, key.value, value)
 
-        json_dict: dict = self._get_all()
-        json_dict[key.value] = new_value
+        if save and self.to_json() != self._cache:
+            self.save()
 
-        with open(self.file, mode="w", encoding="utf-8") as f:
-            json.dump(json_dict, f, indent=4)
+    def get(self, key: PrefsEnum, default: Any = None) -> Any:
+        if not isinstance(key, PrefsEnum):
+            raise TypeError(f"'{key}' n'est pas un PrefsEnum valide (type: {type(key).__name__})")
 
-    def get(self, key: UserPrefsEnum):
-        if key not in UserPrefsEnum:
-            raise KeyError(f"'{key}' n'est pas un paramètre existant")
+        return getattr(self, key.value, default)
 
-        json_dict: dict = self._get_all()
-        return json_dict.get(key.value, None)
-
-    def _get_all(self):
-        json_dict: dict = {}
+    def load(self) -> None:
+        json_dict = {}
 
         if self.file.exists():
-            with open(self.file, mode="r", encoding="utf-8") as f:
-                json_dict: dict = json.load(f)
+            try:
+                with open(self.file, mode="r", encoding="utf-8") as f:
+                    json_dict: dict = json.load(f)
+            except (json.JSONDecodeError, IOError) as e:
+                print(f"Erreur lors du chargement des préférences utilisateur : {e}")
 
-        return json_dict
+        for enum in PrefsEnum:
+            value = json_dict.get(enum.name, None)
+            if value is None:
+                continue
+
+            try:
+                self.set(enum, value, save=False)
+            except (TypeError, ValueError) as e:
+                print(f"Valeur invalide pour '{enum.name}': {value} ({e})")
+
+        self._cache = self.to_json()
+
+    def save(self) -> bool:
+        data = self.to_json()
+        try:
+            if not self.file.parent.exists():
+                self.file.parent.mkdir(parents=True, exist_ok=True)
+            with open(self.file, mode="w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+        except (OSError, PermissionError) as e:
+            print(f"Erreur lors de la sauvegarde des préférences utilisateur: {e}")
+            return False
+
+        self._cache = data
+
+        return True
 
 
 if __name__ == "__main__":
     user_prefs = UserPrefs()
-
     print(f"{'='*50}\nPreferences utilisateur courant\n{'='*50}")
-    for pref in UserPrefsEnum:
-        print(f"- {pref.value}: {user_prefs.get(pref)}")
+    print(user_prefs)

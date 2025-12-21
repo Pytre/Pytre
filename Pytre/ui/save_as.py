@@ -4,7 +4,7 @@ from pathlib import Path
 if not __package__:
     import syspath_insert  # noqa: F401  # disable unused-import warning
 
-from user_prefs import UserPrefsEnum, UserPrefs
+from user_prefs import PrefsEnum, UserPrefs
 
 
 def save_as(parent, src_file: Path) -> Path:
@@ -15,22 +15,19 @@ def save_as(parent, src_file: Path) -> Path:
         return None
 
     user_prefs = UserPrefs()
-    save_as_folder = UserPrefsEnum.save_as_folder
 
-    filetypes = [("Csv Files", "*.csv"), ("Tous", "*.*")]
-    initialdir = user_prefs.get(save_as_folder)
     dest = filedialog.asksaveasfilename(
         title="Enregistrer sous",
         defaultextension=".csv",
-        filetypes=filetypes,
-        initialdir=initialdir,
+        filetypes=[("Csv Files", "*.csv"), ("Tous", "*.*")],
+        initialdir=user_prefs.get(PrefsEnum.save_as_folder),
         initialfile=Path(src_file).name,
         parent=parent,
     )
 
     if dest:
         Path(dest).write_bytes(Path(src_file).read_bytes())
-        user_prefs.set(save_as_folder, Path(dest).parent)
+        user_prefs.set(PrefsEnum.save_as_folder, Path(dest).parent)
         return Path(dest)
 
     return None

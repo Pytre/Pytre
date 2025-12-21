@@ -11,10 +11,10 @@ import pymssql
 import psycopg2
 
 import settings
-import user_prefs
 import users
 import servers
 import logs_user
+from user_prefs import UserPrefs, PrefsEnum
 from sql_converter import SqlTypeConverter
 
 
@@ -563,8 +563,8 @@ class CmdBuilder:
         extract_file: Path = Path()
         if file_output:
             file_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            prefs: user_prefs.UserPrefs = user_prefs.UserPrefs()
-            extract_file = prefs.extract_folder / (f"{query_name}_{file_stamp}.csv")
+            prefs: UserPrefs = UserPrefs()
+            extract_file = prefs.get(PrefsEnum.extract_folder) / (f"{query_name}_{file_stamp}.csv")
 
         # metadata des paramètres
         params_metadata: dict = {}

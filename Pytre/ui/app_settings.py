@@ -1,3 +1,6 @@
+from dataclasses import dataclass, field
+from collections.abc import Callable
+
 import tkinter as tk
 from tkinter import ttk, Event, messagebox
 from pathlib import Path
@@ -7,13 +10,20 @@ if not __package__:
 
 import utils
 from settings import Settings
+from user_prefs import UserPrefs, PrefsEnum
 from about import APP_NAME
 
 import ui.ui_utils as ui_utils
 from ui.app_theme import set_theme
 
 
-class SettingsWindow(tk.Toplevel):
+@dataclass(frozen=True)
+class SetupInfos:
+    title: str = f"{APP_NAME} - Paramètres"
+    callbacks: tuple[Callable[[], None], ...] = field(default_factory=tuple)
+
+
+class MainSettingsWindow(tk.Toplevel):
     def __init__(self, parent=None, on_close_callback=None):
         super().__init__()
         self.parent = parent
@@ -25,6 +35,8 @@ class SettingsWindow(tk.Toplevel):
         else:
             self.master.withdraw()
 
+        self.entries: dict[str, dict[str, str]] = {}
+
         self.settings = Settings()
         self.settings.reload()
 
@@ -35,8 +47,17 @@ class SettingsWindow(tk.Toplevel):
     # ------------------------------------------------------------------------------------------
     # Création de l'interface
     # ------------------------------------------------------------------------------------------
+    def _setup_ui_infos(self) -> SetupInfos:
+        """Override dans les classes enfants pour info à utiliser par setup_ui"""
+        return SetupInfos(
+            title=f"{APP_NAME} - Paramètres",
+            callbacks=tuple(),
+        )
+
     def _setup_ui(self):
-        self.title(f"{APP_NAME} - Paramètres généraux")
+        setup_infos = self._setup_ui_infos()
+
+        self.title(setup_infos.title)
 
         self.minsize(width=400, height=100)
         if self.parent:
@@ -57,21 +78,90 @@ class SettingsWindow(tk.Toplevel):
         self._setup_entries()
         self._setup_buttons()
         self.settings_load()
-        self._set_logs_folder_state()
+
+        if setup_infos.callbacks:
+            for func in setup_infos.callbacks:
+                func()
+
+    def _get_entries(self) -> dict[str, dict]:
+        """Override dans les classes enfants pour définir les informations de champs de paramètres"""
+        return {}
 
     def _setup_entries(self):
-        self.entries_frame.columnconfigure(1, weight=1)
+        """Override dans les classes enfants pour créer les contrôles de paramètres pour l'UI"""
+        pass
 
-        self.entries = {
+    def _setup_buttons(self):
+        self.buttons_frame.columnconfigure(0, weight=1)
+
+        self.btn_save = ttk.Button(self.buttons_frame, text="Enregistrer", command=self.settings_save)
+        self.btn_cancel = ttk.Button(self.buttons_frame, text="Annuler", command=self.app_exit)
+
+        self.btn_save.grid(row=0, column=1, padx=2, pady=2, sticky="nse")
+        self.btn_cancel.grid(row=0, column=2, padx=2, pady=2, sticky="nse")
+
+    # ------------------------------------------------------------------------------------------
+    # Définition des évènements générer par les traitements
+    # ------------------------------------------------------------------------------------------
+    def _events_binds(self):
+        self.protocol("WM_DELETE_WINDOW", self.app_exit)  # arrêter le programme quand fermeture de la fenêtre
+
+    # ------------------------------------------------------------------------------------------
+    # Autres traitements
+    # ------------------------------------------------------------------------------------------
+    def normalize_path(self, val: str | Path) -> str:
+        return str(Path(val)) if val else ""
+
+    def settings_load(self):
+        """Override dans les classes enfants pour alimenter les contrôles"""
+        pass
+
+    def settings_save(self):
+        """Override dans les classes enfants pour sauvegarder les infos des contrôles"""
+        pass
+
+    def app_exit(self, _: Event = None):
+        if self.on_close_callback:
+            self.on_close_callback()
+
+        if self.parent:
+            ui_utils.ui_undisable_parent(self, self.parent)
+
+        self.destroy()
+
+        if self.parent is None:
+            self.quit()
+
+
+class SettingsWindow(MainSettingsWindow):
+    def __init__(self, parent=None, on_close_callback=None):
+        super().__init__(parent=parent, on_close_callback=on_close_callback)
+
+    # ------------------------------------------------------------------------------------------
+    # Création de l'interface
+    # ------------------------------------------------------------------------------------------
+    def _setup_ui_infos(self) -> SetupInfos:
+        return SetupInfos(
+            title=f"{APP_NAME} - Paramètres généraux",
+            callbacks=(self._set_logs_folder_state,),
+        )
+
+    def _get_entries(self) -> dict[str, dict]:
+        return {
             "field_separator": {"text": "Séparateur de champs"},
             "decimal_separator": {"text": "Séparateur décimal"},
             "date_format": {"text": "Format date"},
             "extract_encoding": {"text": "Encoding format"},
-            "queries_folder": {"text": "Dossier des requêtes"},
+            "queries_folder": {"text": "Dossier des requêtes", "transform": self.normalize_path},
             "logs_are_on": {"text": "Activer les logs"},
-            "logs_folder": {"text": "Dossier des logs"},
+            "logs_folder": {"text": "Dossier des logs", "transform": self.normalize_path},
             "settings_version": {"text": "Version des paramètres"},
         }
+
+    def _setup_entries(self):
+        self.entries_frame.columnconfigure(1, weight=1)
+
+        self.entries = self._get_entries()
 
         num_row = 0
         for key, item in self.entries.items():
@@ -93,31 +183,11 @@ class SettingsWindow(tk.Toplevel):
 
             num_row += 1
 
-    def _setup_buttons(self):
-        self.buttons_frame.columnconfigure(0, weight=1)
-
-        self.btn_save = ttk.Button(self.buttons_frame, text="Enregistrer", command=self.settings_save)
-        self.btn_cancel = ttk.Button(self.buttons_frame, text="Annuler", command=self.app_exit)
-
-        self.btn_save.grid(row=0, column=1, padx=2, pady=2, sticky="nse")
-        self.btn_cancel.grid(row=0, column=2, padx=2, pady=2, sticky="nse")
-
     def _set_logs_folder_state(self):
-        state: ttk.Checkbutton = self.entries["logs_are_on"]["var"].get()
+        state: bool = self.entries["logs_are_on"]["var"].get()
         folder_entry: ttk.Entry = self.entries["logs_folder"]["w_entry"]
 
-        if state:
-            state: str = "enable"
-        else:
-            state: str = "disable"
-
-        folder_entry["state"] = state
-
-    # ------------------------------------------------------------------------------------------
-    # Définition des évènements générer par les traitements
-    # ------------------------------------------------------------------------------------------
-    def _events_binds(self):
-        self.protocol("WM_DELETE_WINDOW", self.app_exit)  # arrêter le programme quand fermeture de la fenêtre
+        folder_entry["state"] = "normal" if state else "disabled"
 
     # ------------------------------------------------------------------------------------------
     # Autres traitements
@@ -125,9 +195,9 @@ class SettingsWindow(tk.Toplevel):
     def settings_load(self):
         for key, item in self.entries.items():
             val = getattr(self.settings, key)
-            if key in ("queries_folder", "logs_folder"):
-                # normalisation séparateurs de chemin (/ -> \ sous Windows)
-                val = str(Path(val))
+            transform = item.get("transform")
+            if transform:
+                val = transform(val)
             item["var"].set(val)
 
     def settings_save(self):
@@ -147,19 +217,86 @@ class SettingsWindow(tk.Toplevel):
             msg = "Problème lors de l'enregistrement !"
             messagebox.showerror(title="Mise à jour paramètres", message=msg, parent=self, type=messagebox.OK)
 
-    def app_exit(self, _: Event = None):
-        if self.on_close_callback:
-            self.on_close_callback()
 
-        if self.parent:
-            ui_utils.ui_undisable_parent(self, self.parent)
+class UserPrefsWindow(MainSettingsWindow):
+    def __init__(self, parent=None, on_close_callback=None):
+        self.user_prefs = UserPrefs()
+        super().__init__(parent=parent, on_close_callback=on_close_callback)
 
-        self.destroy()
+    # ------------------------------------------------------------------------------------------
+    # Création de l'interface
+    # ------------------------------------------------------------------------------------------
+    def _setup_ui_infos(self) -> SetupInfos:
+        return SetupInfos(
+            title=f"{APP_NAME} - Paramètres utilisateur",
+            callbacks=tuple(),
+        )
 
-        if self.parent is None:
-            self.quit()
+    def _get_entries(self) -> dict[str, dict]:
+        return {
+            PrefsEnum.extract_folder.name: {"text": "Dossier des extractions", "transform": self.normalize_path},
+        }
+
+    def _setup_entries(self):
+        self.entries_frame.columnconfigure(1, weight=1)
+
+        self.entries = self._get_entries()
+
+        num_row = 0
+        for key, item in self.entries.items():
+            my_label = ttk.Label(self.entries_frame, text=item["text"] + " : ")
+
+            my_tk_var = tk.StringVar()
+            my_entry = ttk.Entry(self.entries_frame, textvariable=my_tk_var)
+
+            new_keys = {"w_label": my_label, "w_entry": my_entry, "var": my_tk_var}
+            item.update(new_keys)
+
+            my_label.grid(row=num_row, column=0, padx=2, pady=2, sticky="nswe")
+            my_entry.grid(row=num_row, column=1, columnspan=2, padx=2, pady=2, sticky="nswe")
+
+            num_row += 1
+
+    # ------------------------------------------------------------------------------------------
+    # Autres traitements
+    # ------------------------------------------------------------------------------------------
+    def settings_load(self):
+        prefs_dict = self.user_prefs.to_json()
+
+        for key, item in self.entries.items():
+            if key not in prefs_dict:
+                continue
+
+            val = prefs_dict.get(key)
+            transform = item.get("transform")
+            if transform:
+                val = transform(val)
+            item["var"].set(val)
+
+    def settings_save(self):
+        for key, item in self.entries.items():
+            val = item["var"].get()
+
+            try:
+                enum_key = PrefsEnum[key]
+                self.user_prefs.set(enum_key, val, False)
+            except KeyError:
+                msg = f"Echec enregistrement, clé '{key}' non reconnue dans UserPrefsEnum"
+                messagebox.showwarning(title="Mise à jour paramètres", message=msg, parent=self, type=messagebox.OK)
+                return
+            except (TypeError, ValueError, AttributeError) as e:
+                msg = f"Echec enregistrement, valeur invalide pour '{key}' : {e}"
+                messagebox.showerror(title="Mise à jour paramètres", message=msg, parent=self, type=messagebox.OK)
+                return
+
+        if self.user_prefs.save():
+            self.app_exit()
+        else:
+            msg = "Problème lors de l'enregistrement !"
+            messagebox.showerror(title="Mise à jour paramètres", message=msg, parent=self, type=messagebox.OK)
 
 
 if __name__ == "__main__":
-    my_app = SettingsWindow()
+    # my_app = SettingsWindow()
+    my_app = UserPrefsWindow()
     my_app.mainloop()

@@ -34,17 +34,22 @@ class UserPrefs(metaclass=Singleton):
     def __str__(self) -> str:
         return json.dumps(self.to_json(), indent=2, ensure_ascii=False)
 
-    def _ensure_extract_folder_exists(self) -> None:
-        if not self._extract_folder.exists() or not self._extract_folder.is_dir():
-            try:
-                self._extract_folder.mkdir(parents=True, exist_ok=True)
-            except (OSError, PermissionError) as e:
-                print(f"Impossible de créer {self._extract_folder} : {e}")
-                if self._extract_folder != EXTRACT_FOLDER:
-                    self._extract_folder = EXTRACT_FOLDER
-                    print(f"Utilisation du dossier par défaut: {self._extract_folder}")
-                else:
-                    print("ATTENTION : Le dossier d'extraction par défaut est inaccessible.")
+    def _ensure_extract_folder_exists(self) -> bool:
+        if self._extract_folder.exists() and self._extract_folder.is_dir():
+            return True
+
+        try:
+            self._extract_folder.mkdir(parents=True, exist_ok=True)
+            return True
+        except (OSError, PermissionError) as e:
+            print(f"Impossible de créer {self._extract_folder} : {e}")
+            if self._extract_folder != EXTRACT_FOLDER:
+                self._extract_folder = EXTRACT_FOLDER
+                print(f"Utilisation du dossier par défaut: {self._extract_folder}")
+            else:
+                print("ATTENTION : Le dossier d'extraction par défaut est inaccessible.")
+
+        return False
 
     def to_json(self) -> dict:
         return {
@@ -61,7 +66,8 @@ class UserPrefs(metaclass=Singleton):
 
         if key is PrefsEnum.extract_folder:
             self._extract_folder = Path(value) if value else EXTRACT_FOLDER
-            self._ensure_extract_folder_exists()
+            if not self._ensure_extract_folder_exists():
+                raise ValueError(f"Valeur invalide pour '{key.value}' : {self._extract_folder}")
         elif key is PrefsEnum.save_as_folder:
             self._save_as_folder = Path(value) if value and Path(value).is_dir() else Path.home()
         else:

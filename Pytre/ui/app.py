@@ -30,7 +30,7 @@ from ui.app_logs import LogsWindow
 from ui.app_debug import DebugWindow
 from ui.app_users import UsersWindow
 from ui.app_servers import ServersWindow
-from ui.app_settings import SettingsWindow
+from ui.app_settings import SettingsWindow, UserPrefsWindow
 from ui.app_password import PasswordWindow
 from ui.app_console import ConsoleWindow
 from ui.app_about import AboutWindow
@@ -288,6 +288,10 @@ class App(tk.Toplevel):
         self.menu_query.add_command(label="Quitter", command=self.app_exit)
         menubar.add_cascade(label="Requêtes", menu=self.menu_query)
 
+        menu_prefs = tk.Menu(menubar, tearoff=False)
+        menu_prefs.add_command(label="Préférences...", command=self.manage_user_prefs)
+        menubar.add_cascade(label="Préférences", menu=menu_prefs)
+
         if self.user.admin:
             menu_admin = tk.Menu(menubar, tearoff=False)
             menu_admin.add_command(label="Utilisateurs...", command=self.manage_users)
@@ -304,7 +308,7 @@ class App(tk.Toplevel):
         menubar.add_cascade(label="?", menu=menu_about)
 
         if theme_is_on():
-            menus: list[tk.Menu] = [menubar, self.menu_query, menu_about]
+            menus: list[tk.Menu] = [menubar, self.menu_query, menu_prefs, menu_about]
             if self.user.admin:
                 menus.append(menu_admin)
             set_menus(menus)
@@ -1132,6 +1136,9 @@ class App(tk.Toplevel):
 
     def manage_servers(self):
         ServersWindow(self)
+
+    def manage_user_prefs(self):
+        UserPrefsWindow(self)
 
     def manage_settings(self):
         SettingsWindow(self, self.app_settings.reload)

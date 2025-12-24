@@ -138,27 +138,6 @@ class App(tk.Toplevel):
             self.app_exit()
             raise SystemExit
 
-    def version_used_gte_mini(self, used: str, mini: str) -> bool:
-        """ctrl si version utilisé supérieure ou égale à version mini"""
-        try:
-            used_nums = list(map(lambda i: int(i), used.split(".")))
-            mini_nums = list(map(lambda i: int(i), mini.split(".")))
-        except ValueError:
-            return True  # si erreur format, ne pas bloquer
-
-        if not len(used_nums) == len(mini_nums):
-            return False
-
-        if used_nums == mini_nums:
-            return True
-        for i in range(len(mini_nums)):
-            if used_nums[i] > mini_nums[i]:
-                return True
-            elif used_nums[i] < mini_nums[i]:
-                return False
-
-        return False
-
     def check_min_version(self):
         queries_folder = Path(self.app_settings.queries_folder)
         if not queries_folder.is_dir():
@@ -172,13 +151,16 @@ class App(tk.Toplevel):
                 raise SystemExit
             return
 
+        # récupération version minimum exigée pour l'application et les settings
+        min_app, min_settings = self.app_settings.get_min_version(queries_folder)
+
         # vérification version settings
-        if not self.version_used_gte_mini(self.app_settings.settings_version, self.app_settings.min_version_settings):
+        if not self.app_settings.ctrl_version(self.app_settings.settings_version, min_settings):
             messagebox.showerror(
                 "Version settings.db",
                 "Le fichier settings.db utilisé n'est pas à jour."
                 f"\n\n- Version utilisée : {self.app_settings.settings_version}"
-                f"\n- Version mini : {self.app_settings.min_version_settings}"
+                f"\n- Version mini : {min_settings}"
                 "\n\nMerci d'utiliser le fichier des settings à jour",
                 parent=self,
             )
@@ -187,12 +169,12 @@ class App(tk.Toplevel):
                 raise SystemExit
 
         # vérification version application
-        if not self.version_used_gte_mini(APP_VERSION, self.app_settings.min_version_pytre):
+        if not self.app_settings.ctrl_version(APP_VERSION, min_app):
             messagebox.showerror(
                 f"Version {APP_NAME}",
                 f"Votre version de {APP_NAME} n'est pas à jour."
                 f"\n\n- Version utilisée : {APP_VERSION}"
-                f"\n- Version mini : {self.app_settings.min_version_pytre}"
+                f"\n- Version mini : {min_app}"
                 "\n\nMerci d'utiliser une version à jour",
                 parent=self,
             )

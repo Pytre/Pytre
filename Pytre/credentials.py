@@ -14,7 +14,7 @@ def create_key_and_export(filename: Path) -> None:
 
 
 def retrieve_key(filename: Path) -> str:
-    with open(filename, "r") as key_file:
+    with open(filename, "rb") as key_file:
         key = key_file.read()
 
     return key
@@ -30,13 +30,13 @@ def crypt_to_file(filename: Path, key: Fernet, txt: str):
 
 
 def decrypt_from_file(filename: Path, key: Fernet) -> str:
-    with open(filename, "r") as file:
+    with open(filename, "rb") as file:
         txt = file.read()
 
     cipher = Fernet(key)
     decrypted_text = cipher.decrypt(txt)
 
-    return decrypted_text
+    return decrypted_text.decode("UTF-8")
 
 
 def crypted_file_pwd_change(new_pwd: str):
@@ -53,7 +53,7 @@ def crypted_file_pwd_change(new_pwd: str):
 
 def crypted_file_pwd_history() -> list[str]:
     try:
-        pwd = decrypt_from_file(KEY_FILE, KEY).decode("UTF-8")
+        pwd = decrypt_from_file(KEY_FILE, KEY)
         pwd_history = pwd.split("\n")
     except FileNotFoundError:
         pwd_history = []

@@ -21,6 +21,17 @@ from sql_converter import SqlTypeConverter
 
 PRINT_DATE_FORMAT: str = "%d/%m/%Y à %H:%M:%S"  # pour le format de la date pour les logs / output
 
+REPLACE_PARAM_PATTERN = re.compile(r"(?<![\d\w#_\$@])(@[\d\w#_\$@]+)")  # for cmd_builder
+DECLARE_EXTRACT_PATTERN = re.compile(r"^(DECLARE[^;]*;)", re.MULTILINE | re.DOTALL)  # for SqlParameters
+
+# Patterns for parsing SQL parameters when SqlParam is initializated
+VAR_NAME_PATTERN = re.compile(r"^@!?[\d\w#_\$@]+")
+TYPE_NAME_PATTERN = re.compile(r"^[^(=]+as\s+([^(\s=]+)", re.IGNORECASE)
+DISPLAY_VALUE_PATTERN = re.compile(r"^[^=]*=\s*('.*?'|[^,\s]*)")
+TYPE_ARGS_PATTERN = re.compile(r"^[^(=]+\(([^)]+)\)")
+COMMENT_PATTERN = re.compile(r"--\s*(.+)")
+INFO_LIST_PATTERN = re.compile(r"^(.*?)(?=\(|$)\(?(.*?)\)?$")
+
 
 @dataclass(frozen=True)
 class ExecuteConfig:
@@ -262,7 +273,7 @@ class SqlParam:
         self.is_hidden: bool = False
         self.ui_control: str = ""
         self.authorized_values: dict = {}
-        self.ctrl_pattern: str = ""
+        self.ctrl_pattern: re.Pattern = None
         self.is_inlined: bool = False
 
         self.display_value: str = ""
@@ -279,14 +290,14 @@ class SqlParam:
     # Default value initialization
     # ------------------------------------------------------------------------------------------
     def set_default(self) -> None:
-        match = re.search(r"^@!?[\d\w#_\$@]+", self.sql_declare)
+        match = VAR_NAME_PATTERN.search(self.sql_declare)
         self.var_name = match.group(0) if match else ""
 
-        match = re.search(r"^[^(=]+as\s+([^(\s=]+)", self.sql_declare, re.IGNORECASE)
+        match = TYPE_NAME_PATTERN.search(self.sql_declare)
         self.type_name = match.group(1).lower() if match else ""
         self.type_args = self._get_type_args()
 
-        match = re.search(r"^[^=]*=\s*('.*?'|[^,\s]*)", self.sql_declare)
+        match = DISPLAY_VALUE_PATTERN.search(self.sql_declare)
         self.display_value = match.group(1).replace("'", "").strip() if match else ""
 
         self._infos_from_comment()
@@ -299,12 +310,12 @@ class SqlParam:
         self.update_value_cmd()
 
     def _get_type_args(self) -> list:
-        str_type_args = re.search(r"^[^(=]+\(([^)]+)\)", self.sql_declare)
+        str_type_args = TYPE_ARGS_PATTERN.search(self.sql_declare)
         str_type_args = str_type_args[1].lower().split(",") if str_type_args else []
         return [arg.strip() for arg in str_type_args]
 
     def _infos_from_comment(self) -> None:
-        comment = re.search(r"--\s*(.+)", self.sql_declare)
+        comment = COMMENT_PATTERN.search(self.sql_declare)
         if not comment:
             return
 
@@ -323,7 +334,7 @@ class SqlParam:
             calc_funcs = ("user_info", "fiscal_year", "month_end", "today")
 
             for info in infos:
-                info_lst = re.search(r"^(.*?)(?=\(|$)\(?(.*?)\)?$", info)
+                info_lst = INFO_LIST_PATTERN.search(info)
                 info_func = info_lst[1].lower()
                 info_args = info_lst[2]
 
@@ -349,7 +360,7 @@ class SqlParam:
 
         # ctrl pattern regex for display value validation
         if len(comment_infos) > 2 and comment_infos[2]:
-            self.ctrl_pattern = ("|").join(comment_infos[2:])
+            self.ctrl_pattern = re.compile(("|").join(comment_infos[2:]))
 
     def _authorized_values(self, ctrl: str, args: str) -> None:
         my_args = args.split(",")
@@ -477,10 +488,10 @@ class SqlParam:
             return True
 
         try:
-            if re.match(self.ctrl_pattern, val_to_test):
+            if self.ctrl_pattern.match(val_to_test):
                 return True
         except re.error as e:
-            raise ValueError(f"Regex invalide pour {self.var_name} : {self.ctrl_pattern}") from e
+            raise ValueError(f"Regex invalide pour {self.var_name} : {self.ctrl_pattern.pattern}") from e
 
         return False
 
@@ -490,7 +501,7 @@ class SqlParameters:
         self.params: dict[str, SqlParam] = self._parse_declare(file_content)
 
     def _parse_declare(self, file_content: str) -> dict[str, SqlParam]:
-        regex_match = re.search(r"^(DECLARE[^;]*;)", file_content, re.MULTILINE | re.DOTALL)  # section DECLARE
+        regex_match = DECLARE_EXTRACT_PATTERN.search(file_content)  # section DECLARE
 
         params_dict = {}
         params_txt = regex_match.group(1) if regex_match is not None else ""
@@ -551,7 +562,7 @@ class CmdBuilder:
             else:
                 return match.group(0)
 
-        cmd_template = re.sub(r"(?<![\d\w#_\$@])(@[\d\w#_\$@]+)", replace_func, self.raw_cmd)
+        cmd_template = REPLACE_PARAM_PATTERN.sub(replace_func, self.raw_cmd)
 
         return cmd_template
 

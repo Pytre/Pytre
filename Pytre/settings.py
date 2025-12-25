@@ -10,18 +10,10 @@ from singleton_metaclass import Singleton
 
 
 class Settings(metaclass=Singleton):
-    kee: Kee = Kee()
-    kee_grp: Group = None
-
-    @classmethod
-    def open_db(cls, reload: bool = False) -> bool:
-        cls.kee._open_db(reload)
-        if cls.kee.is_ko:
-            return False
-        cls.kee_grp = cls.kee.grp_settings
-        return True
-
     def __init__(self):
+        self.kee: Kee = Kee()
+        self.kee_grp: Group = None
+
         self.app_path: Path = get_app_path()
         self.default_encoding: str = "utf8-sig"  # format à utiliser par défaut
 
@@ -37,6 +29,13 @@ class Settings(metaclass=Singleton):
         self._params: dict[str, str] = self._get_params()  # mapping entre keepass title et attributs
 
         self.load()
+
+    def open_db(self, reload: bool = False) -> bool:
+        self.kee._open_db(reload)
+        if self.kee.is_ko:
+            return False
+        self.kee_grp = self.kee.grp_settings
+        return True
 
     def _get_params(self) -> dict[str, str]:
         """key : keepass title, value : settings attribute"""

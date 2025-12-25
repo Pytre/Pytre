@@ -56,7 +56,7 @@ class App(tk.Toplevel):
         self.queries: list[sql_query.Query] = []
         self.query: sql_query.Query = sql_query.Query()
         self.params_widgets: dict[str, ttk.Widget] = {}
-        self.output_file: Path = ""
+        self.output_file: Path | None = None
 
         self.setup_app_identity()
         self.check_database_access()
@@ -607,7 +607,7 @@ class App(tk.Toplevel):
 
         # reset parameters
         self.rows_number: int = 0
-        self.output_file = ""
+        self.output_file = None
         self.start_time = None
         self.process_running = True
 
@@ -707,7 +707,7 @@ class App(tk.Toplevel):
             return
 
         # si aucune ligne extraite
-        if self.rows_number == 0:
+        if not self.rows_number > 0:
             messagebox.showinfo("Fin execution", "Aucune donnée extraite !", parent=self)
             return
 

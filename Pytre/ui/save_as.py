@@ -7,7 +7,7 @@ if not __package__:
 from user_prefs import PrefsEnum, UserPrefs
 
 
-def save_as(parent, src_file: Path) -> Path:
+def save_as(parent, src_file: Path | str) -> Path:
     if not src_file:
         return None
     elif not Path(src_file).exists():

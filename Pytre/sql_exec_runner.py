@@ -176,7 +176,7 @@ class ExecutionProcess:
             query.query_execute.cannot_stop = self.cannot_stop
 
             result = query.execute(server_id=server_id, file_output=True)
-            rows_number, output_file = result if isinstance(result, tuple) else (0, "")
+            rows_number, output_file = result
             self.queue_result.put(("result", (rows_number, output_file)))
 
             self.queue_result.put(("msg_print", "Query task ending"))

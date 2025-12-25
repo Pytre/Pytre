@@ -8,7 +8,7 @@ def get_system() -> str:
     return platform.system()
 
 
-def startfile(filename: str) -> None:
+def startfile(filename: str | Path) -> None:
     validated_filename: Path = validate_path(filename)
     system: str = platform.system()
 
@@ -27,7 +27,7 @@ def startfile(filename: str) -> None:
         raise ValueError(f"OS not supported: {system}")
 
 
-def showfile(filename: str) -> None:
+def showfile(filename: str | Path) -> None:
     validated_filename: Path = validate_path(filename)
 
     system: str = platform.system()
@@ -56,7 +56,7 @@ def showfile(filename: str) -> None:
     subprocess.Popen(args)
 
 
-def validate_path(filename: str) -> Path:
+def validate_path(filename: str | Path) -> Path:
     """Valide et normalise un chemin de fichier pour des raisons de sécurité."""
     if not filename:
         raise ValueError("Filename cannot be empty")

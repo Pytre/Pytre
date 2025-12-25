@@ -99,7 +99,7 @@ class Query:
     # ------------------------------------------------------------------------------------------
     # Gestion execution requête et autres fonctions
     # ------------------------------------------------------------------------------------------
-    def execute(self, server_id: str = "", file_output: bool = True) -> bool | tuple:
+    def execute(self, server_id: str = "", file_output: bool = True) -> tuple[int, Path | list[list[str]] | None]:
         self.update_values()
 
         if self.values_ok():
@@ -109,14 +109,14 @@ class Query:
                 return result
             except (pymssql._pymssql.OperationalError, psycopg2.OperationalError) as err:
                 self._execute_operational_errors(err)
-                return False
+                return (-1, None)
             except Exception as err:
                 self._broadcast(f"Erreur inattendue : {err}")
-                return False
+                return (-1, None)
         else:
             err_msg = "\nImpossible d'executer des paramètres sont invalides"
             self._broadcast(err_msg)
-            return False
+            return (-1, None)
 
     def _execute_operational_errors(self, err: Exception):
         err_msg = str("=") * 50 + "\n"
@@ -688,11 +688,11 @@ class QueryExecute:
 
         return self.server
 
-    def execute(self, config: ExecuteConfig):
+    def execute(self, config: ExecuteConfig) -> tuple[int, Path | list[list[str]] | None]:
         if not self.load_infos(config):
-            return False
+            return (-1, None)
         if self.stop_requested.is_set():
-            return False
+            return (-1, None)
 
         starting_date = datetime.now()
         self._broadcast(starting_date.strftime(self.print_date_format) + " - Connexion à la base de données...")
@@ -708,11 +708,11 @@ class QueryExecute:
                 self.queue.put(("stop_timer", ""))
             except (pymssql._pymssql.ProgrammingError, psycopg2.ProgrammingError) as err:
                 self._broadcast(self._time_log() + f" - Erreur SQL : {str(err)}")
-                return False
+                return (-1, None)
             except Exception as err:
                 error_type = type(err).__name__
                 self._broadcast(self._time_log() + f" - Erreur d'execution inattendue ({error_type}) :\n{str(err)}")
-                return False
+                return (-1, None)
 
             # si pas de fichier d'extraction alors renvoi des données dans une liste
             if self.config.extract_file == Path():
@@ -744,7 +744,7 @@ class QueryExecute:
         if self.config.extract_file != Path():
             self.config.extract_file.unlink(missing_ok=True)
 
-        return False
+        return (-1, None)
 
     def _execute_end(self, starting_date: datetime, ending_date: datetime, rows_count: int):
         # writing user log
@@ -779,7 +779,7 @@ class QueryExecute:
         else:
             self._broadcast("Fichier extrait : aucune ligne de récupérée, pas de fichier\n" + str("=") * 50)
 
-    def _extract_to_list(self, cursor):
+    def _extract_to_list(self, cursor) -> tuple[int, list[list[str]]]:
         buffer = []
         row_number = -1
 
@@ -798,7 +798,7 @@ class QueryExecute:
 
         return row_number + 1, buffer
 
-    def _extract_to_file(self, cursor, encoding: str):
+    def _extract_to_file(self, cursor, encoding: str) -> tuple[int, Path | None]:
         buffer = []  # buffer pour stocker les lignes avant écriture dans le fichier
         buffer_max_size = 50_000  # nombre de lignes pour déclencher écriture dans fichier
         row_number = -1
@@ -820,7 +820,7 @@ class QueryExecute:
             for row_number, record in enumerate(cursor):
                 # si arrêt demandé, stopper l'extraction
                 if self.stop_requested.is_set():
-                    return 0, ""
+                    return 0, None
 
                 # ajout enregistrement courant au buffer
                 buffer.append(self._sql_record_to_text(record))

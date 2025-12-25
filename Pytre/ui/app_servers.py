@@ -402,14 +402,16 @@ class ServersWindow(tk.Toplevel):
         types = (("Fichier csv", "*.csv"), ("Tous les fichiers", "*.*"))
         filename = filedialog.askopenfilename(title=title, filetypes=types, parent=self)
 
-        result = self.servers.csv_import(filename)
-        self.reload_all()
-        if result:
-            msg = "Fin de l'import des serveurs"
-            messagebox.showinfo(title="Import", message=msg, parent=self, type=messagebox.OK)
-        else:
-            msg = "Quelque chose ne s'est pas bien passé lors de l'import !"
+        try:
+            self.servers.csv_import(filename)
+        except Exception as err:
+            msg = "Quelque chose ne s'est pas bien passé lors de l'import :\n" + str(err)
             messagebox.showerror(title="Import", message=msg, parent=self, type=messagebox.OK)
+            return
+
+        self.reload_all()
+        msg = "Fin de l'import des serveurs"
+        messagebox.showinfo(title="Import", message=msg, parent=self, type=messagebox.OK)
 
     def export_servers(self):
         title = "Fichier à exporter"
@@ -418,13 +420,15 @@ class ServersWindow(tk.Toplevel):
         if not filename:
             return
 
-        result = self.servers.csv_export(filename, overwrite=True)
-        if result:
-            msg = "Fin de l'export des utilisateurs"
-            messagebox.showinfo(title="Export", message=msg, parent=self, type=messagebox.OK)
-        else:
-            msg = "Quelque chose ne s'est pas bien passé lors de l'export !"
+        try:
+            self.servers.csv_export(filename, overwrite=True)
+        except Exception as err:
+            msg = "Quelque chose ne s'est pas bien passé lors de l'export :" + str(err)
             messagebox.showerror(title="Export", message=msg, parent=self, type=messagebox.OK)
+            return
+
+        msg = "Fin de l'export des utilisateurs"
+        messagebox.showinfo(title="Export", message=msg, parent=self, type=messagebox.OK)
 
     def app_exit(self, _: Event = None):
         if self.parent:

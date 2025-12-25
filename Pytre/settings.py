@@ -8,6 +8,8 @@ from pykeepass.group import Group
 from kee import Kee, get_app_path
 from singleton_metaclass import Singleton
 
+DEFAULT_QUERIES_FOLDER = Path.home() / "Queries"
+
 
 class Settings(metaclass=Singleton):
     def __init__(self):
@@ -15,7 +17,7 @@ class Settings(metaclass=Singleton):
         self.kee_grp: Group = None
 
         self.app_path: Path = get_app_path()
-        self.default_encoding: str = "utf8-sig"  # format à utiliser par défaut
+        self.default_encoding: str = "utf-8-sig"  # format à utiliser par défaut
 
         self.settings_version: str = ""  # version actuelle des settings
         self.field_separator: str = ""  # délimitateur de champs pour exports
@@ -72,16 +74,29 @@ class Settings(metaclass=Singleton):
 
             value: str = info.username if info.username is not None else ""
 
-            if kee_title == "LOGS_ARE_ON":
-                value = True if value.lower() == "true" else False
+            if kee_title == "FIELD_SEPARATOR" and (not value or len(value) != 1):
+                print(f"Invalid field separator '{value}', using default ';'")
+                value = ";"
+            elif kee_title == "DECIMAL_SEPARATOR":
+                if not value or len(value) != 1:
+                    print(f"Invalid decimal separator '{value}', using default ','")
+                    value = ","
+                if value == self.field_separator:
+                    print(f"Invalid decimal separator '{value}' already used by field separator, using default ','")
+                    value = ","
+            elif kee_title == "DATE_FORMAT":
+                if not value:
+                    value = "dd/MM/yyyy"
             elif kee_title == "EXTRACT_ENCODING":
                 try:
                     self._validate_encoding_format(value)
                 except LookupError:
                     print(f"Invalid encoding settings '{value}', using default '{self.default_encoding}'")
                     value = self.default_encoding
+            elif kee_title == "LOGS_ARE_ON":
+                value = True if value.lower() == "true" else False
             elif kee_title in ("QUERIES_FOLDER", "LOGS_FOLDER"):
-                value = Path(value)
+                value = Path(value) if value and Path(value).is_dir() else DEFAULT_QUERIES_FOLDER
 
             setattr(self, attr_name, value)
 
@@ -109,10 +124,10 @@ class Settings(metaclass=Singleton):
         self.kee.save_db()
         return True
 
-    def get_min_version(self, queries_folder: Path) -> tuple[str, str]:
+    def get_min_version(self, queries_folder: str | Path) -> tuple[str, str]:
         """for query_folder return min version needed for application and settings"""
 
-        if not queries_folder.is_dir():
+        if not Path(queries_folder).is_dir():
             raise ValueError(f"Error: folder doesn't exist '{queries_folder}'")
 
         file_src = Path(queries_folder) / "_version_min.json"

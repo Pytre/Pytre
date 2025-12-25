@@ -181,6 +181,10 @@ class Users(metaclass=Singleton):
         self.attribs_cust = [attr for attr in self.attribs_cust if attr not in fields]
 
     def csv_import(self, filename: Path, delimiter: str = ";", quotechar: str = '"') -> bool:
+        if not (delimiter) or len(delimiter) != 1 or delimiter == quotechar:
+            raise ValueError(f"Delimiter must be a single character and different from quote character ({quotechar})")
+        if not (quotechar) or len(quotechar) != 1:
+            raise ValueError("Quote character must be a single character")
         if not Path(filename).exists():
             raise FileNotFoundError(f"File to import users does not exist : {filename}")
 
@@ -255,8 +259,10 @@ class Users(metaclass=Singleton):
     def csv_export(self, filename: Path, delimiter: str = ";", overwrite: bool = False) -> bool:
         quotechar = '"'
 
+        if not delimiter or len(delimiter) != 1 or delimiter == quotechar:
+            raise ValueError(f"Delimiter must be a single character and different from quote character ({quotechar})")
         if Path(filename).exists() and not overwrite:
-            return False
+            raise FileExistsError(f"File to export users already exists and overwrite is set to False : {filename}")
 
         items_std = ["superuser", "group", "msg_login"]
         items_cust = self.get_cust_attribs_list()

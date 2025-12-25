@@ -63,7 +63,7 @@ class UserPrefs(metaclass=Singleton):
             self._extract_folder = Path(value) if value else EXTRACT_FOLDER
             self._ensure_extract_folder_exists()
         elif key is PrefsEnum.save_as_folder:
-            self._save_as_folder = Path(value) if value else Path.home()
+            self._save_as_folder = Path(value) if value and Path(value).is_dir() else Path.home()
         else:
             setattr(self, key.value, value)
 

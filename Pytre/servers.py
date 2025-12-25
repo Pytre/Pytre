@@ -228,8 +228,8 @@ class Server:
         }
         try:
             conn: pymssql.Connection = pymssql.connect(**conn_params)
-        except pymssql._pymssql.OperationalError as err:
-            raise pymssql._pymssql.OperationalError(err.args[0])
+        except pymssql._pymssql.OperationalError:
+            raise  # raise original exception for traceback
 
         return conn
 
@@ -251,10 +251,11 @@ class Server:
             cursor.execute("SET statement_timeout = %s", (self.timeout * 1000,))  # needs to be milliseconds
             cursor.execute("SET default_transaction_read_only = on")
             cursor.close()
-        except psycopg2.OperationalError as err:
-            raise psycopg2.OperationalError(err.args)
+        except psycopg2.OperationalError:
+            raise  # raise original exception for traceback
         except UnicodeDecodeError as err:
-            raise psycopg2.OperationalError((err.args[1].decode(err.args[0], errors="replace"),))
+            decoded_msg = err.args[1].decode(err.args[0], errors="replace")
+            raise psycopg2.OperationalError(decoded_msg) from err
 
         return conn
 

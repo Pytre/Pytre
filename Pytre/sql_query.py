@@ -707,12 +707,11 @@ class QueryExecute:
                 self.cannot_stop.clear()
                 self.queue.put(("stop_timer", ""))
             except (pymssql._pymssql.ProgrammingError, psycopg2.ProgrammingError) as err:
-                error_code = err.args[0]
-                error_msg = str(err.args[1])[2:-2]
-                self._broadcast(self._time_log() + f" - Erreur {error_code} : {error_msg}")
+                self._broadcast(self._time_log() + f" - Erreur SQL : {str(err)}")
                 return False
             except Exception as err:
-                self._broadcast(self._time_log() + f" - Erreur d'execution inattendue :\n{', '.join(err.args)}")
+                error_type = type(err).__name__
+                self._broadcast(self._time_log() + f" - Erreur d'execution inattendue ({error_type}) :\n{str(err)}")
                 return False
 
             # si pas de fichier d'extraction alors renvoi des données dans une liste

@@ -93,8 +93,9 @@ class Servers(metaclass=Singleton):
 
                 # récup entry si déjà ou existant ou création d'une nouvelle
                 s_entry: Entry
-                s_entry = [s for s in self.kee_grp.entries if csv_row["id"].upper() == s.title.upper()]
-                s_entry = s_entry[0] if s_entry else self.kee.db.add_entry(self.kee_grp, "", "", "")
+                s_entry = next((s for s in self.kee_grp.entries if csv_row["id"].upper() == s.title.upper()), None)
+                if s_entry is None:
+                    s_entry = self.kee.db.add_entry(self.kee_grp, "", "", "")
 
                 # mise à jour des propriétés
                 s_entry.title = csv_row["id"]

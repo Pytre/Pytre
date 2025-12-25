@@ -420,7 +420,9 @@ class User:
         self.users.open_db(True)
 
         # contrôle
-        if [u for u in self.users.get_all_users() if u.username == self.username and not u.uuid == self.uuid]:
+        if next(
+            (u for u in self.users.kee_grp.entries if u.username == self.username and str(u.uuid) != self.uuid), None
+        ):
             raise ValueError(f"{self.username} est déjà utilisé comme identifiant")
 
         # récupération d'une entrée pour la sauvegarde

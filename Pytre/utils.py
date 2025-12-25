@@ -9,41 +9,38 @@ def get_system() -> str:
 
 
 def startfile(filename: str) -> None:
-    if not filename or not Path(filename).exists():
-        raise FileNotFoundError(f"{filename} does not exist")
-
+    validated_filename: Path = validate_path(filename)
     system: str = platform.system()
 
     if system == "Windows":
-        os.startfile(filename)
+        os.startfile(str(validated_filename))
         return
     elif system == "Darwin":  # macOS
-        subprocess.Popen(["open", filename])
+        subprocess.Popen(["open", str(validated_filename)])
     elif system == "Linux":
         file_manager = get_file_manager()
-        if not Path(filename).is_file() and file_manager:
-            subprocess.Popen([file_manager, "--select", filename])
+        if not validated_filename.is_file() and file_manager:
+            subprocess.Popen([file_manager, "--select", str(validated_filename)])
         else:
-            subprocess.Popen(["xdg-open", filename])
+            subprocess.Popen(["xdg-open", str(validated_filename)])
     else:
         raise ValueError(f"OS not supported: {system}")
 
 
 def showfile(filename: str) -> None:
-    if not filename or not Path(filename).exists():
-        raise FileNotFoundError(f"{filename} does not exist")
+    validated_filename: Path = validate_path(filename)
 
     system: str = platform.system()
 
-    is_file = Path(filename).is_file()
+    is_file = Path(validated_filename).is_file()
     file_manager = get_file_manager()
 
     if not file_manager:
-        folder = Path(filename).parent if is_file else filename
-        startfile(folder)
+        folder = Path(validated_filename).parent if is_file else validated_filename
+        startfile(str(folder))
         return
 
-    native_path = str(Path(filename))  # normalisation séparateurs de chemin (/ -> \ sous Windows)
+    native_path = str(validated_filename)  # normalisation séparateurs de chemin (/ -> \ sous Windows)
     args = [file_manager, native_path]
     if is_file:
         select_cmd: str = ""
@@ -57,6 +54,27 @@ def showfile(filename: str) -> None:
         args.insert(1, select_cmd)
 
     subprocess.Popen(args)
+
+
+def validate_path(filename: str) -> Path:
+    """Valide et normalise un chemin de fichier pour des raisons de sécurité."""
+    if not filename:
+        raise ValueError("Filename cannot be empty")
+
+    filepath = Path(filename).resolve()  # Résolution des symlinks et chemins relatifs
+
+    if not filepath.exists():
+        raise FileNotFoundError(f"{filepath} does not exist")
+
+    # Check if filepath is an actual file or folder (not a device, socket, etc.)
+    if not (filepath.is_file() or filepath.is_dir()):
+        raise ValueError(f"{filepath} is not a regular file or directory")
+
+    # Vérifier les permissions de lecture
+    if not os.access(filepath, os.R_OK):
+        raise PermissionError(f"No read permission for {filepath}")
+
+    return filepath
 
 
 def get_file_manager() -> str:

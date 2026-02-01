@@ -1,3 +1,4 @@
+import codecs
 import os
 import subprocess
 import platform
@@ -119,3 +120,41 @@ def _linux_file_manager() -> str:
                 return cmd
 
     return ""
+
+
+def detect_encoding(filepath: str | Path, encoding: str | None = None, sample_size_mb: int = 10) -> str:
+    # Encodings to test, strictest to most permissive (for decoding no difference between utf-8-sig and utf-8)
+    encodings: list[str] = ["utf-8-sig", "cp1252", "iso-8859-1"]
+
+    # If encoding provided, test it first
+    default_encoding: str | None = encoding.lower() if encoding and get_valid_encoding(encoding) else None
+    if default_encoding in encodings:
+        encodings.remove(default_encoding)
+    if default_encoding:
+        encodings.insert(0, default_encoding)
+
+    # Test encoding on file sample
+    for tested_encoding in encodings:
+        try:
+            with open(filepath, "r", encoding=tested_encoding, newline="") as f:
+                f.read(sample_size_mb * 1024 * 1024)
+            return tested_encoding
+        except UnicodeDecodeError:
+            continue
+        except LookupError:
+            print(f"Unknown encoding format to test provided: '{tested_encoding}'")
+
+    return ""
+
+
+def get_valid_encoding(encoding: str, fallback: str = "", warn: bool = True) -> str | None:
+    if encoding is None:
+        raise ValueError("Encoding must be a string, not None")
+    try:
+        codecs.lookup(encoding)
+        return encoding
+    except LookupError:
+        if warn:
+            print(f"Unknown encoding format: '{encoding}'")
+
+    return None if not fallback else get_valid_encoding(fallback)

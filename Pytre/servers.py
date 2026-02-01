@@ -11,6 +11,7 @@ from pykeepass.group import Group
 
 from kee import Kee
 from singleton_metaclass import Singleton
+from utils import detect_encoding
 from about import APP_NAME, APP_VERSION
 
 
@@ -64,13 +65,13 @@ class Servers(metaclass=Singleton):
 
         return self.groups
 
-    def csv_import(self, filename: Path, delimiter: str = ";", quotechar: str = '"') -> bool:
+    def csv_import(self, filepath: Path, delimiter: str = ";", quotechar: str = '"') -> bool:
         if not (delimiter) or len(delimiter) != 1 or delimiter == quotechar:
             raise ValueError(f"Delimiter must be a single character and different from quote character ({quotechar})")
         if not (quotechar) or len(quotechar) != 1:
             raise ValueError("Quote character must be a single character")
-        if not Path(filename).exists():
-            raise FileNotFoundError(f"File to import servers does not exist : {filename}")
+        if not Path(filepath).exists():
+            raise FileNotFoundError(f"File to import servers does not exist : {filepath}")
 
         self.open_db(True)
 
@@ -78,7 +79,11 @@ class Servers(metaclass=Singleton):
         for i, val in enumerate(self.cols_std + self.cols_cust):
             cols_dict[val] = i
 
-        with open(filename, mode="r", encoding="latin-1") as csv_file:
+        encoding = detect_encoding(filepath)
+        if not encoding:
+            raise ValueError(f"Unable to detect encoding for: {filepath}")
+
+        with open(filepath, mode="r", encoding=encoding) as csv_file:
             csv_reader = csv.DictReader(csv_file, delimiter=delimiter, quotechar=quotechar)
 
             for num, csv_row in enumerate(csv_reader):
@@ -121,13 +126,13 @@ class Servers(metaclass=Singleton):
 
             return True
 
-    def csv_export(self, filename: Path, delimiter: str = ";", overwrite: bool = False) -> bool:
+    def csv_export(self, filepath: Path, delimiter: str = ";", overwrite: bool = False) -> bool:
         quotechar = '"'
 
         if not delimiter or len(delimiter) != 1 or delimiter == quotechar:
             raise ValueError(f"Delimiter must be a single character and different from quote character ({quotechar})")
-        if Path(filename).exists() and not overwrite:
-            raise FileExistsError(f"File to export servers already exists and overwrite is set to False : {filename}")
+        if Path(filepath).exists() and not overwrite:
+            raise FileExistsError(f"File to export servers already exists and overwrite is set to False : {filepath}")
 
         rows = [self.cols_std[:-1] + self.cols_cust + [self.cols_std[-1]]]
         self.open_db(True)
@@ -154,7 +159,7 @@ class Servers(metaclass=Singleton):
 
             rows.append(row)
 
-        with open(filename, mode="w", encoding="latin-1", newline="") as csv_file:
+        with open(filepath, mode="w", encoding="utf-8-sig", newline="") as csv_file:
             csv_writer = csv.writer(csv_file, delimiter=delimiter, quotechar=quotechar, quoting=csv.QUOTE_MINIMAL)
             csv_writer.writerows(rows)
 

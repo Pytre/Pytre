@@ -152,15 +152,22 @@ class App(tk.Toplevel):
             return
 
         # récupération version minimum exigée pour l'application et les settings
-        min_app, min_settings = self.app_settings.get_min_version(queries_folder)
+        try:
+            min_app, min_settings, retrieve_failed = self.app_settings.get_min_version(queries_folder)
+        except ValueError as e:
+            messagebox.showerror("Erreur", f"Erreur récupération versions mini : {e}", parent=self)
+            if not self.user.admin:
+                self.app_exit()
+                raise SystemExit
+            return
 
         # vérification version settings
         if not self.app_settings.ctrl_version(self.app_settings.settings_version, min_settings):
             messagebox.showerror(
                 "Version settings.db",
-                "Le fichier settings.db utilisé n'est pas à jour."
-                f"\n\n- Version utilisée : {self.app_settings.settings_version}"
-                f"\n- Version mini : {min_settings}"
+                "Le fichier settings.db utilisé n'est pas à jour :"
+                f"\n  - Version utilisée : {self.app_settings.settings_version}"
+                f"\n  - Version mini : {min_settings}"
                 "\n\nMerci d'utiliser le fichier des settings à jour",
                 parent=self,
             )
@@ -172,15 +179,25 @@ class App(tk.Toplevel):
         if not self.app_settings.ctrl_version(APP_VERSION, min_app):
             messagebox.showerror(
                 f"Version {APP_NAME}",
-                f"Votre version de {APP_NAME} n'est pas à jour."
-                f"\n\n- Version utilisée : {APP_VERSION}"
-                f"\n- Version mini : {min_app}"
+                f"Votre version de {APP_NAME} n'est pas à jour :"
+                f"\n  - Version utilisée : {APP_VERSION}"
+                f"\n  - Version mini : {min_app}"
                 "\n\nMerci d'utiliser une version à jour",
                 parent=self,
             )
             if not self.user.admin:
                 self.app_exit()
                 raise SystemExit
+
+        # alerter si version mini requises mais non trouvées
+        if retrieve_failed:
+            messagebox.showerror(
+                "Erreur récupération versions mini",
+                "Problème lors de la récupération des infos de version mini requises :"
+                f"\n  - Version mini app : {min_app}"
+                f"\n  - Version mini paramètres : {min_settings}",
+                parent=self,
+            )
 
     def extract_folder_cleaning(self):
         extract_folder = self.user_prefs.get(PrefsEnum.extract_folder)

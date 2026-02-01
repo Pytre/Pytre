@@ -7,6 +7,7 @@ from pykeepass.group import Group
 
 from kee import Kee, get_app_path
 from singleton_metaclass import Singleton
+from utils import detect_encoding
 
 DEFAULT_QUERIES_FOLDER = Path.home() / "Queries"
 
@@ -124,29 +125,39 @@ class Settings(metaclass=Singleton):
         self.kee.save_db()
         return True
 
-    def get_min_version(self, queries_folder: str | Path) -> tuple[str, str]:
-        """for query_folder return min version needed for application and settings"""
+    def get_min_version(self, queries_folder: str | Path) -> tuple[str, str, bool]:
+        """for query_folder return min version needed for application and settings and
+        a bool to indicate if retrieving min version failed"""
 
         if not Path(queries_folder).is_dir():
             raise ValueError(f"Error: folder doesn't exist '{queries_folder}'")
 
+        retrieve_failed: bool = False
+
         file_src = Path(queries_folder) / "_version_min.json"
         if file_src.exists():
-            with open(file_src, mode="r", encoding="utf-8") as f:
-                json_dict: dict = json.load(f)
+            encoding = detect_encoding(file_src)
+            if not encoding:
+                raise ValueError(f"Unable to detect encoding for: {file_src}")
+
+            json_dict: dict = {}
+            with open(file_src, mode="r", encoding=encoding) as f:
+                json_dict = json.load(f)
 
             min_application = json_dict.get("application", "0.0.0")
             min_settings = json_dict.get("settings", "0")
 
             if min_application == "0.0.0":
+                retrieve_failed = True
                 print("Warning: a minimum version is required but couldn't be retrieved for application")
             if min_settings == "0":
+                retrieve_failed = True
                 print("Warning: a minimum version is required but couldn't be retrieved for settings")
 
-            return min_application, min_settings
+            return min_application, min_settings, retrieve_failed
 
         print(f"No minimal version required for queries in {queries_folder}")
-        return "0.0.0", "0"
+        return "0.0.0", "0", retrieve_failed
 
     def ctrl_version(self, curr_version: str, min_version: str) -> bool:
         """Compare current version vs version min and return True if it is greater or equal"""
@@ -174,12 +185,12 @@ if __name__ == "__main__":
     my_settings = Settings()
 
     try:
-        min_app, min_settings = my_settings.get_min_version(my_settings.queries_folder)
+        min_app, min_settings, retrieve_failed = my_settings.get_min_version(my_settings.queries_folder)
     except ValueError as e:
         print(f"Contrôle de version ignoré : {e}")
-        min_app, min_settings = "0.0.0", "0"
+        min_app, min_settings = "0.0.0", "0", True
 
-    print(f"Version mini Pytre : {min_app}")
+    print(f"Version mini Application : {min_app}")
     print(f"Version mini Settings : {min_settings}")
     print(f"Version utilisée Settings : {my_settings.settings_version}")
 

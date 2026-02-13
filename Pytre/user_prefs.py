@@ -27,6 +27,7 @@ class UserPrefs(metaclass=Singleton):
         self._cache: dict[str, Any] = {}
 
         self.load()
+        self._ensure_extract_folder_exists()
 
     def __repr__(self) -> str:
         return str(self.to_json())

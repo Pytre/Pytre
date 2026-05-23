@@ -1,11 +1,13 @@
 import json
+import shutil
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Any
 
 from singleton_metaclass import Singleton
 
-EXTRACT_FOLDER: Path = Path.home() / "Pytre"
+CACHE_FOLDER: Path = Path.home() / "Pytre" / ".temp_cache"
 CONFIG_FOLDER: Path = Path.home() / "Pytre"
 SETTING_FILE: Path = CONFIG_FOLDER / "Pytre_Settings.json"
 
@@ -13,21 +15,32 @@ SETTING_FILE: Path = CONFIG_FOLDER / "Pytre_Settings.json"
 class PrefsEnum(Enum):
     """Names for json and to get/set attributes. Values for internal attribute name"""
 
-    extract_folder = "_extract_folder"
+    cache_folder = "_cache_folder"
     save_as_folder = "_save_as_folder"
     last_server = "_last_server"
+
+
+class IssueType(Enum):
+    WARNING = "warning"
+    ERROR = "error"
+
+
+@dataclass(frozen=True)
+class Issue:
+    type: IssueType
+    msg: str
 
 
 class UserPrefs(metaclass=Singleton):
     def __init__(self):
         self.file: Path = SETTING_FILE
-        self._extract_folder: Path = EXTRACT_FOLDER
-        self._save_as_folder: Path = EXTRACT_FOLDER
+        self._cache_folder: Path = CACHE_FOLDER
+        self._save_as_folder: Path = Path.home()
         self._last_server: str = ""
         self._cache: dict[str, Any] = {}
 
         self.load()
-        self._ensure_extract_folder_exists()
+        self._change_cache_folder(self._cache_folder, init_load=True)  # make sure cache folder exists
 
     def __repr__(self) -> str:
         return str(self.to_json())
@@ -35,40 +48,94 @@ class UserPrefs(metaclass=Singleton):
     def __str__(self) -> str:
         return json.dumps(self.to_json(), indent=2, ensure_ascii=False)
 
-    def _ensure_extract_folder_exists(self) -> bool:
-        if self._extract_folder.exists() and self._extract_folder.is_dir():
-            return True
+    def _change_cache_folder(self, folder: Path, init_load: bool = False) -> Issue | None:
+        if folder.resolve() == CONFIG_FOLDER.resolve():
+            if init_load:
+                self._migrate_cache_from_config_folder()
+                return None
+            return Issue(
+                type=IssueType.ERROR, msg="Le dossier cache ne peut pas être identique au dossier de configuration."
+            )
+
+        if not init_load and folder.exists() and folder not in (self._cache_folder, CACHE_FOLDER):
+            self._cache_folder = folder
+            if any(folder.iterdir()):
+                return Issue(
+                    type=IssueType.WARNING,
+                    msg="Le dossier cache est nettoyé automatiquement à intervalle régulier. "
+                    + "Des fichiers existent dans le dossier choisi et ils seront supprimés "
+                    + "lors d'une prochaine ouverture de l'application.",
+                )
+            return None
+
+        if folder.exists() and folder.is_dir():
+            self._cache_folder = folder
+            return None
+        elif not init_load:
+            return Issue(type=IssueType.ERROR, msg=f"Dossier non valide : {self._cache_folder}")
 
         try:
-            self._extract_folder.mkdir(parents=True, exist_ok=True)
-            return True
+            folder.mkdir(parents=True, exist_ok=True)
+            self._cache_folder = folder
+            return None
         except (OSError, PermissionError) as e:
-            print(f"Impossible de créer {self._extract_folder} : {e}")
-            if self._extract_folder != EXTRACT_FOLDER:
-                self._extract_folder = EXTRACT_FOLDER
-                print(f"Utilisation du dossier par défaut: {self._extract_folder}")
+            err_msg = f"Impossible de créer {folder} : {e}"
+            print(err_msg)
+            if folder != self._cache_folder and self._cache_folder.exists() and self._cache_folder.is_dir():
+                print(f"Dossier actuel conservé : {self._cache_folder}")
+            elif folder != self._cache_folder and folder != CACHE_FOLDER:
+                print("Tentative utilisation dossier cache par défaut...")
+                return self._change_cache_folder(CACHE_FOLDER)
             else:
-                print("ATTENTION : Le dossier d'extraction par défaut est inaccessible.")
+                print("ATTENTION : Le dossier de cache par défaut est inaccessible.")
 
-        return False
+            return Issue(type=IssueType.ERROR, msg=f"{err_msg}\nDossier cache retenu : {self._cache_folder}")
+
+    def _migrate_cache_from_config_folder(self) -> None:
+        print("Migration du cache : déplacement des fichiers CSV de CONFIG_FOLDER vers CACHE_FOLDER...")
+        if self._change_cache_folder(CACHE_FOLDER) is not None:
+            print("Migration annulée : impossible de créer le dossier cache par défaut.")
+            return
+
+        moved = 0
+        for csv_file in CONFIG_FOLDER.glob("*.csv"):
+            try:
+                shutil.move(str(csv_file), self._cache_folder / csv_file.name)
+                moved += 1
+            except (OSError, shutil.Error) as e:
+                print(f"Impossible de déplacer {csv_file.name} : {e}")
+
+        print(f"Migration terminée : {moved} fichier(s) déplacé(s) vers {self._cache_folder}")
+        self.save()
 
     def to_json(self) -> dict:
         return {
-            PrefsEnum.extract_folder.name: str(self._extract_folder),
+            PrefsEnum.cache_folder.name: str(self._cache_folder),
             PrefsEnum.save_as_folder.name: str(self._save_as_folder),
             PrefsEnum.last_server.name: self._last_server,
         }
 
-    def set(self, key: PrefsEnum, value: Any, save: bool = True) -> None:
+    def set(self, key: PrefsEnum, value: Any, save: bool = True) -> str | None:
+        warning = ""
+
         if not isinstance(key, PrefsEnum):
             raise TypeError(f"'{key}' n'est pas un PrefsEnum valide (type: {type(key).__name__})")
         if not hasattr(self, key.value):
             raise AttributeError(f"Attribut interne manquant : {key.value}")
 
-        if key is PrefsEnum.extract_folder:
-            self._extract_folder = Path(value) if value else EXTRACT_FOLDER
-            if not self._ensure_extract_folder_exists():
-                raise ValueError(f"Valeur invalide pour '{key.value}' : {self._extract_folder}")
+        if key is PrefsEnum.cache_folder:
+            old_cache_folder = self._cache_folder
+            new_cache_folder: Path = Path(value) if value else CACHE_FOLDER
+            result = self._change_cache_folder(new_cache_folder)
+            if result is not None:
+                if result.type == IssueType.ERROR:
+                    print(f"Valeur invalide '{key.value}' : {new_cache_folder}\n{result.msg}")
+                    raise ValueError(result.msg)
+                if result.type == IssueType.WARNING:
+                    print(f"Warning '{key.value}' : {result.msg}")
+                    warning = result.msg
+            elif old_cache_folder.resolve() != self._cache_folder.resolve():
+                warning = "Le contenu du dossier cache est temporaire et nettoyé automatiquement."
         elif key is PrefsEnum.save_as_folder:
             self._save_as_folder = Path(value) if value and Path(value).is_dir() else Path.home()
         else:
@@ -76,6 +143,8 @@ class UserPrefs(metaclass=Singleton):
 
         if save and self.to_json() != self._cache:
             self.save()
+
+        return warning
 
     def get(self, key: PrefsEnum, default: Any = None) -> Any:
         if not isinstance(key, PrefsEnum):
@@ -89,7 +158,7 @@ class UserPrefs(metaclass=Singleton):
         if self.file.exists():
             try:
                 with open(self.file, mode="r", encoding="utf-8") as f:
-                    json_dict: dict = json.load(f)
+                    json_dict: dict = {k.lower(): v for k, v in json.load(f).items()}  # force key to lower case
             except (json.JSONDecodeError, IOError) as e:
                 print(f"Erreur lors du chargement des préférences utilisateur : {e}")
 
@@ -123,5 +192,5 @@ class UserPrefs(metaclass=Singleton):
 
 if __name__ == "__main__":
     user_prefs = UserPrefs()
-    print(f"{'='*50}\nPreferences utilisateur courant\n{'='*50}")
+    print(f"{'=' * 50}\nPreferences utilisateur courant\n{'=' * 50}")
     print(user_prefs)

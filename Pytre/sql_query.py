@@ -18,7 +18,6 @@ import logs_user
 from user_prefs import UserPrefs, PrefsEnum
 from sql_converter import SqlTypeConverter
 
-
 PRINT_DATE_FORMAT: str = "%d/%m/%Y à %H:%M:%S"  # pour le format de la date pour les logs / output
 
 REPLACE_PARAM_PATTERN = re.compile(r"(?<![\d\w#_\$@])(@[\d\w#_\$@]+)")  # for cmd_builder
@@ -577,7 +576,7 @@ class CmdBuilder:
         if file_output:
             file_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             prefs: UserPrefs = UserPrefs()
-            extract_file = prefs.get(PrefsEnum.extract_folder) / (f"{query_name}_{file_stamp}.csv")
+            extract_file = prefs.get(PrefsEnum.cache_folder) / (f"{query_name}_{file_stamp}.csv")
 
         # metadata des paramètres
         params_metadata: dict = {}

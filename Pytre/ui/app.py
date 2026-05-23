@@ -81,7 +81,7 @@ class App(tk.Toplevel):
         self._queries_first_load: bool = True
         self.refresh_queries(reload_servers=True)
 
-        self.extract_folder_cleaning()
+        self.cache_folder_cleanup()
 
     def check_database_access(self, max_attempts=5):
         kee = self.servers.kee
@@ -199,31 +199,13 @@ class App(tk.Toplevel):
                 parent=self,
             )
 
-    def extract_folder_cleaning(self):
-        extract_folder = self.user_prefs.get(PrefsEnum.extract_folder)
+    def cache_folder_cleanup(self):
+        cache_folder = self.user_prefs.get(PrefsEnum.cache_folder)
 
-        files = old_files.old_files_list(extract_folder)  # liste des fichiers à supprimer
+        files = old_files.list_old_files(cache_folder)  # liste des fichiers à supprimer
         files_nb = len(files)
         if files_nb:
-            files_size = round(sum([size.stat().st_size for size in files]) / 1024**2, 2)
-            files_date = old_files.most_recent_files(files)
-
-            answer = messagebox.askyesno(
-                "Suppression des anciennes extractions",
-                f"Dans le dossier des extractions il existe {files_nb} fichiers "
-                + f"datant d'avant le {files_date.strftime('%d/%m/%Y')}. "
-                + f"Ils vont être supprimés pour libérer {files_size} Mo d'espace disque.\n\n"
-                + "Vous pouvez choisir de ne pas les supprimer mais ce message reviendra à chaque ouverture.\n\n"
-                + "Si des fichiers doivent être conservés cliquer sur non et changer les de répertoire "
-                + "ou déplacer les dans un sous-répertoire.",
-                parent=self,
-                icon="warning",
-            )
-
-            if answer:
-                old_files.old_files_delete(files)
-            else:
-                self.open_folder(extract_folder)
+            old_files.delete_files(files)
 
     # ------------------------------------------------------------------------------------------
     # Définition de l'identité de l'appli et des styles / thème
@@ -272,9 +254,6 @@ class App(tk.Toplevel):
 
         self.menu_query = tk.Menu(menubar, tearoff=False)
         self.menu_query.add_command(label="Executer", state="disabled", command=self.execute_query)
-        self.menu_query.add_command(
-            label="Dossier...", command=lambda: self.open_folder(self.user_prefs.get(PrefsEnum.extract_folder))
-        )
         self.menu_query.add_command(label="Journal...", command=lambda: self.open_logs(True))
         self.menu_query.add_command(label="Debug...", state="disabled", command=self.debug_query)
         self.menu_query.add_separator()
@@ -446,17 +425,11 @@ class App(tk.Toplevel):
 
         self.btn_log = ttk.Button(self.btn_frame, text="\U0001f56e", width=4, command=self.open_logs)
         self.btn_execute = ttk.Button(self.btn_frame, text="Executer", state="disable", command=self.execute_query)
-        self.btn_queries_folder = ttk.Button(
-            self.btn_frame,
-            text="Dossier",
-            command=lambda: self.open_folder(self.user_prefs.get(PrefsEnum.extract_folder)),
-        )
         self.btn_debug = ttk.Button(self.btn_frame, text="Debug", state="disable", command=self.debug_query)
 
         self.btn_log.grid(row=0, column=0, padx=2, pady=0, sticky="nswe")
         self.btn_execute.grid(row=0, column=2, padx=2, pady=0, sticky="nswe")
-        self.btn_queries_folder.grid(row=0, column=3, padx=2, pady=0, sticky="nswe")
-        self.btn_debug.grid(row=0, column=4, padx=2, pady=0, sticky="nswe")
+        self.btn_debug.grid(row=0, column=3, padx=2, pady=0, sticky="nswe")
 
         # paramètrage des poids des lignes et colonnes
         self.btn_frame.rowconfigure(0, weight=1)
@@ -955,7 +928,7 @@ class App(tk.Toplevel):
             pass
 
     def open_folder(self, folder: str):
-        if folder == self.user_prefs.get(PrefsEnum.extract_folder) and self.output_file:
+        if folder == self.user_prefs.get(PrefsEnum.cache_folder) and self.output_file:
             utils.showfile(self.output_file)
         else:
             utils.showfile(folder)

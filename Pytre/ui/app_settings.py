@@ -234,7 +234,10 @@ class UserPrefsWindow(MainSettingsWindow):
 
     def _get_entries(self) -> dict[str, dict]:
         return {
-            PrefsEnum.extract_folder.name: {"text": "Dossier des extractions", "transform": self.normalize_path},
+            PrefsEnum.cache_folder.name: {
+                "text": "Dossier cache temporaire",
+                "transform": self.normalize_path,
+            },
         }
 
     def _setup_entries(self):
@@ -279,13 +282,20 @@ class UserPrefsWindow(MainSettingsWindow):
 
             try:
                 enum_key = PrefsEnum[key]
-                self.user_prefs.set(enum_key, val, False)
+                warning = self.user_prefs.set(enum_key, val, False)
+                if warning:
+                    warning = f"Warning '{key}' :\n{warning}"
+                    confirm = messagebox.askyesno(
+                        title="Mise à jour paramètres", message=f"{warning}\n\nContinuer ?", parent=self
+                    )
+                    if not confirm:
+                        return
             except KeyError:
                 msg = f"Echec enregistrement, clé '{key}' non reconnue dans UserPrefsEnum"
                 messagebox.showwarning(title="Mise à jour paramètres", message=msg, parent=self, type=messagebox.OK)
                 return
             except (TypeError, ValueError, AttributeError) as e:
-                msg = f"Echec enregistrement, valeur invalide pour '{key}' : {e}"
+                msg = f"Echec enregistrement '{key}' :\n{e}"
                 messagebox.showerror(title="Mise à jour paramètres", message=msg, parent=self, type=messagebox.OK)
                 return
 

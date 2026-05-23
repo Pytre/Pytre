@@ -1,61 +1,53 @@
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, date
 from dateutil.relativedelta import relativedelta
 
-from logs_user import USER_DB
-from user_prefs import SETTING_FILE
 
-
-def old_files_list(folder: Path) -> list[Path]:
-    white_list = (USER_DB, SETTING_FILE)
+def list_old_files(folder: Path, age_in_days: int = 10) -> list[Path]:
+    """Return a list of files in 'folder' whose modification date is older than 'age_in_days' days."""
 
     if not folder.exists():
         return []
 
-    delete_month: int = 3  # fichiers plus vieux que x mois à supprimer
-    trigger_month: int = 4  # s'ils en existent plus vieux que y mois (évite d'en identifier tous les jours)
+    delete_threshold: date = datetime.now().date() + relativedelta(days=-age_in_days)
 
     old_files: list[Path] = []
-    trigger: bool = False
-    delete_treshold: datetime.date = datetime.now().date() + relativedelta(months=-delete_month)
-    trigger_treshold: datetime.date = datetime.now().date() + relativedelta(months=-trigger_month)
-
     for file in folder.iterdir():
-        if file in white_list:
-            continue
-
-        time_created = datetime.fromtimestamp(file.stat().st_ctime).date()  # date de création du fichier
-        if time_created < trigger_treshold and not trigger:
-            trigger = True
-
-        if time_created < delete_treshold:
+        modification_date = datetime.fromtimestamp(file.stat().st_mtime).date()
+        if modification_date < delete_threshold:
             old_files.append(file)
 
-    return old_files if trigger else []
+    return old_files
 
 
-def old_files_delete(files: list[Path]) -> None:
+def delete_files(files: list[Path]) -> None:
+    """Delete files from a list of files."""
     for file in files:
+        if file.is_dir():
+            continue
         file.unlink(missing_ok=True)
 
 
-def most_recent_files(files: list[Path]) -> datetime:
-    return max([datetime.fromtimestamp(file.stat().st_ctime) for file in files]) + relativedelta(days=1)
+def day_after_most_recent(files: list[Path]) -> datetime:
+    """Return day after most recent modification for a list of files which can't be empty"""
+    if not files:
+        raise ValueError("files can't be an empty list")
+    return max([datetime.fromtimestamp(file.stat().st_mtime) for file in files]) + relativedelta(days=1)
 
 
 if __name__ == "__main__":
     extract_folder: Path = Path().cwd()  # / "TestFolder"
 
-    files = old_files_list(extract_folder)  # liste des fichiers à supprimer
+    files = list_old_files(extract_folder)  # liste des fichiers à supprimer
     files_nb = len(files)
     if files_nb:
         files_size = round(sum([size.stat().st_size for size in files]) / 1024**2, 2)
-        files_date = most_recent_files(files)
+        files_date = day_after_most_recent(files)
 
         answer = input(
             "=" * 100
             + "\n"
-            + f"Dans le dossier des extractions il existe {files_nb} fichiers "
+            + f"Dans le dossier du cache temporaire des extractions il existe {files_nb} fichiers "
             + f"datant d'avant le {files_date.strftime('%d/%m/%Y')}.\n"
             + f"Ils vont être supprimés pour libérer {files_size} Mo d'espace disque.\n"
             + "Vous pouvez choisir d'annuler la suppression mais ce message reviendra à chaque ouverture.\n"
@@ -66,4 +58,4 @@ if __name__ == "__main__":
         )
 
         if answer == "Y":
-            old_files_delete(files)
+            delete_files(files)

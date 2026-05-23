@@ -3,7 +3,7 @@ from pathlib import Path
 from settings import get_app_path
 
 APP_NAME = "Pytre"
-APP_VERSION = "1.7.4"
+APP_VERSION = "1.7.5"
 APP_STATUS = ""
 APP_BUILD = "1"
 COPYRIGHT_YEAR = "2021"

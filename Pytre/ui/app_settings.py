@@ -155,6 +155,7 @@ class SettingsWindow(MainSettingsWindow):
             "queries_folder": {"text": "Dossier des requêtes", "transform": self.normalize_path},
             "logs_are_on": {"text": "Activer les logs"},
             "logs_folder": {"text": "Dossier des logs", "transform": self.normalize_path},
+            "users_cache_expiration": {"text": "Jours de cache utilisateurs"},
             "settings_version": {"text": "Version des paramètres"},
         }
 
@@ -207,7 +208,7 @@ class SettingsWindow(MainSettingsWindow):
 
         try:
             result = self.settings.save()
-        except LookupError as e:
+        except (LookupError, ValueError) as e:
             messagebox.showerror(title="Mise à jour paramètres", message=e, parent=self, type=messagebox.OK)
             return
 

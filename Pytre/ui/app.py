@@ -201,10 +201,10 @@ class App(tk.Toplevel):
 
     def cache_folder_cleanup(self):
         cache_folder = self.user_prefs.get(PrefsEnum.cache_folder)
+        cache_number_of_days = self.app_settings.users_cache_expiration
 
-        files = old_files.list_old_files(cache_folder)  # liste des fichiers à supprimer
-        files_nb = len(files)
-        if files_nb:
+        files = old_files.list_old_files(cache_folder, age_in_days=cache_number_of_days)
+        if files:
             old_files.delete_files(files)
 
     # ------------------------------------------------------------------------------------------

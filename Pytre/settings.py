@@ -28,6 +28,7 @@ class Settings(metaclass=Singleton):
         self.queries_folder: Path = Path("")  # répertoire des requêtes SQL
         self.logs_are_on: bool = False  # indicateur si logs centraux
         self.logs_folder: Path = Path("")  # répertoire où stocker les logs centraux
+        self.users_cache_expiration: int = 10  # nombre de jours du cache utilisateur pour ses requêtes
 
         self._params: dict[str, str] = self._get_params()  # mapping entre keepass title et attributs
 
@@ -51,6 +52,7 @@ class Settings(metaclass=Singleton):
             "QUERIES_FOLDER": "queries_folder",
             "LOGS_ARE_ON": "logs_are_on",
             "LOGS_FOLDER": "logs_folder",
+            "USERS_CACHE_EXPIRATION": "users_cache_expiration",
             "SETTINGS_VERSION": "settings_version",
         }
 
@@ -73,7 +75,7 @@ class Settings(metaclass=Singleton):
             if not info:
                 continue
 
-            value: str = info.username if info.username is not None else ""
+            value: str | int | bool | Path = info.username if info.username is not None else ""
 
             if kee_title == "FIELD_SEPARATOR" and (not value or len(value) != 1):
                 print(f"Invalid field separator '{value}', using default ';'")
@@ -98,6 +100,12 @@ class Settings(metaclass=Singleton):
                 value = True if value.lower() == "true" else False
             elif kee_title in ("QUERIES_FOLDER", "LOGS_FOLDER"):
                 value = Path(value) if value and Path(value).is_dir() else DEFAULT_QUERIES_FOLDER
+            elif kee_title == "USERS_CACHE_EXPIRATION":
+                if value.isnumeric():
+                    value = int(value)
+                else:
+                    print(f"Invalid users cache expiration '{value}', using '{self.users_cache_expiration}' days")
+                    value = self.users_cache_expiration
 
             setattr(self, attr_name, value)
 
@@ -119,6 +127,9 @@ class Settings(metaclass=Singleton):
                 value = PureWindowsPath(value).as_posix()  # always save path as posix for OSes compatibility
             elif kee_title == "EXTRACT_ENCODING":
                 self._validate_encoding_format(value)
+            elif kee_title == "USERS_CACHE_EXPIRATION":
+                if not str(value).isnumeric():
+                    raise ValueError(f"Invalid value for users cache expiration : '{value}'")
 
             info.username = value
 

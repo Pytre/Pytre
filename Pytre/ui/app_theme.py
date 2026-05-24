@@ -8,7 +8,6 @@ if not __package__:
 
 from utils import get_system
 
-
 THEME_ON: bool = False
 
 
@@ -38,12 +37,14 @@ def set_menus(menus: list[tk.Menu], first_is_menubar: bool = True):
     menus[0].empty_icon = tk.PhotoImage(width=16, height=16)
 
     for i, menu in enumerate(menus):
+        is_mainbar: bool = True if i == 0 and first_is_menubar else False
+
         menu.config(
             font=font.Font(family=font_family, size=font_size),
-            bg=ThemeColors.bg_base if i == 0 and first_is_menubar else ThemeColors.bg_primary,
+            bg=ThemeColors.bg_base if is_mainbar else ThemeColors.bg_primary,
             fg=ThemeColors.text_primary,
-            activebackground=ThemeColors.accent_light if i == 0 and first_is_menubar else ThemeColors.accent,
-            activeforeground=ThemeColors.text_primary if i == 0 and first_is_menubar else ThemeColors.text_secondary,
+            activebackground=ThemeColors.accent_light if is_mainbar else ThemeColors.accent,
+            activeforeground=ThemeColors.text_primary if is_mainbar else ThemeColors.text_secondary,
             activeborderwidth=0,
         )
 

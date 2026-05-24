@@ -254,15 +254,15 @@ class App(tk.Toplevel):
 
         self.menu_query = tk.Menu(menubar, tearoff=False)
         self.menu_query.add_command(label="Executer", state="disabled", command=self.execute_query)
+        self.menu_query.add_command(label="Recharger", command=lambda: self.refresh_queries())
+        self.menu_query.add_separator()
         self.menu_query.add_command(label="Journal...", command=lambda: self.open_logs(True))
         self.menu_query.add_command(label="Debug...", state="disabled", command=self.debug_query)
         self.menu_query.add_separator()
-        self.menu_query.add_command(label="Recharger", command=lambda: self.refresh_queries())
-        if self.user.admin:
-            self.menu_query.add_command(label="Liste orphelines...", command=self.orphan_queries)
-            self.menu_query.add_command(
-                label="Paramètrage...", command=lambda: self.open_folder(self.app_settings.queries_folder)
-            )
+        self.menu_query.add_command(
+            label="Dossier cache...",
+            command=lambda: self.open_folder(self.user_prefs.get(PrefsEnum.cache_folder)),
+        )
         self.menu_query.add_separator()
         self.menu_query.add_command(label="Quitter", command=self.app_exit)
         menubar.add_cascade(label="Requêtes", menu=self.menu_query)
@@ -275,10 +275,20 @@ class App(tk.Toplevel):
             menu_admin = tk.Menu(menubar, tearoff=False)
             menu_admin.add_command(label="Utilisateurs...", command=self.manage_users)
             menu_admin.add_command(label="Serveurs...", command=self.manage_servers)
-            menu_admin.add_command(label="Paramètres généraux...", command=self.manage_settings)
             menu_admin.add_separator()
+            menu_admin.add_command(label="Paramètres généraux...", command=self.manage_settings)
             menu_admin.add_command(label="Paramètres, mot de passe...", command=self.manage_password)
+            menu_admin.add_separator()
+
+            self.menu_admin_queries = tk.Menu(menubar, tearoff=False)
+            self.menu_admin_queries.add_command(
+                label="Dossier...",
+                command=lambda: self.open_folder(self.app_settings.queries_folder),
+            )
+            self.menu_admin_queries.add_command(label="Liste orphelines", command=self.orphan_queries)
+
             menubar.add_cascade(label="Administration", menu=menu_admin)
+            menu_admin.add_cascade(label="Requêtes", menu=self.menu_admin_queries)
 
         menu_about = tk.Menu(menubar, tearoff=False)
         menu_about.add_command(label="Ouvrir la console...", command=self.console)
@@ -289,7 +299,7 @@ class App(tk.Toplevel):
         if theme_is_on():
             menus: list[tk.Menu] = [menubar, self.menu_query, menu_prefs, menu_about]
             if self.user.admin:
-                menus.append(menu_admin)
+                menus.extend([menu_admin, self.menu_admin_queries])
             set_menus(menus)
 
     def setup_ui_paned_window(self):
@@ -589,7 +599,7 @@ class App(tk.Toplevel):
                     "\nEchec ! Le sous processus ne semble pas disponible...\n" +
                     "Lancement de la requête annulée !",
                     "end",
-                ) # fmt: skip
+                )  # fmt: skip
                 self.exec_runner.stop_requested.set()
 
             # procéder à l'arrêt si demandé
@@ -748,7 +758,7 @@ class App(tk.Toplevel):
         self.menu_query.entryconfig("Recharger", state="disable")
 
         if self.user.admin:
-            self.menu_query.entryconfig("Liste orphelines...", state="disable")
+            self.menu_admin_queries.entryconfig("Liste orphelines", state="disable")
 
         self.servers_cb["state"] = "disable"
         self.queries_entry_filter["state"] = "disable"
@@ -767,7 +777,7 @@ class App(tk.Toplevel):
         self.menu_query.entryconfig("Recharger", state="normal")
 
         if self.user.admin:
-            self.menu_query.entryconfig("Liste orphelines...", state="normal")
+            self.menu_admin_queries.entryconfig("Liste orphelines", state="normal")
 
         self.servers_cb["state"] = "readonly"
         self.queries_entry_filter["state"] = "enable"

@@ -13,23 +13,23 @@ def create_key_and_export(filename: Path) -> None:
         key_file.write(key)
 
 
-def retrieve_key(filename: Path) -> str:
+def retrieve_key(filename: Path) -> bytes:
     with open(filename, "rb") as key_file:
         key = key_file.read()
 
     return key
 
 
-def crypt_to_file(filename: Path, key: Fernet, txt: str):
+def crypt_to_file(filename: Path, key: bytes, txt: str):
     cipher = Fernet(key)
-    txt = txt.encode()
-    crypted_text = cipher.encrypt(txt)
+    text_bytes = txt.encode()
+    crypted_text = cipher.encrypt(text_bytes)
 
     with open(filename, "wb") as file:
         file.write(crypted_text)
 
 
-def decrypt_from_file(filename: Path, key: Fernet) -> str:
+def decrypt_from_file(filename: Path, key: bytes) -> str:
     with open(filename, "rb") as file:
         txt = file.read()
 

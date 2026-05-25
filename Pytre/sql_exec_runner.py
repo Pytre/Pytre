@@ -17,7 +17,7 @@ class ProcessConfig:
 
 class ExecutionRunner:
     def __init__(self):
-        self.process: Process = None
+        self.process: Process | None = None
         self.queue_task: Queue = Queue()
         self.queue_result: Queue = Queue()
         self.stop_requested: ProcEvent = proc_get_event()

@@ -33,9 +33,10 @@ class MainSettingsWindow(tk.Toplevel):
             ui_utils.ui_disable_parent(self, self.parent)
             self.transient(self.parent)
         else:
+            assert isinstance(self.master, tk.Tk)
             self.master.withdraw()
 
-        self.entries: dict[str, dict[str, str]] = {}
+        self.entries: dict[str, dict] = {}
 
         self.settings = Settings()
         self.settings.reload()
@@ -120,7 +121,7 @@ class MainSettingsWindow(tk.Toplevel):
         """Override dans les classes enfants pour sauvegarder les infos des contrôles"""
         pass
 
-    def app_exit(self, _: Event = None):
+    def app_exit(self, _: Event | None = None):
         if self.on_close_callback:
             self.on_close_callback()
 
@@ -209,14 +210,14 @@ class SettingsWindow(MainSettingsWindow):
         try:
             result = self.settings.save()
         except (LookupError, ValueError) as e:
-            messagebox.showerror(title="Mise à jour paramètres", message=e, parent=self, type=messagebox.OK)
+            messagebox.showerror(title="Mise à jour paramètres", message=str(e), parent=self)
             return
 
         if result:
             self.app_exit()
         else:
             msg = "Problème lors de l'enregistrement !"
-            messagebox.showerror(title="Mise à jour paramètres", message=msg, parent=self, type=messagebox.OK)
+            messagebox.showerror(title="Mise à jour paramètres", message=msg, parent=self)
 
 
 class UserPrefsWindow(MainSettingsWindow):
@@ -293,18 +294,18 @@ class UserPrefsWindow(MainSettingsWindow):
                         return
             except KeyError:
                 msg = f"Echec enregistrement, clé '{key}' non reconnue dans UserPrefsEnum"
-                messagebox.showwarning(title="Mise à jour paramètres", message=msg, parent=self, type=messagebox.OK)
+                messagebox.showwarning(title="Mise à jour paramètres", message=msg, parent=self)
                 return
             except (TypeError, ValueError, AttributeError) as e:
                 msg = f"Echec enregistrement '{key}' :\n{e}"
-                messagebox.showerror(title="Mise à jour paramètres", message=msg, parent=self, type=messagebox.OK)
+                messagebox.showerror(title="Mise à jour paramètres", message=msg, parent=self)
                 return
 
         if self.user_prefs.save():
             self.app_exit()
         else:
             msg = "Problème lors de l'enregistrement !"
-            messagebox.showerror(title="Mise à jour paramètres", message=msg, parent=self, type=messagebox.OK)
+            messagebox.showerror(title="Mise à jour paramètres", message=msg, parent=self)
 
 
 if __name__ == "__main__":

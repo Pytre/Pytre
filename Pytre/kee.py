@@ -1,7 +1,7 @@
 import sys
 import os
-
 from pathlib import Path
+from typing import cast
 
 from pykeepass import PyKeePass
 from pykeepass.exceptions import CredentialsError
@@ -22,28 +22,28 @@ def get_app_path() -> Path:
     # extends sys with a flag frozen = True and sets app path into _MEIPASS
 
     if getattr(sys, "frozen", False):
-        application_path = sys._MEIPASS
+        application_path: str = getattr(sys, "_MEIPASS")
     else:
-        application_path = os.path.dirname(os.path.abspath(__file__))
+        application_path: str = os.path.dirname(os.path.abspath(__file__))
 
     return Path(application_path)
 
 
 class Kee(metaclass=Singleton):
     def __init__(self, password: str = ""):
-        self.file: str = KEE_FILE
+        self.file: str | Path = KEE_FILE
         self.pwd: str = password
-        self.db: PyKeePass = None
+        self.db: PyKeePass | None = None
         self.is_open: bool = False
         self.is_ko: bool = False
         self.opening_count: int = 0
 
         self.grp_name_settings: str = "Paramètres"
-        self.grp_settings: Group = None
+        self.grp_settings: Group | None = None
         self.grp_name_servers: str = "Serveurs"
-        self.grp_servers: Group = None
+        self.grp_servers: Group | None = None
         self.grp_name_users: str = "Utilisateurs"
-        self.grp_users: Group = None
+        self.grp_users: Group | None = None
 
         if not self.pwd:
             self.pwd = self.pwd_get()
@@ -68,16 +68,20 @@ class Kee(metaclass=Singleton):
             self.is_open = True
             self.opening_count += 1
             print(f"Opening count : {self.opening_count}")
-        elif reload:
+        elif reload and self.db is not None:
             self.db.reload()
             self.opening_count += 1
             print(f"Opening count : {self.opening_count}")
 
-        self.grp_settings = self.db.find_groups(name=self.grp_name_settings, first=True)
-        self.grp_servers = self.db.find_groups(name=self.grp_name_servers, first=True)
-        self.grp_users = self.db.find_groups(name=self.grp_name_users, first=True)
+        assert self.db is not None
+        self.grp_settings = cast(Group | None, self.db.find_groups(name=self.grp_name_settings, first=True))
+        self.grp_servers = cast(Group | None, self.db.find_groups(name=self.grp_name_servers, first=True))
+        self.grp_users = cast(Group | None, self.db.find_groups(name=self.grp_name_users, first=True))
 
     def save_db(self):
+        if self.db is None:
+            raise RuntimeError("Base non ouverte, impossible de sauvegarder")
+
         try:
             self.db.save()
         except PermissionError:
@@ -103,9 +107,10 @@ class Kee(metaclass=Singleton):
         self.is_ko = False
 
     def _create_db_set_default(self, queries_folder: str = "./queries"):
+        assert self.db is not None and isinstance(self.db.root_group, Group)
         self.db.root_group.name = "settings"
 
-        grps = {"Paramètres": None, "Serveurs": None, "Utilisateurs": None}
+        grps: dict[str, Group | None] = {"Paramètres": None, "Serveurs": None, "Utilisateurs": None}
         for grp in grps.keys():
             grps[grp] = self.db.add_group(self.db.root_group, grp)
 
@@ -153,6 +158,9 @@ class Kee(metaclass=Singleton):
         return history
 
     def pwd_change(self, new_pwd: str, force_save: bool = False):
+        if self.db is None:
+            raise RuntimeError("Changement du mot de passe impossible si base non ouverte")
+
         if new_pwd == self.pwd:
             return
 

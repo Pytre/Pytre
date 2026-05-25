@@ -16,11 +16,11 @@ class LogRecord:
         self.id: int
         self.server: str
         self.query: str
-        self.start: datetime
+        self.start: datetime | None
         self.duration: int
         self.nb_rows: int
         self.parameters: dict
-        self.file: Path
+        self.file: Path | None
         self.exported: int
 
     def __repr__(self):
@@ -55,7 +55,7 @@ class LogStats:
         self.nb_run: int
         self.min_run: int
         self.max_run: int
-        self.last_run: datetime
+        self.last_run: datetime | None
 
     def __repr__(self):
         return str(
@@ -168,9 +168,8 @@ class UserDb(metaclass=Singleton):
         return True
 
     def update_db_0_to_1(self) -> bool:
+        new_version: int = 1
         try:
-            new_version: int = 1
-
             with sqlite3.connect(self.user_db) as conn:
                 conn.execute(f"PRAGMA user_version = {new_version};")
 
@@ -187,9 +186,8 @@ class UserDb(metaclass=Singleton):
             return False
 
     def update_db_1_to_2(self) -> bool:
+        new_version: int = 2
         try:
-            new_version: int = 2
-
             with sqlite3.connect(self.user_db) as conn:
                 conn.execute(f"PRAGMA user_version = {new_version};")
                 conn.execute("ALTER TABLE QUERIES_EXEC DROP COLUMN END;")
@@ -209,15 +207,15 @@ class UserDb(metaclass=Singleton):
         server_id: str,
         query: str,
         start: datetime,
-        end: datetime = None,
-        nb_rows: float = None,
-        params: dict = None,
-        file: str = None,
+        end: datetime | None = None,
+        nb_rows: float | None = None,
+        params: dict | None = None,
+        file: str | Path | None = None,
     ) -> None:
         self.check_db()
 
         log_start: str = start.isoformat()
-        log_duration: float = (end - start).total_seconds() if end else None
+        log_duration: float | None = (end - start).total_seconds() if end else None
         log_params = json.dumps(params, indent=4, ensure_ascii=False) if params else None
         log_file = str(file) if file else None  # si un objet Path est retourné il ne peut pas être insérer
 

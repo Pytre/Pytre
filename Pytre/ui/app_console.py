@@ -17,6 +17,7 @@ class ConsoleWindow(tk.Toplevel):
 
         self.parent = parent
         if self.parent is None:
+            assert isinstance(self.master, tk.Tk)
             self.master.withdraw()
 
         if hide:
@@ -110,7 +111,7 @@ class ConsoleWindow(tk.Toplevel):
             except Exception as e:
                 print(f"Error while processing console queue: {e}")
 
-    def app_exit(self, _: Event = None):
+    def app_exit(self, _: Event | None = None):
         if self.parent is None:
             self.force_stop()
         else:

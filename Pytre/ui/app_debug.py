@@ -17,6 +17,7 @@ class DebugWindow(tk.Toplevel):
 
         self.parent = parent
         if self.parent is None:
+            assert isinstance(self.master, tk.Tk)
             self.master.withdraw()
         else:
             self.focus_set()
@@ -76,7 +77,7 @@ class DebugWindow(tk.Toplevel):
     def _events_binds(self):
         self.protocol("WM_DELETE_WINDOW", self.app_exit)  # arrêter le programme quand fermeture de la fenêtre
 
-    def app_exit(self, _: Event = None):
+    def app_exit(self, _: Event | None = None):
         self.destroy()
         if self.parent is None:
             self.quit()
@@ -128,11 +129,10 @@ class DebugWindow(tk.Toplevel):
 
 
 if __name__ == "__main__":
-    filenames = (Path.cwd() / "Requetes SQL").glob("*.sql")
-    filename = ""
-    for filename in filenames:
-        break
-
-    my_query = sql_query.Query(filename)
-    my_app = DebugWindow(my_query)
-    my_app.mainloop()
+    filename = next((Path.cwd() / "Requetes SQL").glob("*.sql"), None)
+    if filename is None:
+        print("No query file to load !")
+    else:
+        my_query = sql_query.Query(filename)
+        my_app = DebugWindow(my_query)
+        my_app.mainloop()

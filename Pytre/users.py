@@ -19,12 +19,12 @@ from utils import detect_encoding
 class Users(metaclass=Singleton):
     def __init__(self):
         self.kee: Kee = Kee()
-        self.kee_grp: Group = None
-        self.kee_servers_grp: Group = None
+        self.kee_grp: Group | None = None
+        self.kee_servers_grp: Group | None = None
 
         self.groups: set[str] = set()
 
-        self.attribs_std: tuple[str] = ("username", "title", "admin", "msg_login")
+        self.attribs_std: tuple[str, ...] = ("username", "title", "admin", "msg_login")
         self.attribs_cust: list[str] = list()  # liste des attributs spéciaux
 
         self.get_all_groups()
@@ -38,6 +38,9 @@ class Users(metaclass=Singleton):
         return True
 
     def users_admin_exists(self, reload: bool = False) -> bool:
+        if self.kee_grp is None:
+            raise ValueError("No KeePass group selected, cannot detect if admin exists")
+
         self.open_db(reload)
 
         admin_exists = False
@@ -51,6 +54,9 @@ class Users(metaclass=Singleton):
         return admin_exists
 
     def get_all_users(self, reload: bool = True) -> list:
+        if self.kee_grp is None:
+            raise ValueError("No KeePass group selected, cannot get all users")
+
         self.open_db(reload)
 
         u_list: list[User] = []
@@ -77,6 +83,9 @@ class Users(metaclass=Singleton):
         return self.groups
 
     def get_cust_attribs_list(self, reload: bool = False) -> list[str]:
+        if self.kee_grp is None:
+            raise ValueError("No KeePass group selected, cannot get custom attribs list")
+
         self.open_db(reload)
 
         u_entry: Entry | None = None
@@ -98,7 +107,10 @@ class Users(metaclass=Singleton):
 
         return attribs_set
 
-    def users_add_groups(self, usernames: list[str], groups: list[str]):
+    def users_add_groups(self, usernames: list[str] | tuple[str, ...], groups: list[str]):
+        if self.kee_grp is None:
+            raise ValueError("No KeePass group selected, cannot add users groups")
+
         self.open_db()
 
         save: bool = False
@@ -119,7 +131,10 @@ class Users(metaclass=Singleton):
         if save:
             self.kee.save_db()
 
-    def users_remove_groups(self, usernames: list[str], groups: list[str]):
+    def users_remove_groups(self, usernames: list[str] | tuple[str, ...], groups: list[str]):
+        if self.kee_grp is None:
+            raise ValueError("No KeePass group selected, cannot remove users groups")
+
         self.open_db()
 
         save: bool = False
@@ -138,13 +153,16 @@ class Users(metaclass=Singleton):
         if save:
             self.kee.save_db()
 
-    def modify_custom_attribs(self, fields: list[str], new_value: str = None):
+    def modify_custom_attribs(self, fields: list[str], new_value: str | None = None):
         """
         Modify custom fields for all users
         Args:
             fields (list[str]): List of custom field names to modify or create.
             new_value (str, optional): None set to an empty string if the field doesn't exist.
         """
+
+        if self.kee_grp is None:
+            raise ValueError("No KeePass group selected, cannot modify custom attribs")
 
         self.open_db()
 
@@ -166,6 +184,9 @@ class Users(metaclass=Singleton):
         self.attribs_cust = list(set(self.attribs_cust + fields))
 
     def remove_custom_attribs(self, fields: list[str]):
+        if self.kee_grp is None:
+            raise ValueError("No KeePass group selected, cannot remove custom attribs")
+
         self.open_db()
 
         save: bool = False
@@ -181,7 +202,10 @@ class Users(metaclass=Singleton):
 
         self.attribs_cust = [attr for attr in self.attribs_cust if attr not in fields]
 
-    def csv_import(self, filepath: Path, delimiter: str = ";", quotechar: str = '"') -> bool:
+    def csv_import(self, filepath: Path | str, delimiter: str = ";", quotechar: str = '"') -> bool:
+        if self.kee_grp is None:
+            raise ValueError("No KeePass group selected, cannot import users")
+
         if not (delimiter) or len(delimiter) != 1 or delimiter == quotechar:
             raise ValueError(f"Delimiter must be a single character and different from quote character ({quotechar})")
         if not (quotechar) or len(quotechar) != 1:
@@ -190,12 +214,14 @@ class Users(metaclass=Singleton):
             raise FileNotFoundError(f"File to import users does not exist : {filepath}")
 
         self.open_db(True)
+        if self.kee.db is None:
+            raise RuntimeError("Database not opened, can't import csv")
 
         # dictionnaire des utilisateurs déjà existants
         entries_dict = {}
         u_entry: Entry
         for u_entry in self.kee_grp.entries:
-            entries_dict[u_entry.username.upper()] = u_entry
+            entries_dict[(u_entry.username or "").upper()] = u_entry
 
         # colonnes attendues dans le fichier à importer
         cols_std = ["id", "description", "admin", "groups", "login message"]
@@ -212,7 +238,7 @@ class Users(metaclass=Singleton):
             csv_reader = csv.DictReader(csv_file, delimiter=delimiter, quotechar=quotechar)
 
             # normalisation des fieldnames pour les colonnes standard
-            csv_reader.fieldnames = [header.strip().lower() for header in csv_reader.fieldnames]
+            csv_reader.fieldnames = [header.strip().lower() for header in csv_reader.fieldnames or []]
 
             # vérification de la présence des colonnes
             missing_cols = [col for col in cols_required if col not in csv_reader.fieldnames]
@@ -262,8 +288,11 @@ class Users(metaclass=Singleton):
 
             return True
 
-    def csv_export(self, filepath: Path, delimiter: str = ";", overwrite: bool = False) -> bool:
+    def csv_export(self, filepath: Path | str, delimiter: str = ";", overwrite: bool = False) -> bool:
         quotechar = '"'
+
+        if self.kee_grp is None:
+            raise ValueError("No KeePass group selected, cannot export users")
 
         if not delimiter or len(delimiter) != 1 or delimiter == quotechar:
             raise ValueError(f"Delimiter must be a single character and different from quote character ({quotechar})")
@@ -277,7 +306,7 @@ class Users(metaclass=Singleton):
         self.open_db(True)
         u_entry: Entry | None
         for u_entry in self.kee_grp.entries:
-            row = [u_entry.username, u_entry.title]
+            row = [u_entry.username or "", u_entry.title or ""]
 
             # utilisation de csv.writer pour joindre les groupes et gérer les caractères similaires au delimiter
             tags = u_entry.tags if u_entry.tags else []
@@ -322,6 +351,9 @@ class Users(metaclass=Singleton):
         return domain_and_name
 
     def find_entry_by_username(self, username: str) -> Entry | None:
+        if self.kee_grp is None:
+            raise ValueError("No KeePass group selected, cannot find user entry by username")
+
         for entry in self.kee_grp.entries:
             if entry.username and username.upper() == entry.username.upper():
                 return entry
@@ -329,12 +361,14 @@ class Users(metaclass=Singleton):
         return None
 
     def find_user_by_uuid(self, uuid: str) -> User | None:
-        entry: Entry = self.kee.db.find_entries(uuid=UUID(uuid), first=True)
-        return User(entry=entry) if entry else None
+        if self.kee.db is None:
+            raise RuntimeError("Database not opened, can't find user by uuid")
+        entry = self.kee.db.find_entries(uuid=UUID(uuid), first=True)
+        return User(entry=entry) if entry and isinstance(entry, Entry) else None
 
 
 class User:
-    def __init__(self, username: str = "", entry: Entry = None, detect_user: bool = True):
+    def __init__(self, username: str = "", entry: Entry | None = None, detect_user: bool = True):
         """
         si pas de username et d'entry, et que detect_user est faux
         alors pas de chrgmt à partir de la base keepass
@@ -385,7 +419,7 @@ class User:
         if not self.users.open_db():
             return
 
-        u_entry: Entry = self.users.find_entry_by_username(self.username)
+        u_entry: Entry | None = self.users.find_entry_by_username(self.username)
         if u_entry:
             self._load_from_entry(u_entry)
 
@@ -398,8 +432,8 @@ class User:
 
         # récup propriétés
         self.uuid = str(u_entry.uuid)
-        self.username = u_entry.username
-        self.title = u_entry.title if u_entry.title else ""
+        self.username = str(u_entry.username)
+        self.title = str(u_entry.title or "")
         for property in u_entry.custom_properties:
             value = u_entry.get_custom_property(property)
             value = value if value else ""
@@ -420,10 +454,15 @@ class User:
         return True
 
     def save(self) -> bool:
+        if self.users.kee_grp is None:
+            raise ValueError("No KeePass group selected, cannot save user")
+
         if not self.username or self.username == "":
             raise ValueError("User must have an Id / Username")
 
         self.users.open_db(True)
+        if self.users.kee.db is None:
+            raise RuntimeError("Database not opened, can't save it")
 
         # contrôle
         if next(
@@ -432,10 +471,12 @@ class User:
             raise ValueError(f"{self.username} est déjà utilisé comme identifiant")
 
         # récupération d'une entrée pour la sauvegarde
-        u_entry: Entry = self.users.kee.db.find_entries(uuid=UUID(self.uuid), first=True) if self.uuid else None
+        u_entry = self.users.kee.db.find_entries(uuid=UUID(self.uuid), first=True) if self.uuid else None
         if not u_entry:
-            u_entry: Entry = self.users.kee.db.add_entry(self.users.kee_grp, "", "", "")
+            u_entry = self.users.kee.db.add_entry(self.users.kee_grp, "", "", "")
             self.uuid = str(u_entry.uuid)
+        elif not isinstance(u_entry, Entry):
+            raise TypeError("Unexpected type from find_entries() with first=True")
 
         # mise à jour de l'entrée
         u_entry.username = self.username
@@ -460,10 +501,14 @@ class User:
 
     def delete(self) -> bool:
         self.users.open_db()
+        if self.users.kee.db is None:
+            raise RuntimeError("Database not opened, can't delete user")
 
-        u_entry: Entry = self.users.kee.db.find_entries(uuid=UUID(self.uuid), first=True)
+        u_entry = self.users.kee.db.find_entries(uuid=UUID(self.uuid), first=True)
         if u_entry is None:
             raise LookupError("User not found")
+        elif not isinstance(u_entry, Entry):
+            raise TypeError("Unexpected type from find_entries() with first=True")
 
         u_entry.delete()
         self.users.kee.save_db()
@@ -478,7 +523,7 @@ class CurrentUser(User, metaclass=Singleton):
 if __name__ == "__main__":
     user = CurrentUser()
 
-    print(f"{'='*50}\nSettings / Utilisateur courant\n{'='*50}")
+    print(f"{'=' * 50}\nSettings / Utilisateur courant\n{'=' * 50}")
     for key, val in user.to_dict().items():
         print(f"- {key}: {val}")
 

@@ -18,7 +18,7 @@ class SqlTypeConverter:
     def to_cmd(self, type_name: str, string_to_convert: str, type_args=None) -> str | int:
         return self._to_cmd.transform(type_name, string_to_convert, type_args)
 
-    def to_display(self, type_name: str, value_to_convert: str) -> str:
+    def to_display(self, type_name: str, value_to_convert: str | int) -> str:
         return self._to_display.transform(type_name, value_to_convert)
 
     def from_result(self, value) -> str:
@@ -109,7 +109,7 @@ class _ToCmd:
 
         raise ValueError(f"{string_to_convert} n'est pas une date valide (jj/mm/aaaa hh:mm:ss)")
 
-    def _str_to_nvarchar(self, string_to_convert: str, type_args: list[str] = None) -> str:
+    def _str_to_nvarchar(self, string_to_convert: str, type_args: list[str] | None = None) -> str:
         max_size = 255 if not type_args or type_args[0] == "max" else int(type_args[0])
 
         if len(string_to_convert) > max_size:
@@ -117,7 +117,7 @@ class _ToCmd:
 
         return string_to_convert
 
-    def _str_tochar(self, string_to_convert: str, params: list[str] = None) -> str:
+    def _str_tochar(self, string_to_convert: str, params: list[str] | None = None) -> str:
         size = int(params[0]) if params else 0
 
         if size == 0:
@@ -140,14 +140,14 @@ class _ToDisplay:
         self.parent: SqlTypeConverter = parent
         self.func_dict: dict = self._func_dict()
 
-    def transform(self, type_name: str, value_to_convert: str) -> str:
+    def transform(self, type_name: str, value_to_convert: str | int) -> str:
         if value_to_convert == "":
             return self._convert_to_null_value(type_name)
 
         if self.func_dict.get(type_name):
             return self.func_dict[type_name](value_to_convert)
 
-        return value_to_convert
+        return str(value_to_convert)
 
     def _func_dict(self) -> dict:
         return {"date": self._date_to_str, "datetime": self._datetime_to_str}

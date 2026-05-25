@@ -2,6 +2,7 @@ import math
 import tkinter as tk
 from tkinter import Event
 from datetime import datetime, timedelta
+from typing import cast
 
 if not __package__:
     import syspath_insert  # noqa: F401  # disable unused-import warning
@@ -11,17 +12,17 @@ from ui.app_theme import ThemeColors
 
 class MsgOverlay:
     @classmethod
-    def display(cls, parent: tk.Tk, message: str = "", wait_ms: int = 0) -> "MsgOverlay":
+    def display(cls, parent: tk.Toplevel, message: str = "", wait_ms: int = 0) -> "MsgOverlay":
         """wait_ms : show overlay only after the specified number of ms have elapsed"""
         overlay = MsgOverlay(parent)
         overlay.show(message, wait_ms)
         return overlay
 
-    def __init__(self, parent: tk.Tk):
-        self.parent: tk.Tk = parent
+    def __init__(self, parent: tk.Toplevel):
+        self.parent: tk.Toplevel = parent
         self.can_show: bool = False
         self.spinner_running: bool = False
-        self.running_since: datetime = None
+        self.running_since: datetime | None = None
         self.show_after_id: str = ""
 
         self.parent_width: int = 0
@@ -94,7 +95,7 @@ class MsgOverlay:
 
         self.parent.after(150, self._spinner_animate)
 
-    def _setup_size(self, event: Event = None):
+    def _setup_size(self, event: Event | None = None):
         if not self.spinner_running:
             return
 
@@ -155,7 +156,7 @@ class MsgOverlay:
             wait_ms = int((self.running_since + timedelta(milliseconds=750) - datetime.now()).total_seconds() * 1000)
         if wait_ms > 0:
             self.overlay.after(wait_ms, self.hide, destroy, callback)
-            return
+            return True
 
         # if overlay was waiting to be shown, cancel it's future display
         if self.show_after_id:
@@ -186,7 +187,7 @@ if __name__ == "__main__":
     root.geometry("600x400")
 
     def start_calc():
-        overlay = MsgOverlay.display(root, "Processing...")
+        overlay = MsgOverlay.display(cast(tk.Toplevel, root), "Processing...")
         root.after(2000, overlay.hide)
 
     button = tk.Button(root, text="Launch task", command=start_calc)

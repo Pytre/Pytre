@@ -18,8 +18,8 @@ from about import APP_NAME, APP_VERSION
 class Servers(metaclass=Singleton):
     def __init__(self):
         self.kee: Kee = Kee()
-        self.kee_grp: Group = None
-        self.kee_users_grp: Group = None
+        self.kee_grp: Group | None = None
+        self.kee_users_grp: Group | None = None
 
         self.servers_dict: dict[str, Server] = {}
         self.groups: set[str] = set()
@@ -38,17 +38,17 @@ class Servers(metaclass=Singleton):
         self.kee_users_grp = self.kee.grp_users
         return True
 
-    def get_all_servers(self, reload: bool = False, grp_filter: list[str] = None) -> dict:
+    def get_all_servers(self, reload: bool = False, grp_filter: list[str] | None = None) -> dict:
         self.open_db(reload)
 
         if self.kee_grp is None:
             return {}
 
-        self.servers_dict = {}
+        self.servers_dict: dict[str, Server] = {}
         for entry in self.kee_grp.entries:
             server = Server(entry=entry, servers=self)
             if grp_filter is None or not server.grp_authorized or set(server.grp_authorized) & set(grp_filter):
-                self.servers_dict[entry.title] = Server(entry=entry, servers=self)
+                self.servers_dict[str(entry.title)] = Server(entry=entry, servers=self)
 
         return self.servers_dict
 
@@ -65,7 +65,7 @@ class Servers(metaclass=Singleton):
 
         return self.groups
 
-    def csv_import(self, filepath: Path, delimiter: str = ";", quotechar: str = '"') -> bool:
+    def csv_import(self, filepath: Path | str, delimiter: str = ";", quotechar: str = '"') -> bool:
         if not (delimiter) or len(delimiter) != 1 or delimiter == quotechar:
             raise ValueError(f"Delimiter must be a single character and different from quote character ({quotechar})")
         if not (quotechar) or len(quotechar) != 1:
@@ -74,6 +74,8 @@ class Servers(metaclass=Singleton):
             raise FileNotFoundError(f"File to import servers does not exist : {filepath}")
 
         self.open_db(True)
+        if self.kee.db is None:
+            raise RuntimeError("Database not opened, can't import csv")
 
         cols_dict = {}
         for i, val in enumerate(self.cols_std + self.cols_cust):
@@ -97,8 +99,9 @@ class Servers(metaclass=Singleton):
                         raise KeyError(f"Colonnes manquantes : {', '.join(missing_cols)}")
 
                 # récup entry si déjà ou existant ou création d'une nouvelle
-                s_entry: Entry
-                s_entry = next((s for s in self.kee_grp.entries if csv_row["id"].upper() == s.title.upper()), None)
+                s_entry: Entry | None = None
+                if self.kee_grp:
+                    s_entry = next((s for s in self.kee_grp.entries if csv_row["id"].upper() == s.title.upper()), None)  # type: ignore
                 if s_entry is None:
                     s_entry = self.kee.db.add_entry(self.kee_grp, "", "", "")
 
@@ -126,8 +129,11 @@ class Servers(metaclass=Singleton):
 
             return True
 
-    def csv_export(self, filepath: Path, delimiter: str = ";", overwrite: bool = False) -> bool:
+    def csv_export(self, filepath: Path | str, delimiter: str = ";", overwrite: bool = False) -> bool:
         quotechar = '"'
+
+        if self.kee_grp is None:
+            raise ValueError("No KeePass group selected, cannot export servers")
 
         if not delimiter or len(delimiter) != 1 or delimiter == quotechar:
             raise ValueError(f"Delimiter must be a single character and different from quote character ({quotechar})")
@@ -136,9 +142,8 @@ class Servers(metaclass=Singleton):
 
         rows = [self.cols_std[:-1] + self.cols_cust + [self.cols_std[-1]]]
         self.open_db(True)
-        s_entry: Entry | None
         for s_entry in self.kee_grp.entries:
-            row = [s_entry.title, s_entry.notes, s_entry.username, s_entry.password]
+            row = [s_entry.title or "", s_entry.notes or "", s_entry.username or "", s_entry.password or ""]
 
             for item in self.cols_cust:
                 value = s_entry.get_custom_property(item)
@@ -165,6 +170,16 @@ class Servers(metaclass=Singleton):
 
         return True
 
+    def find_entry_by_uuid(self, uuid: str) -> Entry | None:
+        if self.kee.db is None:
+            raise RuntimeError("Database not opened, can't find user by uuid")
+        if self.kee_grp is None:
+            raise ValueError("No KeePass group selected, cannot find server entry by uuid")
+
+        entry = self.kee.db.find_entries(uuid=UUID(uuid), first=True)
+
+        return entry if entry and isinstance(entry, Entry) else None
+
 
 class ServerType(Enum):
     mssql = "SQL Server"
@@ -172,7 +187,7 @@ class ServerType(Enum):
 
 
 class Server:
-    def __init__(self, entry: Entry = None, servers: Servers = None):
+    def __init__(self, entry: Entry | None = None, servers: Servers | None = None):
         self.servers: Servers = servers or Servers()
 
         self.uuid: str = ""
@@ -222,6 +237,8 @@ class Server:
             return self._conn_mssql()
         elif self.type == ServerType.postgre.name:
             return self._conn_postgre()
+        else:
+            raise ValueError("Unknown server type, getting a connection is not possible")
 
     def _conn_mssql(self) -> pymssql.Connection:
         conn_params = {
@@ -273,15 +290,17 @@ class Server:
 
     def _load_from_entry(self, s_entry: Entry):
         self.uuid = str(s_entry.uuid)
-        self.id = s_entry.title
-        self.description = val if (val := s_entry.notes) is not None else ""
+        self.id = str(s_entry.title)
+        self.description = str(s_entry.notes or "")
 
-        self.user = val if (val := s_entry.username) is not None else ""
-        self.password = val if (val := s_entry.password) is not None else ""
+        self.user = str(s_entry.username or "")
+        self.password = str(s_entry.password or "")
 
         for property in s_entry.custom_properties:
-            val: str = val if (val := s_entry.get_custom_property(property)) is not None else ""
-            if property == "charset":
+            val = val if (val := s_entry.get_custom_property(property)) is not None else ""
+            if not isinstance(val, str):
+                pass
+            elif property == "charset":
                 val = val.upper() if val else self.charset
             elif property == "login_timeout":
                 val = int(val) if val.isdigit() else self.login_timeout
@@ -306,23 +325,29 @@ class Server:
 
     def reload(self) -> None:
         self.servers.open_db(True)
-        self.load()
+        entry = self.servers.find_entry_by_uuid(self.uuid)
+        if entry is not None:
+            self._load_from_entry(entry)
 
     def save(self) -> bool:
         if not self.id or self.id == "":
             raise ValueError("Server must have an id")
 
         self.servers.open_db(True)
+        if self.servers.kee.db is None:
+            raise RuntimeError("Database not opened, can't save it")
 
         # contrôle
         if [s for s in self.servers.get_all_servers().values() if s.id == self.id and not s.uuid == self.uuid]:
             raise ValueError(f"{self.id} est déjà utilisé comme identifiant")
 
         # récupération d'une entrée pour la sauvegarde
-        entry: Entry = self.servers.kee.db.find_entries(uuid=UUID(self.uuid), first=True) if self.uuid else None
+        entry = self.servers.kee.db.find_entries(uuid=UUID(self.uuid), first=True) if self.uuid else None
         if not entry:
-            entry: Entry = self.servers.kee.db.add_entry(self.servers.kee_grp, "", "", "")
+            entry = self.servers.kee.db.add_entry(self.servers.kee_grp, "", "", "")
             self.uuid = str(entry.uuid)
+        elif not isinstance(entry, Entry):
+            raise TypeError("Unexpected type from find_entries() with first=True")
 
         # mise à jour de l'entrée
         entry.title = self.id
@@ -350,10 +375,14 @@ class Server:
 
     def delete(self) -> bool:
         self.servers.open_db()
+        if self.servers.kee.db is None:
+            raise RuntimeError("Database not opened, can't delete server")
 
-        s_entry: Entry = self.servers.kee.db.find_entries(uuid=UUID(self.uuid), first=True)
+        s_entry = self.servers.kee.db.find_entries(uuid=UUID(self.uuid), first=True)
         if s_entry is None:
             raise LookupError("Server not found")
+        elif not isinstance(s_entry, Entry):
+            raise TypeError("Unexpected type from find_entries() with first=True")
 
         s_entry.delete()
         self.servers.kee.save_db()

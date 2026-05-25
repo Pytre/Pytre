@@ -14,7 +14,7 @@ def startfile(filename: str | Path) -> None:
     system: str = platform.system()
 
     if system == "Windows":
-        os.startfile(str(validated_filename))
+        os.startfile(str(validated_filename))  # type: ignore
         return
     elif system == "Darwin":  # macOS
         subprocess.Popen(["open", str(validated_filename)])

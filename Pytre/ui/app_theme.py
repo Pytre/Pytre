@@ -34,7 +34,7 @@ def set_menus(menus: list[tk.Menu], first_is_menubar: bool = True):
     font_size = default_font.actual("size")
 
     # icon in first menu to avoid being garbage collected
-    menus[0].empty_icon = tk.PhotoImage(width=16, height=16)
+    setattr(menus[0], "empty_icon", tk.PhotoImage(width=16, height=16))
 
     for i, menu in enumerate(menus):
         is_mainbar: bool = True if i == 0 and first_is_menubar else False
@@ -52,10 +52,11 @@ def set_menus(menus: list[tk.Menu], first_is_menubar: bool = True):
         # on linux if there is no icon, no space is reserved for them
         if i == 0 and first_is_menubar:
             continue
-        for index in range(menu.index("end") + 1):
+        for index in range((menu.index("end") or 0) + 1):
             try:
                 if not menu.entrycget(index, "image"):
-                    menu.entryconfig(index, image=menus[0].empty_icon, compound="left")
+                    empty_icon = getattr(menus[0], "empty_icon")
+                    menu.entryconfig(index, image=empty_icon, compound="left")
             except tk.TclError:
                 pass
 

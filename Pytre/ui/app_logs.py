@@ -27,6 +27,7 @@ class LogsWindow(tk.Toplevel):
         if self.parent:
             self.focus_set()
         else:
+            assert isinstance(self.master, tk.Tk)
             self.master.withdraw()
 
         self.user_db: logs_user.UserDb = logs_user.UserDb()
@@ -34,7 +35,7 @@ class LogsWindow(tk.Toplevel):
         self.query_name: str = query_name
         self.saved_query_name: str = ""  # pour pouvoir refiltrer après tout montrer
         self.stats_mode: bool = False
-        self.sort_info: dict[str, str | bool] = {"col": None, "reverse": None}
+        self.sort_info: dict[str, str | bool | None] = {"col": None, "reverse": None}
 
         set_theme(self)
         self._setup_ui()
@@ -173,9 +174,9 @@ class LogsWindow(tk.Toplevel):
                 self.tree.column(col, anchor=val)
 
         xbar = ttk.Scrollbar(self.tree_frame, orient=tk.HORIZONTAL, command=self.tree.xview)
-        self.tree.configure(xscroll=xbar.set)
+        self.tree.configure(xscrollcommand=xbar.set)
         ybar = ttk.Scrollbar(self.tree_frame, orient=tk.VERTICAL, command=self.tree.yview)
-        self.tree.configure(yscroll=ybar.set)
+        self.tree.configure(yscrollcommand=ybar.set)
 
         self.tree.grid(row=0, column=0, columnspan=1, padx=2, pady=2, sticky="nswe")
         xbar.grid(row=1, column=0, sticky="we")
@@ -218,7 +219,7 @@ class LogsWindow(tk.Toplevel):
     # ------------------------------------------------------------------------------------------
     # Mise à jour interface
     # ------------------------------------------------------------------------------------------
-    def set_cols_to_display(self) -> list:
+    def set_cols_to_display(self):
         cols_grp: dict[str, dict] = self._tree_cols_grp()
 
         display_cols: list[str] = list(cols_grp["common"].keys())
@@ -246,7 +247,7 @@ class LogsWindow(tk.Toplevel):
         self.set_cols_to_display()
 
         cols_to_update: dict = self.get_cols_to_update()
-        rows_to_insert: list[logs_user.LogRecord | logs_user.LogStats] = []
+        rows_to_insert = []
         rows_to_insert = (
             self.user_db.get_stats() if self.stats_mode else self.user_db.get_last_records(self.query_name)
         )
@@ -254,7 +255,12 @@ class LogsWindow(tk.Toplevel):
         count: int = 0
         for rows in rows_to_insert:
             count += 1
-            iid = count if self.stats_mode else rows.id
+
+            if self.stats_mode:
+                iid = count
+            else:
+                assert isinstance(rows, logs_user.LogRecord)
+                iid = rows.id
             self.tree.insert("", tk.END, iid=iid)
 
             for col, val in cols_to_update.items():
@@ -265,14 +271,14 @@ class LogsWindow(tk.Toplevel):
 
                 # Formatage des valeurs
                 if col in ("date", "last_date"):
-                    value = datetime.strftime(value, DATE_FORMAT)
+                    value = datetime.strftime(value, DATE_FORMAT) if isinstance(value, datetime) else ""
                 elif col in ("time", "last_time"):
-                    value = datetime.strftime(value, TIME_FORMAT)
+                    value = datetime.strftime(value, TIME_FORMAT) if isinstance(value, datetime) else ""
                 elif col in ("duration", "min_run", "max_run"):
-                    value = self.duration_format(value)
+                    value = self.duration_format(value) if isinstance(value, float | int) else ""
                 elif col == "file":
                     nb_rows = getattr(rows, "nb_rows", "")
-                    value = "" if nb_rows == 0 or Path(value).exists() else "\U0000274c"
+                    value = "" if nb_rows == 0 or (isinstance(value, str) and Path(value).exists()) else "\U0000274c"
                 elif col in ("num", "nb_rows", "nb_run"):
                     value = format(value, ",").replace(",", " ")
 
@@ -346,8 +352,9 @@ class LogsWindow(tk.Toplevel):
             stats_txt = f"Nombre d'execution : {stats.nb_run}"
             stats_txt += f"\nDurée mini : {self.duration_format(stats.min_run)}"
             stats_txt += f"\nDurée maxi : {self.duration_format(stats.max_run)}"
-            stats_txt += f"\nDernière execution : le {datetime.strftime(stats.last_run, DATE_FORMAT)}"
-            stats_txt += f" à {datetime.strftime(stats.last_run, TIME_FORMAT)}"
+            if isinstance(stats.last_run, datetime):
+                stats_txt += f"\nDernière execution : le {datetime.strftime(stats.last_run, DATE_FORMAT)}"
+                stats_txt += f" à {datetime.strftime(stats.last_run, TIME_FORMAT)}"
 
         self.textbox["state"] = "normal"
         self.textbox.replace("1.0", "end", stats_txt)
@@ -357,6 +364,7 @@ class LogsWindow(tk.Toplevel):
         item = self.tree.selection()
         params_raw: dict = {}
         json_txt: str = ""
+        len_max: int = 0
 
         if self.stats_mode:
             self.show_query_stats()
@@ -408,7 +416,7 @@ class LogsWindow(tk.Toplevel):
 
         self.tree_refresh()
 
-    def app_exit(self, _: Event = None):
+    def app_exit(self, _: Event | None = None):
         self.destroy()
         if self.parent is None:
             self.quit()
@@ -423,7 +431,7 @@ class LogsWindow(tk.Toplevel):
         return text
 
     def show_file(self, only_reveal: bool = False):
-        file: Path = self.get_extract_path()
+        file: Path | None = self.get_extract_path()
         if not file:
             return
         elif not file.exists():
@@ -434,12 +442,13 @@ class LogsWindow(tk.Toplevel):
             utils.startfile(file)
 
     def save_as(self):
-        src: Path = self.get_extract_path()
-        save_as(self, src)
+        src: Path | None = self.get_extract_path()
+        if src:
+            save_as(self, src)
 
     def get_extract_path(self) -> Path | None:
         item = self.tree.selection()
-        file: Path = None
+        file: Path | None = None
         if item:
             file = Path(self.tree.item(item[0])["values"][self.col_idx("fullpath")])
 

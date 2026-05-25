@@ -15,17 +15,17 @@ from pathlib import Path
 from singleton_metaclass import Singleton
 
 
-CENTRAL_DB: Path = "Pytre_Central_Logs.db"
+CENTRAL_DB: Path | str = "Pytre_Central_Logs.db"
 LATEST_VERSION: int = 2  # latest version model of central database
 
 
 class CentralLogs(metaclass=Singleton):
     def __init__(self, logs_folder: Path = Path.cwd() / "logs"):
-        self.sync_thread = None
+        self.sync_thread: Thread | None = None
         self.logs_folder: Path = Path(logs_folder)
         self.central_db: Path = self.logs_folder / CENTRAL_DB
 
-        self.user_db: Path = None
+        self.user_db: Path | None = None
         self.user_id: str = ""
         self.user_name: str = ""
 
@@ -68,7 +68,7 @@ class CentralLogs(metaclass=Singleton):
     # ------------------------------------------------------------------------------------------
     # Database management
     # ------------------------------------------------------------------------------------------
-    def create_db(self):
+    def create_db(self) -> bool:
         try:
             with sqlite3.connect(f"file:{self.central_db}?mode=rwc", uri=True) as conn:
                 conn.execute(f"PRAGMA user_version = {self.latest_version};")
@@ -95,6 +95,9 @@ class CentralLogs(metaclass=Singleton):
                 self.central_version = self.latest_version
         except sqlite3.OperationalError as e:
             print(f"The central SQLite log database could not be created: {e}")
+            return False
+
+        return True
 
     def update_db(self) -> bool:
         if self.update_already_run:
@@ -117,9 +120,8 @@ class CentralLogs(metaclass=Singleton):
         return True
 
     def update_db_0_to_1(self) -> bool:
+        new_version: int = 1
         try:
-            new_version: int = 1
-
             with sqlite3.connect(f"file:{self.central_db}?mode=rw", uri=True) as conn:
                 conn.execute(f"PRAGMA user_version = {new_version};")
                 conn.execute("ALTER TABLE QUERIES_EXEC ADD COLUMN SERVER_ID TEXT;")
@@ -136,9 +138,8 @@ class CentralLogs(metaclass=Singleton):
             return False
 
     def update_db_1_to_2(self) -> bool:
+        new_version: int = 2
         try:
-            new_version: int = 2
-
             with sqlite3.connect(self.central_db) as conn:
                 conn.execute(f"PRAGMA user_version = {new_version};")
                 conn.execute("ALTER TABLE QUERIES_EXEC DROP COLUMN END;")
@@ -196,7 +197,7 @@ class CentralLogs(metaclass=Singleton):
             self.user_id = user_id
             self.user_name = user_name
 
-            self.sync_thread: Thread = Thread(target=self.sync_thread_start, daemon=True)
+            self.sync_thread = Thread(target=self.sync_thread_start, daemon=True)
             self.sync_thread.start()
 
     def stop_sync(self, timeout=5) -> bool:
@@ -261,7 +262,7 @@ class FileDriven(CentralLogs):
             print(f"Next attempt in {delay * jitter_factor:.2f} sec")
             time.sleep(delay * jitter_factor)
 
-        self.sync_thread = None
+        self.sync_thread: Thread | None = None
         print("Thread logs sync ending")
 
     def synchronization_attempt(self) -> bool:
@@ -292,6 +293,8 @@ class FileDriven(CentralLogs):
                 print(f"Error : {e}")
             finally:
                 self.release_lock()
+
+        return True
 
     # ------------------------------------------------------------------------------------------
     # Functions to export data to sync into files
@@ -482,11 +485,11 @@ class FileDriven(CentralLogs):
 
                 cursor.close()
                 return True
-        except sqlite3.DatabaseError as e:
-            print(f"Database error while accessing central database: {e}")
-            return False
         except sqlite3.OperationalError as e:
             print(f"Operational error while writing to central database: {e}")
+            return False
+        except sqlite3.DatabaseError as e:
+            print(f"Database error while accessing central database: {e}")
             return False
         except Exception as e:
             print(f"Unexpected error while syncing to central database: {e}")
@@ -565,6 +568,8 @@ class FileDriven(CentralLogs):
         except Exception as e:
             print(f"Error while breaking/checking stale lock: {e}")
             return False
+
+        return True
 
     def release_lock(self) -> bool:
         if self.sync_locked_file.exists():

@@ -12,11 +12,12 @@ from ui.app_theme import set_theme, ThemeColors, theme_is_on
 
 
 class PasswordWindow(tk.Toplevel):
-    def __init__(self, parent: tk.Tk | None = None):
+    def __init__(self, parent: tk.Toplevel | None = None):
         super().__init__()
 
-        self.parent: tk.Tk = parent
+        self.parent: tk.Toplevel | None = parent
         if not self.parent:
+            assert isinstance(self.master, tk.Tk)
             self.master.withdraw()
         else:
             self.focus_set()
@@ -84,7 +85,7 @@ class PasswordWindow(tk.Toplevel):
         if theme_is_on():
             self.listbox.configure(selectbackground=ThemeColors.accent, selectforeground=ThemeColors.text_secondary)
         ybar = ttk.Scrollbar(self.history_frame, orient="vertical", command=self.listbox.yview)
-        self.listbox.configure(yscroll=ybar.set)
+        self.listbox.configure(yscrollcommand=ybar.set)
 
         self.listbox.grid(row=0, column=0, padx=2, pady=2, sticky="nswe")
         ybar.grid(row=0, column=1, padx=2, pady=2, sticky="nse")
@@ -142,7 +143,7 @@ class PasswordWindow(tk.Toplevel):
         self.kee.pwd_change(new_pwd)
         self.close()
 
-    def close(self, _: Event = None):
+    def close(self, _: Event | None = None):
         if self.parent:
             ui_utils.ui_undisable_parent(self, self.parent)
             self.parent.focus_set()

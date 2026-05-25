@@ -15,7 +15,7 @@ DEFAULT_QUERIES_FOLDER = Path.home() / "Queries"
 class Settings(metaclass=Singleton):
     def __init__(self):
         self.kee: Kee = Kee()
-        self.kee_grp: Group = None
+        self.kee_grp: Group|None = None
 
         self.app_path: Path = get_app_path()
         self.default_encoding: str = "utf-8-sig"  # format à utiliser par défaut
@@ -71,7 +71,7 @@ class Settings(metaclass=Singleton):
             return
 
         for kee_title, attr_name in self._params.items():
-            info: Entry = self.kee.db.find_entries(title=kee_title, group=self.kee_grp, first=True)
+            info: Entry = self.kee.db.find_entries(title=kee_title, group=self.kee_grp, first=True) # type: ignore
             if not info:
                 continue
 
@@ -116,7 +116,7 @@ class Settings(metaclass=Singleton):
         self.open_db()
 
         for kee_title, attr_name in self._params.items():
-            info: Entry = self.kee.db.find_entries(title=kee_title, group=self.kee_grp, first=True)
+            info: Entry = self.kee.db.find_entries(title=kee_title, group=self.kee_grp, first=True) # type: ignore
             if not info:
                 info = self.kee.db.add_entry(self.kee_grp, kee_title, username="", password="")
 
@@ -199,7 +199,7 @@ if __name__ == "__main__":
         min_app, min_settings, retrieve_failed = my_settings.get_min_version(my_settings.queries_folder)
     except ValueError as e:
         print(f"Contrôle de version ignoré : {e}")
-        min_app, min_settings = "0.0.0", "0", True
+        min_app, min_settings, retrieve_failed = "0.0.0", "0", True
 
     print(f"Version mini Application : {min_app}")
     print(f"Version mini Settings : {min_settings}")

@@ -5,6 +5,7 @@ from tkinter import Event as tkEvent, ttk, messagebox, font
 
 from pathlib import Path
 from datetime import datetime
+from typing import TypedDict
 
 if not __package__:
     import syspath_insert  # noqa: F401  # disable unused-import warning
@@ -37,10 +38,17 @@ from ui.app_about import AboutWindow
 from ui.app_theme import set_theme, set_menus, theme_is_on
 
 
+class ParamWidgetGroup(TypedDict, total=False):
+    label: ttk.Label
+    entry_var: tk.StringVar
+    entry: ttk.Widget
+    check: ttk.Label
+
+
 class App(tk.Toplevel):
     def __init__(self):
         super().__init__()
-        self.master.withdraw()
+        self.master.withdraw()  # type: ignore
         self.withdraw()  # hide until initialization is complete to avoid visual artifacts
 
         self.console_app: ConsoleWindow = ConsoleWindow(parent=self, hide=True)
@@ -50,12 +58,12 @@ class App(tk.Toplevel):
         self.app_settings: settings.Settings = settings.Settings()
         self.servers: servers.Servers = servers.Servers()
         self.server_id: str = ""
-        self.central_logs: logs_central.CentralLogs = None
+        self._central_logs: logs_central.CentralLogs | None = None
 
         self.queries_all: list[sql_query.Query] = []
         self.queries: list[sql_query.Query] = []
-        self.query: sql_query.Query = sql_query.Query()
-        self.params_widgets: dict[str, ttk.Widget] = {}
+        self.query: sql_query.Query | None = sql_query.Query()
+        self.params_widgets: dict[str, ParamWidgetGroup] = {}
         self.output_file: Path | None = None
 
         self.setup_app_identity()
@@ -64,8 +72,8 @@ class App(tk.Toplevel):
 
         self.process_running: bool = False
         self.exec_runner: ExecutionRunner = ExecutionRunner()
-        self.start_time: datetime = None
-        self._timer_after_id: str = None
+        self.start_time: datetime | None = None
+        self._timer_after_id: str | None = None
 
         self.date_format = sql_query.PRINT_DATE_FORMAT
 
@@ -271,6 +279,7 @@ class App(tk.Toplevel):
         menu_prefs.add_command(label="Préférences...", command=self.manage_user_prefs)
         menubar.add_cascade(label="Préférences", menu=menu_prefs)
 
+        menu_admin = None
         if self.user.admin:
             menu_admin = tk.Menu(menubar, tearoff=False)
             menu_admin.add_command(label="Utilisateurs...", command=self.manage_users)
@@ -298,7 +307,7 @@ class App(tk.Toplevel):
 
         if theme_is_on():
             menus: list[tk.Menu] = [menubar, self.menu_query, menu_prefs, menu_about]
-            if self.user.admin:
+            if self.user.admin and menu_admin is not None:
                 menus.extend([menu_admin, self.menu_admin_queries])
             set_menus(menus)
 
@@ -457,29 +466,28 @@ class App(tk.Toplevel):
     # Gestion de l'interface pour la frame de saisie des paramètres
     # ------------------------------------------------------------------------------------------
     def ui_params_reset(self):
-        for param_key in self.params_widgets:
-            for widget_key in self.params_widgets[param_key]:
-                if widget_key != "entry_var":
-                    self.params_widgets[param_key][widget_key].destroy()
+        for _, param_dict in self.params_widgets.items():
+            for _, obj in param_dict.items():
+                if isinstance(obj, tk.Widget):
+                    obj.destroy()
 
         self.params_widgets = {}
 
-    def ui_params_update(self, params: dict[str, sql_query.SqlParam] = None):
+    def ui_params_update(self, params: dict[str, sql_query.SqlParam] | None = None):
         self.ui_params_reset()
 
-        params_number_not_hidden = 0
+        count_not_hidden = 0
         if params is not None:
-            for p in params:
-                params_number_not_hidden += 1 if not params[p].is_hidden else 0
+            count_not_hidden = len([p for p in params if not params[p].is_hidden])
 
-        if params_number_not_hidden == 0:
+        if params is None or count_not_hidden == 0:
             self._ui_no_param_update()
         else:
             self._ui_with_params_update(params)
 
-    def _ui_with_params_update(self, params: dict[str, sql_query.SqlParam] = None):
+    def _ui_with_params_update(self, params: dict[str, sql_query.SqlParam]):
         for i, key in enumerate(params):
-            my_widgets = {}
+            my_widgets: ParamWidgetGroup = {}
 
             # ne pas afficher le paramètre si il doit être caché
             # et que l'utilisateur n'est pas un super utilisateur
@@ -500,11 +508,12 @@ class App(tk.Toplevel):
                 my_widgets["entry_var"].trace_add("write", self.param_input_trace)
 
             elif params[key].ui_control == "list":
-                my_widgets["entry"] = ttk.Combobox(self.params_inner, textvariable=my_widgets["entry_var"])
+                widget_entry = ttk.Combobox(self.params_inner, textvariable=my_widgets["entry_var"])
+                my_widgets["entry"] = widget_entry
                 my_widgets["entry"]["state"] = "readonly"
                 my_widgets["entry"]["values"] = tuple(params[key].authorized_values.values())
                 my_widgets["entry_var"].trace_add("write", self.param_input_trace)
-                my_widgets["entry"].bind("<FocusOut>", lambda _: my_widgets["entry"].selection_clear())
+                my_widgets["entry"].bind("<FocusOut>", lambda _: widget_entry.selection_clear())
 
             else:
                 my_widgets["entry"] = ttk.Entry(self.params_inner, textvariable=my_widgets["entry_var"])
@@ -534,7 +543,7 @@ class App(tk.Toplevel):
         self.params_inner.columnconfigure(2, weight=0)
 
     def _ui_no_param_update(self):
-        my_widgets = {}
+        my_widgets: ParamWidgetGroup = {}
 
         my_widgets["label"] = ttk.Label(
             self.params_inner,
@@ -575,6 +584,9 @@ class App(tk.Toplevel):
         def init_query_run(try_counter: int = 0):
             # initaliser l'execution de la requête si le worker est disponible
             try:
+                if self.query is None:
+                    raise RuntimeError("self.query can't be None")
+
                 if self.exec_runner.process_ready:
                     self.exec_timer(stop=True)  # reset timer si démarré pour création worker
                     serialized_query = self.query.serialize()
@@ -669,8 +681,8 @@ class App(tk.Toplevel):
                     msg = f"Erreur non gérée :\n{data}"
                     print(msg)
                     self.output_msg(msg, "end")
-                elif msg_type == "central_log" and self.instanciate_logs():
-                    self.central_logs.trigger_sync(**data)
+                elif msg_type == "central_log" and (logs := self.get_central_logs()):
+                    logs.trigger_sync(**data)
                 elif msg_type == "done":
                     self.exec_timer(stop=True)
                     done = True
@@ -711,7 +723,7 @@ class App(tk.Toplevel):
             return
 
         # si aucune ligne extraite
-        if not self.rows_number > 0:
+        if self.rows_number == 0 or self.output_file is None:
             messagebox.showinfo("Fin execution", "Aucune donnée extraite !", parent=self)
             return
 
@@ -766,7 +778,8 @@ class App(tk.Toplevel):
         self.queries_tree["selectmode"] = "none"
 
         for key in self.params_widgets:
-            if (widget_entry := self.params_widgets[key].get("entry", None)) is not None:
+            widget_entry = self.params_widgets[key].get("entry", None)
+            if isinstance(widget_entry, tk.Widget):
                 widget_entry["state"] = "disable"
 
     def unlock_ui(self, query_exec: bool = False):
@@ -785,7 +798,8 @@ class App(tk.Toplevel):
         self.queries_tree["selectmode"] = "browse"
 
         for key in self.params_widgets:
-            if (widget_entry := self.params_widgets[key].get("entry", None)) is not None:
+            widget_entry = self.params_widgets[key].get("entry", None)
+            if isinstance(widget_entry, tk.Widget):
                 widget_entry["state"] = "enable" if not isinstance(widget_entry, ttk.Combobox) else "readonly"
 
     # ------------------------------------------------------------------------------------------
@@ -878,11 +892,14 @@ class App(tk.Toplevel):
             self.output_msg("Impossible d'executer, tant que des paramètres ne sont pas valides :\n", "1.0", "1.0")
 
     def params_get_input(self):
+        if self.query is None:
+            return True
+
         for key in self.params_widgets:
             w_entry_var = self.params_widgets[key].get("entry_var", None)
             w_check = self.params_widgets[key].get("check", None)
 
-            if w_entry_var is not None:
+            if w_entry_var is not None and w_check is not None:
                 self.query.parameters.params[key].display_value = w_entry_var.get()
                 try:
                     self.query.update_values(key)
@@ -900,21 +917,21 @@ class App(tk.Toplevel):
 
         return self.query.values_ok()
 
-    def instanciate_logs(self) -> bool:
-        if self.central_logs:
-            return True
+    def get_central_logs(self) -> logs_central.CentralLogs | None:
+        if self._central_logs:
+            return self._central_logs
         elif self.app_settings.logs_are_on:
             LogsClass = logs_central.get_default_class()
             logs_folder = self.app_settings.logs_folder
-            self.central_logs = LogsClass(logs_folder)
+            self._central_logs = LogsClass(logs_folder)
 
-            return True
+            return self._central_logs
 
-        return False
+        return None
 
-    def app_exit(self, event: tkEvent = None):
-        if self.instanciate_logs():
-            self.central_logs.stop_sync()
+    def app_exit(self, event: tkEvent | None = None):
+        if logs := self.get_central_logs():
+            logs.stop_sync()
 
         self.user_prefs.set(PrefsEnum.last_server, self.server_id)
 
@@ -937,7 +954,7 @@ class App(tk.Toplevel):
         except AttributeError:
             pass
 
-    def open_folder(self, folder: str):
+    def open_folder(self, folder: str | Path):
         if folder == self.user_prefs.get(PrefsEnum.cache_folder) and self.output_file:
             utils.showfile(self.output_file)
         else:
@@ -1032,8 +1049,7 @@ class App(tk.Toplevel):
     def param_focus_event(self, event: tkEvent):
         widget = event.widget
 
-        if widget.widgetName == "ttk::entry":
-            widget: ttk.Entry
+        if isinstance(widget, ttk.Entry) and not isinstance(widget, ttk.Combobox):
             widget.icursor("end")
             widget.select_range("0", "end")
 
@@ -1061,17 +1077,26 @@ class App(tk.Toplevel):
         self._param_input(name)
 
     def _param_input(self, key: str):
-        self.query.parameters.params[key].display_value = self.params_widgets[key]["entry_var"].get()
+        if self.query is None:
+            return
+
+        entry_w = self.params_widgets[key].get("entry")
+        entry_var = self.params_widgets[key].get("entry_var")
+        check_w = self.params_widgets[key].get("check")
+
+        if entry_var:
+            self.query.parameters.params[key].display_value = entry_var.get()
 
         try:
             self.query.update_values(key)
             color = "green"
+            correct_display = ""
 
             # verif si affichage correcte, sinon MAJ (cas des saisies dates notamment)
-            if self.params_widgets[key]["entry"].widgetName == "ttk::entry":
+            if isinstance(entry_w, ttk.Entry) and not isinstance(entry_w, ttk.Combobox):
                 correct_display = self.query.parameters.params[key].display_value
-                if self.params_widgets[key]["entry_var"].get() != correct_display:
-                    self.params_widgets[key]["entry_var"].set(correct_display)
+                if entry_var and entry_var.get() != correct_display:
+                    entry_var.set(correct_display)
 
             # si valeur ne correspond pas au pattern de ctrl alors couleur orange
             if not self.query.parameters.params[key].ctrl_pattern_is_ok:
@@ -1082,11 +1107,12 @@ class App(tk.Toplevel):
 
         except ValueError as e:
             color = "red"
-            self.output_msg(e)
+            self.output_msg(str(e))
 
-        self.params_widgets[key]["check"]["background"] = color
+        if check_w:
+            check_w["background"] = color
 
-    def params_resize(self, _: tkEvent = None):
+    def params_resize(self, _: tkEvent | None = None):
         self.update_idletasks()
 
         size_width = max(self.params_canvas.winfo_width(), self.params_inner.winfo_reqwidth())

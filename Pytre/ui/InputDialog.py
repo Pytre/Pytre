@@ -10,16 +10,17 @@ from ui.app_theme import set_theme
 
 class InputDialog(tk.Toplevel):
     @classmethod
-    def ask(cls, title, prompt: str, parent: tk.Tk | None = None) -> str | None:
+    def ask(cls, title, prompt: str, parent: tk.Tk | tk.Toplevel | None = None) -> str | None:
         dialog = InputDialog(title, prompt, parent=parent)
-        cls.wait_window(dialog)
+        dialog.wait_window()
         return dialog.answer
 
-    def __init__(self, title, prompt: str, parent: tk.Tk | None = None):
+    def __init__(self, title, prompt: str, parent: tk.Tk | tk.Toplevel | None = None):
         super().__init__()
 
-        self.parent: tk.Tk = parent
+        self.parent: tk.Tk | tk.Toplevel | None = parent
         if not self.parent:
+            assert isinstance(self.master, tk.Tk)
             self.master.withdraw()
         else:
             self.focus_set()
@@ -68,7 +69,7 @@ class InputDialog(tk.Toplevel):
 
         self.entry.focus_set()
 
-    def _setup_position(self, parent: tk.Toplevel | None):
+    def _setup_position(self, parent: tk.Tk | tk.Toplevel | None):
         ui_utils.ui_center(self, parent)
 
     def _setup_buttons(self):
@@ -88,7 +89,7 @@ class InputDialog(tk.Toplevel):
         self.answer = self.tk_var_answer.get()
         self.close()
 
-    def close(self, _: Event = None):
+    def close(self, _: Event | None = None):
         if self.parent:
             ui_utils.ui_undisable_parent(self, self.parent)
             self.parent.focus_set()

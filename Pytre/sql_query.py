@@ -1,6 +1,7 @@
 import re
 import csv
 import codecs
+from collections.abc import Callable
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
 from pathlib import Path
@@ -80,13 +81,13 @@ class Query:
     def reset_values(self):
         self.parameters.reset_values()
 
-    def update_values(self, key: str = None) -> bool:
+    def update_values(self, key: str | None = None) -> bool:
         """
         If key is none then update all key
         """
         return self.parameters.update_values(key)
 
-    def values_ok(self, key: str = None) -> bool:
+    def values_ok(self, key: str | None = None) -> bool:
         """
         If key is none then update all key
         """
@@ -272,7 +273,7 @@ class SqlParam:
         self.is_hidden: bool = False
         self.ui_control: str = ""
         self.authorized_values: dict = {}
-        self.ctrl_pattern: re.Pattern = None
+        self.ctrl_pattern: re.Pattern | None = None
         self.is_inlined: bool = False
 
         self.display_value: str = ""
@@ -281,7 +282,7 @@ class SqlParam:
         self.value_is_ok: bool = False
         self.ctrl_pattern_is_ok: bool = False
 
-        self.func_dict: dict = self._funcs_init()
+        self.func_dict: dict[str, Callable[..., str]] = self._funcs_init()
 
         self.set_default()
 
@@ -334,6 +335,9 @@ class SqlParam:
 
             for info in infos:
                 info_lst = INFO_LIST_PATTERN.search(info)
+                if info_lst is None:
+                    continue
+
                 info_func = info_lst[1].lower()
                 info_args = info_lst[2]
 
@@ -378,7 +382,7 @@ class SqlParam:
     # ------------------------------------------------------------------------------------------
     # Dynamic default value functions
     # ------------------------------------------------------------------------------------------
-    def _funcs_init(self) -> dict:
+    def _funcs_init(self) -> dict[str, Callable[..., str]]:
         def user_info(attr: str) -> str:
             user: users.CurrentUser = users.CurrentUser()
             if attr in user.users.attribs_std:
@@ -428,9 +432,13 @@ class SqlParam:
         return {"user_info": user_info, "fiscal_year": fiscal_year, "month_end": month_end, "today": today}
 
     def _calc_func(self, func: str, func_args: str) -> str:
-        my_args = func_args.lower().split(",") if func_args else None
-        my_str = self.func_dict.get(func)(*my_args) if func in self.func_dict else self.display_value
-        return my_str
+        my_args = func_args.lower().split(",") if func_args else []
+        my_func = self.func_dict.get(func)
+
+        if callable(my_func):
+            return my_func(*my_args)
+
+        return self.display_value
 
     # ------------------------------------------------------------------------------------------
     # Display value conversion and validation
@@ -463,7 +471,7 @@ class SqlParam:
 
         return self.value_cmd
 
-    def convert_display_value_to_cmd(self, val_to_convert: str) -> str:
+    def convert_display_value_to_cmd(self, val_to_convert: str) -> str | int:
         """ValueError: if value is not valid, or missing and not optional"""
 
         if self.authorized_values:
@@ -511,7 +519,7 @@ class SqlParameters:
 
         return params_dict
 
-    def update_values(self, key: str = None) -> bool:
+    def update_values(self, key: str | None = None) -> bool:
         """
         If key is none then update all key
         """
@@ -525,7 +533,7 @@ class SqlParameters:
 
         return True
 
-    def validate(self, key: str = None) -> bool:
+    def validate(self, key: str | None = None) -> bool:
         """
         If key is none then update all key
         """
@@ -635,7 +643,7 @@ class CmdBuilder:
 
         for match in re.finditer(r"(?<![\d\w#_\$@])(@!?[\d\w#_\$@]+)", self.raw_cmd):
             matched_param: str = match.group(0)
-            sql_param: SqlParam = self.parameters.params.get(matched_param, None)
+            sql_param: SqlParam | None = self.parameters.params.get(matched_param, None)
 
             if not sql_param:
                 continue
@@ -660,8 +668,8 @@ class QueryExecute:
     def __init__(self):
         self.converter = SqlTypeConverter()
 
-        self.config: ExecuteConfig = None
-        self.server: servers.Server = None
+        self.config: ExecuteConfig | None = None
+        self.server: servers.Server | None = None
 
         self.app_settings: settings.Settings = settings.Settings()
         self.field_separator = self.app_settings.field_separator
@@ -688,7 +696,7 @@ class QueryExecute:
 
         return True
 
-    def get_server(self, server_id) -> servers.Server:
+    def get_server(self, server_id) -> servers.Server | None:
         try:
             self.server = servers.Servers().servers_dict[server_id]
         except KeyError:
@@ -702,6 +710,9 @@ class QueryExecute:
         if not self.load_infos(config):
             return (-1, None)
         if self.stop_requested.is_set():
+            return (-1, None)
+
+        if self.server is None or self.config is None:
             return (-1, None)
 
         starting_date = datetime.now()
@@ -757,6 +768,8 @@ class QueryExecute:
         return (-1, None)
 
     def _execute_end(self, starting_date: datetime, ending_date: datetime, rows_count: int):
+        assert self.server is not None and self.config is not None
+
         # writing user log
         user_log: logs_user.UserDb = logs_user.UserDb()
         user_log.insert_exec(
@@ -813,6 +826,9 @@ class QueryExecute:
         buffer_max_size = 50_000  # nombre de lignes pour déclencher écriture dans fichier
         row_number = -1
 
+        if self.config is None or self.config.extract_file == Path():
+            raise ValueError("Extraction to file is not possible without specifying one")
+
         try:
             codecs.lookup(encoding)
         except LookupError:
@@ -857,6 +873,9 @@ class QueryExecute:
         return row_number + 1, self.config.extract_file
 
     def _sql_record_to_text(self, record) -> list:
+        if self.server is None:
+            raise RuntimeError("Server must be initialized before converting records")
+
         # mise en cache des éléments de conversion
         charset = self.server.charset
         convert_func = self.converter.from_result
@@ -916,9 +935,12 @@ def filter_queries(queries: list[Query], server_id: str, user: users.CurrentUser
 
     # check if user is authorized for server
     all_servers: servers.Servers = servers.Servers()
-    server: servers.Server = all_servers.servers_dict.get(server_id, None)
-    if not user.admin and not (server.grp_authorized == [] or set(user.grp_authorized) & set(server.grp_authorized)):
-        return filtered
+    server: servers.Server | None = all_servers.servers_dict.get(server_id, None)
+    if server is None:
+        return []
+    if not user.admin:
+        if server.grp_authorized != [] and not set(user.grp_authorized) & set(server.grp_authorized):
+            return []
 
     # check which query user can see
     for query in queries:

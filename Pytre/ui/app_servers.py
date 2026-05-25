@@ -22,14 +22,15 @@ class ServersWindow(tk.Toplevel):
             ui_utils.ui_disable_parent(self, self.parent)
             self.transient(self.parent)
         else:
+            assert isinstance(self.master, tk.Tk)
             self.master.withdraw()
 
         self.servers = Servers()
         self.servers.get_all_servers()
-        self.type_server: tuple[str] = tuple([type.value for type in ServerType])
+        self.type_server: tuple[str, ...] = tuple([type.value for type in ServerType])
         self.groups: set[str] = set()
 
-        self.server: Server = None
+        self.server: Server | None = None
         self.new_server: bool = False
 
         set_theme(self)
@@ -107,9 +108,9 @@ class ServersWindow(tk.Toplevel):
             self.tree.column(col, width=attr["width"], stretch=attr["stretch"])
 
         xbar = ttk.Scrollbar(self.tree_frame, orient=tk.HORIZONTAL, command=self.tree.xview)
-        self.tree.configure(xscroll=xbar.set)
+        self.tree.configure(xscrollcommand=xbar.set)
         ybar = ttk.Scrollbar(self.tree_frame, orient=tk.VERTICAL, command=self.tree.yview)
-        self.tree.configure(yscroll=ybar.set)
+        self.tree.configure(yscrollcommand=ybar.set)
 
         self.tree.grid(row=0, column=0, columnspan=1, padx=2, pady=2, sticky="nswe")
         xbar.grid(row=1, column=0, sticky="we")
@@ -167,7 +168,7 @@ class ServersWindow(tk.Toplevel):
         if theme_is_on():
             self.listbox.configure(selectbackground=ThemeColors.accent, selectforeground=ThemeColors.text_secondary)
         ybar = ttk.Scrollbar(self.groups_frame, orient="vertical", command=self.listbox.yview)
-        self.listbox.configure(yscroll=ybar.set)
+        self.listbox.configure(yscrollcommand=ybar.set)
 
         title_label.grid(row=0, column=0, padx=2, pady=2, sticky="nswe")
         self.new_grp.grid(row=0, column=1, padx=2, pady=2, sticky="nswe")
@@ -217,7 +218,7 @@ class ServersWindow(tk.Toplevel):
         for _, server in self.servers.servers_dict.items():
             self.tree.insert("", tk.END, values=(server.id, server.description), iid=id(server))
             if selected_item_uuid and server.uuid == selected_item_uuid:
-                item_to_select = (id(server),)
+                item_to_select = str(id(server))
 
         self.tree_autosize()
         if item_to_select:
@@ -229,7 +230,7 @@ class ServersWindow(tk.Toplevel):
 
         if notify_end:
             msg = "Ok rechargement !"
-            messagebox.showinfo(title="Mise à jour infos", message=msg, parent=self, type=messagebox.OK)
+            messagebox.showinfo(title="Mise à jour infos", message=msg, parent=self)
 
     def tree_select_move(self, offset: int):
         curr_item = self.tree.selection()
@@ -279,13 +280,16 @@ class ServersWindow(tk.Toplevel):
         if selected_values == "":
             return
 
-        for _, server in self.servers.servers_dict.items():
+        for server in self.servers.servers_dict.values():
             if selected_iid == str(id(server)):
                 self.server = server
                 self.server_update()
                 break
 
     def server_update(self):
+        if self.server is None:
+            raise RuntimeError("No server selected !")
+
         self.type_box.set(ServerType[self.server.type].value)
 
         for key in self.entries.keys():
@@ -294,7 +298,7 @@ class ServersWindow(tk.Toplevel):
 
         self.groups_set()
 
-    def toggle_password(self, w_caller: tk.Widget, w_target: tk.Widget, hide_char: str = "\U000025cf"):
+    def toggle_password(self, w_caller: ttk.Button, w_target: ttk.Entry, hide_char: str = "\U000025cf"):
         if w_target["show"] == "":
             w_caller.config(text="Voir")
             w_target.config(show=hide_char)
@@ -303,6 +307,9 @@ class ServersWindow(tk.Toplevel):
             w_target.config(show="")
 
     def groups_set(self):
+        if self.server is None:
+            raise RuntimeError("No server selected !")
+
         self.groups = self.servers.groups
 
         self.listbox.delete(0, tk.END)
@@ -344,16 +351,19 @@ class ServersWindow(tk.Toplevel):
         self.new_server = True
 
     def server_save(self):
+        if self.server is None:
+            raise RuntimeError("No server selected !")
+
         server_id = self.entries["id"]["var"].get()
 
         # vérifications avant enregistrement
         if not server_id:
             msg = "L'identifiant est obligatoire !"
-            messagebox.showerror(title="Mise à jour infos serveur", message=msg, parent=self, type=messagebox.OK)
+            messagebox.showerror(title="Mise à jour infos serveur", message=msg, parent=self)
             return
         if not self.type_box.get():
             msg = "Un type doit être choisi !"
-            messagebox.showerror(title="Mise à jour infos serveur", message=msg, parent=self, type=messagebox.OK)
+            messagebox.showerror(title="Mise à jour infos serveur", message=msg, parent=self)
             return
 
         # mise à jour des infos du serveur
@@ -370,9 +380,7 @@ class ServersWindow(tk.Toplevel):
             result = self.server.save()
         except Exception as e:
             msg = "Erreur inattendue lors de l'enregistrement :\n"
-            messagebox.showerror(
-                title="Mise à jour infos serveur", message=msg + str(e), parent=self, type=messagebox.OK
-            )
+            messagebox.showerror(title="Mise à jour infos serveur", message=msg + str(e), parent=self)
             return
 
         # signalement de la fin de l'enregistrement
@@ -380,38 +388,43 @@ class ServersWindow(tk.Toplevel):
             self.new_server = False
             self.reload_all()
             msg = "Modifications enregistrées"
-            messagebox.showinfo(title="Mise à jour infos serveur", message=msg, parent=self, type=messagebox.OK)
+            messagebox.showinfo(title="Mise à jour infos serveur", message=msg, parent=self)
         else:
             msg = "Problème lors de l'enregistrement !"
-            messagebox.showerror(title="Mise à jour infos serveur", message=msg, parent=self, type=messagebox.OK)
+            messagebox.showerror(title="Mise à jour infos serveur", message=msg, parent=self)
 
     def server_remove(self):
+        if self.server is None:
+            raise RuntimeError("No server selected !")
+
         curr_pos = self.tree.index(self.tree.focus())
         result = self.server.delete()
         if result:
             self.reload_all()
             self.tree_select_pos(max(curr_pos - 1, 0))
             msg = "Suppression du serveur réussi"
-            messagebox.showinfo(title="Suppression infos serveur", message=msg, parent=self, type=messagebox.OK)
+            messagebox.showinfo(title="Suppression infos serveur", message=msg, parent=self)
         else:
             msg = "Problème lors de la suppression !"
-            messagebox.showerror(title="Suppression infos serveur", message=msg, parent=self, type=messagebox.OK)
+            messagebox.showerror(title="Suppression infos serveur", message=msg, parent=self)
 
     def import_servers(self):
         title = "Fichier à importer"
         types = (("Fichier csv", "*.csv"), ("Tous les fichiers", "*.*"))
         filename = filedialog.askopenfilename(title=title, filetypes=types, parent=self)
+        if not filename:
+            return
 
         try:
             self.servers.csv_import(filename)
         except Exception as err:
             msg = "Quelque chose ne s'est pas bien passé lors de l'import :\n" + str(err)
-            messagebox.showerror(title="Import", message=msg, parent=self, type=messagebox.OK)
+            messagebox.showerror(title="Import", message=msg, parent=self)
             return
 
         self.reload_all()
         msg = "Fin de l'import des serveurs"
-        messagebox.showinfo(title="Import", message=msg, parent=self, type=messagebox.OK)
+        messagebox.showinfo(title="Import", message=msg, parent=self)
 
     def export_servers(self):
         title = "Fichier à exporter"
@@ -424,13 +437,13 @@ class ServersWindow(tk.Toplevel):
             self.servers.csv_export(filename, overwrite=True)
         except Exception as err:
             msg = "Quelque chose ne s'est pas bien passé lors de l'export :" + str(err)
-            messagebox.showerror(title="Export", message=msg, parent=self, type=messagebox.OK)
+            messagebox.showerror(title="Export", message=msg, parent=self)
             return
 
         msg = "Fin de l'export des utilisateurs"
-        messagebox.showinfo(title="Export", message=msg, parent=self, type=messagebox.OK)
+        messagebox.showinfo(title="Export", message=msg, parent=self)
 
-    def app_exit(self, _: Event = None):
+    def app_exit(self, _: Event | None = None):
         if self.parent:
             ui_utils.ui_undisable_parent(self, self.parent)
 

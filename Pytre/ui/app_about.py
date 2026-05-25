@@ -14,14 +14,15 @@ from ui.app_theme import set_theme
 
 
 class AboutWindow(tk.Toplevel):
-    def __init__(self, parent: tk.Toplevel = None):
+    def __init__(self, parent: tk.Toplevel | None = None):
         super().__init__()
-        self.parent: tk.Toplevel = parent
+        self.parent: tk.Toplevel | None = parent
         if self.parent:
             self.focus_set()
             ui_utils.ui_disable_parent(self, self.parent)
             self.transient(self.parent)
         else:
+            assert isinstance(self.master, tk.Tk)
             self.master.withdraw()
 
         set_theme(self)
@@ -136,7 +137,7 @@ class AboutWindow(tk.Toplevel):
     # ------------------------------------------------------------------------------------------
     # Autres traitements
     # ------------------------------------------------------------------------------------------
-    def app_exit(self, _: Event = None):
+    def app_exit(self, _: Event | None = None):
         if self.parent:
             ui_utils.ui_undisable_parent(self, self.parent)
 

@@ -38,19 +38,19 @@ class SqlLexer:
     def __init__(self, sql_text: str = ""):
         self.sql_text: str = sql_text
         self.sql_length: int = 0
-        self.tokens: dict[Token] = {}
+        self.tokens: dict[int, Token] = {}
 
         self.init_tests_order()
         self.init_tokens_to_throw()
         self.tokenize()
 
-    def tokens_get(self, type: TokenType = None):
+    def tokens_get(self, type: TokenType | None = None):
         if type is None:
             return self.tokens.items()
         else:
             return [token for _, token in self.tokens.items() if token.type is type]
 
-    def tokens_print(self, type: TokenType = None):
+    def tokens_print(self, type: TokenType | None = None):
         for key, token in self.tokens.items():
             if type is None or token.type is type:
                 print(f"{key}: {token}")
@@ -100,7 +100,7 @@ class SqlLexer:
 
     def basic_test(self, regex: str, text: str, pos: int, flags: re.RegexFlag, type: TokenType) -> Token | None:
         pattern: re.Pattern = re.compile(regex, flags)
-        match: re.Match = pattern.match(text, pos)
+        match: re.Match | None = pattern.match(text, pos)
         if match:
             length = match.end() - match.start()
             return Token(match.pos, length, type, match.group())
@@ -132,28 +132,28 @@ class SqlLexer:
         text = self.sql_text if text == "" else text
         regex_start: str = r"/\*"  # to match start of comment
         regex_end: str = r"\*/"  # to match end of comment
-        token: Token = self.nested_test(regex_start, regex_end, text, pos, TokenType.COMMENT)
+        token: Token | None = self.nested_test(regex_start, regex_end, text, pos, TokenType.COMMENT)
         return token
 
     def t_COMMENT(self, pos: int, text: str = "") -> Token | None:
         text = self.sql_text if text == "" else text
         regex: str = r"--.*?$"
         flags = re.MULTILINE
-        token: Token = self.basic_test(regex, text, pos, flags, TokenType.COMMENT)
+        token: Token | None = self.basic_test(regex, text, pos, flags, TokenType.COMMENT)
         return token
 
     def t_TEXT(self, pos: int, text: str = "") -> Token | None:
         text = self.sql_text if text == "" else text
         regex: str = r"\'.*?\'"
         flags = re.DOTALL
-        token: Token = self.basic_test(regex, text, pos, flags, TokenType.TEXT)
+        token: Token | None = self.basic_test(regex, text, pos, flags, TokenType.TEXT)
         return token
 
     def t_KEYWORD(self, pos: int, text: str = "") -> Token | None:
         text = self.sql_text if text == "" else text
         regex: str = r"_?[_a-zA-Z0-9]+"
         flags = re.NOFLAG
-        token: Token = self.basic_test(regex, text, pos, flags, TokenType.KEYWORD)
+        token: Token | None = self.basic_test(regex, text, pos, flags, TokenType.KEYWORD)
         if token and token.value.casefold() in SqlLexer.keywords:
             return token
 
@@ -164,7 +164,7 @@ class SqlLexer:
                     "(" +  r"\[.*?\]"                     + ")"
         # fmt: on
         flags = re.DOTALL
-        token: Token = self.basic_test(regex, text, pos, flags, TokenType.IDENTIFIER)
+        token: Token | None = self.basic_test(regex, text, pos, flags, TokenType.IDENTIFIER)
         return token
 
     def t_PARAMETER(self, pos: int, text: str = "") -> Token | None:
@@ -174,7 +174,7 @@ class SqlLexer:
                     "(" +  r"%\(@[\d\w#\$@]+\)s"  + ")"
         # fmt: on
         flags = re.NOFLAG
-        token: Token = self.basic_test(regex, text, pos, flags, TokenType.PARAMETER)
+        token: Token | None = self.basic_test(regex, text, pos, flags, TokenType.PARAMETER)
         return token
 
     def t_NUMBER(self, pos: int, text: str = "") -> Token | None:
@@ -188,7 +188,7 @@ class SqlLexer:
                     "(" +  r"0b[0-1]+"                + ")"
         # fmt: on
         flags = re.NOFLAG
-        token: Token = self.basic_test(regex, text, pos, flags, TokenType.NUMBER)
+        token: Token | None = self.basic_test(regex, text, pos, flags, TokenType.NUMBER)
         return token
 
     def t_OPERATOR(self, pos: int, text: str = "") -> Token | None:
@@ -202,21 +202,21 @@ class SqlLexer:
                     "(" +  r"[&]"             + ")"
         # fmt: on
         flags = re.NOFLAG
-        token: Token = self.basic_test(regex, text, pos, flags, TokenType.OPERATOR)
+        token: Token | None = self.basic_test(regex, text, pos, flags, TokenType.OPERATOR)
         return token
 
     def t_DELIMITER(self, pos: int, text: str = "") -> Token | None:
         text = self.sql_text if text == "" else text
         regex: str = r";"
         flags = re.NOFLAG
-        token: Token = self.basic_test(regex, text, pos, flags, TokenType.DELIMITER)
+        token: Token | None = self.basic_test(regex, text, pos, flags, TokenType.DELIMITER)
         return token
 
     def t_WHITESPACE(self, pos: int, text: str = "") -> Token | None:
         text = self.sql_text if text == "" else text
         regex: str = r"[\s]"
         flags = re.NOFLAG
-        token: Token = self.basic_test(regex, text, pos, flags, TokenType.WHITESPACE)
+        token: Token | None = self.basic_test(regex, text, pos, flags, TokenType.WHITESPACE)
         return token
 
 

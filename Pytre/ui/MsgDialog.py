@@ -12,16 +12,17 @@ from ui.app_theme import set_theme
 
 class MsgDialog(tk.Toplevel):
     @classmethod
-    def ask(cls, title: str, msg: str, buttons_txt: tuple, parent: tk.Tk | None = None) -> str | None:
+    def ask(cls, title: str, msg: str, buttons_txt: tuple, parent: tk.Tk | tk.Toplevel | None = None) -> str | None:
         dialog = MsgDialog(title, msg, buttons_txt, parent=parent)
-        cls.wait_window(dialog)
+        dialog.wait_window()
         return dialog.button_clicked
 
-    def __init__(self, title: str, msg: str, buttons_txt: tuple, parent: tk.Tk | None = None):
+    def __init__(self, title: str, msg: str, buttons_txt: tuple, parent: tk.Tk | tk.Toplevel | None = None):
         super().__init__()
 
-        self.parent: tk.Tk = parent
+        self.parent: tk.Tk | tk.Toplevel | None = parent
         if not self.parent:
+            assert isinstance(self.master, tk.Tk)
             self.master.withdraw()
         else:
             self.focus_set()
@@ -58,15 +59,14 @@ class MsgDialog(tk.Toplevel):
         self._setup_msg(msg)
         self._setup_buttons()
 
-    def _setup_position(self, parent: tk.Toplevel | None):
+    def _setup_position(self, parent: tk.Tk | tk.Toplevel | None):
         ui_utils.ui_center(self, parent)
 
     def _setup_msg(self, msg):
         icon_file = get_app_path() / "res" / "msg_question.png"
-        icon_img = tk.PhotoImage(file=icon_file)
+        self.icon_img = tk.PhotoImage(file=icon_file)
 
-        label_icon = ttk.Label(self.msg_frame, image=icon_img, anchor=tk.CENTER)
-        label_icon.image = icon_img
+        label_icon = ttk.Label(self.msg_frame, image=self.icon_img, anchor=tk.CENTER)
 
         wraplength = self.minsize()[0]
         label_msg = ttk.Label(self.msg_frame, text=msg, wraplength=wraplength)
@@ -97,7 +97,7 @@ class MsgDialog(tk.Toplevel):
 
         # détermination de la position du bouton à sélectionner
         if widget_with_focus in self.buttons_widgets:
-            pos = self.buttons_widgets.index(widget_with_focus) + move
+            pos = self.buttons_widgets.index(widget_with_focus) + move  # type: ignore
         elif move < 0:
             pos = len(self.buttons_widgets) - 1
         else:
@@ -122,7 +122,7 @@ class MsgDialog(tk.Toplevel):
         self.button_clicked = button_text
         self.close()
 
-    def close(self, _: Event = None):
+    def close(self, _: Event | None = None):
         if self.parent:
             ui_utils.ui_undisable_parent(self, self.parent)
             self.parent.focus_set()

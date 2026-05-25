@@ -2,7 +2,7 @@ import platform
 import tkinter as tk
 
 
-def ui_center(tk_window: tk.Toplevel, tk_parent: tk.Toplevel | None = None) -> None:
+def ui_center(tk_window: tk.Tk | tk.Toplevel, tk_parent: tk.Tk | tk.Toplevel | None = None) -> None:
     if platform.system() != "Windows" and not tk_parent:
         return
 
@@ -19,19 +19,19 @@ def ui_center(tk_window: tk.Toplevel, tk_parent: tk.Toplevel | None = None) -> N
     tk_window.geometry(f"+{x}+{y}")
 
 
-def ui_disable_parent(tk_window: tk.Toplevel, tk_parent: tk.Toplevel | None = None) -> None:
+def ui_disable_parent(tk_window: tk.Tk | tk.Toplevel, tk_parent: tk.Tk | tk.Toplevel | None = None) -> None:
     system: str = platform.system()
 
-    if system == "Windows":
-        tk_parent.wm_attributes("-disabled", True)
-    else:
+    if system != "Windows":
         tk_window.grab_set()
+    elif tk_parent:
+        tk_parent.wm_attributes("-disabled", True)
 
 
-def ui_undisable_parent(tk_window: tk.Toplevel, tk_parent: tk.Toplevel | None = None) -> None:
+def ui_undisable_parent(tk_window: tk.Tk | tk.Toplevel, tk_parent: tk.Tk | tk.Toplevel | None = None) -> None:
     system: str = platform.system()
 
-    if system == "Windows":
-        tk_parent.wm_attributes("-disabled", False)
-    else:
+    if system != "Windows":
         tk_window.grab_release()
+    elif tk_parent:
+        tk_parent.wm_attributes("-disabled", False)

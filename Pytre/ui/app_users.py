@@ -22,14 +22,18 @@ class UsersWindow(tk.Toplevel):
     def __init__(self, parent=None):
         super().__init__()
         self.parent = parent
-        self.focus_set() if self.parent else self.master.withdraw()
+        if self.parent:
+            self.focus_set()
+        else:
+            assert isinstance(self.master, tk.Tk)
+            self.master.withdraw()
 
         self.detached_items: set[str] = set()
         self.filter_var: tk.StringVar
 
         self.users: Users = Users()
         self.default_sort_col: str = "title"
-        self.sort_info: dict[str, str | bool] = {"col": None, "reverse": None}
+        self.sort_info: dict[str, str | bool | None] = {"col": None, "reverse": None}
         self.groups: set = set()
 
         set_theme(self)
@@ -117,9 +121,9 @@ class UsersWindow(tk.Toplevel):
         self.tree_cols_config()
 
         xbar = ttk.Scrollbar(self.tree_frame, orient=tk.HORIZONTAL, command=self.tree.xview)
-        self.tree.configure(xscroll=xbar.set)
+        self.tree.configure(xscrollcommand=xbar.set)
         ybar = ttk.Scrollbar(self.tree_frame, orient=tk.VERTICAL, command=self.tree.yview)
-        self.tree.configure(yscroll=ybar.set)
+        self.tree.configure(yscrollcommand=ybar.set)
 
         self.tree.grid(row=0, column=0, columnspan=1, padx=2, pady=2, sticky="nswe")
         xbar.grid(row=1, column=0, sticky="we")
@@ -200,7 +204,7 @@ class UsersWindow(tk.Toplevel):
                 self.detached_items.add(item)
             elif not hide and item in self.detached_items:
                 self.tree.move(item, "", tk.END)
-                self.tree_sort(self.sort_info["col"], self.sort_info["reverse"])
+                self.tree_sort(str(self.sort_info["col"]), bool(self.sort_info["reverse"]))
                 self.detached_items.remove(item)
 
     def tree_sort(self, sort_col: str = "", reverse: bool = False):
@@ -263,6 +267,7 @@ class UsersWindow(tk.Toplevel):
                         value = getattr(u, col, "")
 
                     if col == "grp_authorized":
+                        assert isinstance(value, list)
                         value.remove("all")
                         value.sort()
                         # self.groups.update(value)
@@ -274,7 +279,7 @@ class UsersWindow(tk.Toplevel):
                 try:
                     self.tree.insert("", tk.END, iid=u.uuid, values=values)
                 except Exception as e:
-                    messagebox.showerror("Erreur chargement liste", e)
+                    messagebox.showerror("Erreur chargement liste", str(e))
 
             self.tree_sort(sort_col)
             self.tree_autosize()
@@ -296,11 +301,11 @@ class UsersWindow(tk.Toplevel):
         for col in self.tree["columns"]:
             max_width = tkfont.measure(self.tree.heading(col)["text"] + "    ") + sort_max_width
             for item in self.tree.get_children(""):
-                item_width = tkfont.measure(self.tree.set(item, col) + "    ")
+                item_width = tkfont.measure(str(self.tree.set(item, col)) + "    ")
                 max_width = max(max_width, item_width)
             self.tree.column(col, width=max_width)
 
-    def tree_select_pos(self, pos: int, e: Event = None):
+    def tree_select_pos(self, pos: int, e: Event | None = None):
         if e is not None and e.widget is self.filter:  # désactivation si le filtre est en saisi
             return
 
@@ -318,7 +323,7 @@ class UsersWindow(tk.Toplevel):
         self.tree.focus(item)
         self.tree.see(item)
 
-    def tree_select_move(self, offset: int, e: Event = None):
+    def tree_select_move(self, offset: int, e: Event | None = None):
         if e is not None and e.widget is self.filter:  # désactivation si le filtre est en saisi
             return
 
@@ -330,7 +335,7 @@ class UsersWindow(tk.Toplevel):
 
         self.tree_select_pos(pos + offset)
 
-    def app_exit(self, _: Event = None):
+    def app_exit(self, _: Event | None = None):
         self.destroy()
         if self.parent is None:
             self.quit()
@@ -394,7 +399,7 @@ class UsersWindow(tk.Toplevel):
     def user_modify(self):
         items = self.tree.selection()
         if items:
-            user: User = self.users.find_user_by_uuid(items[0])
+            user: User | None = self.users.find_user_by_uuid(items[0])
             UserDialog(self, user)
 
     def user_delete(self):
@@ -406,7 +411,7 @@ class UsersWindow(tk.Toplevel):
         nb_ok, errors = 0, []
         for item in items:
             try:
-                user: User = self.users.find_user_by_uuid(item)
+                user: User | None = self.users.find_user_by_uuid(item)
                 if user and user.exists:
                     user.delete()
                 self.tree.delete(item)
@@ -416,7 +421,7 @@ class UsersWindow(tk.Toplevel):
 
         self._delete_after_msg(nb_ok, errors)
 
-    def _delete_confirm(self, items: list[str]) -> bool:
+    def _delete_confirm(self, items: tuple[str, ...]) -> bool:
         if len(items) == 0:
             return False
         elif len(items) == 1:
@@ -427,7 +432,9 @@ class UsersWindow(tk.Toplevel):
         else:
             msg = f"Confirmation de la suppression de {len(items)} utilisateurs"
 
-        if "ok" != messagebox.showwarning(title="Suppression", message=msg, parent=self, type=messagebox.OKCANCEL):
+        if "ok" != messagebox.Message(
+            title="Suppression", message=msg, parent=self, icon=messagebox.WARNING, type=messagebox.OKCANCEL
+        ):
             return False
 
         return True
@@ -451,7 +458,7 @@ class UsersWindow(tk.Toplevel):
         items = self.tree.selection()
         if not items:
             msg = "Vous devez sélectionner au moins 1 utilisateur pour utiliser cette fonction"
-            messagebox.showwarning(title="Affectation groupes", message=msg, parent=self, type=messagebox.OK)
+            messagebox.showwarning(title="Affectation groupes", message=msg, parent=self)
         else:
             GroupsDialog.add(self, items)
 
@@ -459,7 +466,7 @@ class UsersWindow(tk.Toplevel):
         items = self.tree.selection()
         if not items:
             msg = "Vous devez sélectionner au moins 1 utilisateur pour utiliser cette fonction"
-            messagebox.showwarning(title="Retirer groupes", message=msg, parent=self, type=messagebox.OK)
+            messagebox.showwarning(title="Retirer groupes", message=msg, parent=self)
         else:
             GroupsDialog.remove(self, items)
 
@@ -481,7 +488,7 @@ class UsersWindow(tk.Toplevel):
 
         def worker():
             result: bool = False
-            error: Exception = None
+            error: Exception | None = None
             try:
                 result = self.users.csv_import(filename)
             except Exception as err:
@@ -494,10 +501,10 @@ class UsersWindow(tk.Toplevel):
             overlay.hide(callback=self.unlock_ui)
             if result:
                 msg = "Fin de l'import des utilisateurs"
-                messagebox.showinfo(title="Import", message=msg, parent=self, type=messagebox.OK)
+                messagebox.showinfo(title="Import", message=msg, parent=self)
             else:
                 msg = "Quelque chose ne s'est pas bien passé lors de l'import :\n" + str(error)
-                messagebox.showerror(title="Import", message=msg, parent=self, type=messagebox.OK)
+                messagebox.showerror(title="Import", message=msg, parent=self)
             self.tree_refresh()
 
         result_queue = Queue()
@@ -526,10 +533,10 @@ class UsersWindow(tk.Toplevel):
             overlay.hide(callback=self.unlock_ui)
             if result:
                 msg = "Fin de l'export des utilisateurs"
-                messagebox.showinfo(title="Export", message=msg, parent=self, type=messagebox.OK)
+                messagebox.showinfo(title="Export", message=msg, parent=self)
             else:
                 msg = "Quelque chose ne s'est pas bien passé lors de l'export !"
-                messagebox.showerror(title="Export", message=msg, parent=self, type=messagebox.OK)
+                messagebox.showerror(title="Export", message=msg, parent=self)
 
         result_queue = Queue()
         Thread(target=worker, daemon=True).start()
@@ -537,12 +544,12 @@ class UsersWindow(tk.Toplevel):
 
 
 class UserDialog(tk.Toplevel):
-    def __init__(self, parent, user: User = None):
+    def __init__(self, parent, user: User | None = None):
         super().__init__(master=parent)
         self.parent: UsersWindow = parent
 
         self.users: Users = Users()
-        self.user: User = user
+        self.user: User | None = user
         self.user_modified: bool = False
 
         self.focus_set()
@@ -629,7 +636,7 @@ class UserDialog(tk.Toplevel):
         if theme_is_on():
             self.listbox.configure(selectbackground=ThemeColors.accent, selectforeground=ThemeColors.text_secondary)
         ybar = ttk.Scrollbar(self.groups_frame, orient="vertical", command=self.listbox.yview)
-        self.listbox.configure(yscroll=ybar.set)
+        self.listbox.configure(yscrollcommand=ybar.set)
 
         title_label.grid(row=0, column=0, padx=2, pady=2, sticky="nswe")
         self.new_grp.grid(row=0, column=1, padx=2, pady=2, sticky="nswe")
@@ -655,11 +662,16 @@ class UserDialog(tk.Toplevel):
     # Autres traitements
     # ------------------------------------------------------------------------------------------
     def set_entries(self):
+        if self.user is None:
+            raise RuntimeError("No user selected !")
+
         for key, item in self.entries.items():
             if key in self.users.attribs_cust:
                 val = self.user.attribs_cust.get(key, "")
             else:
                 val = getattr(self.user, key, "")
+
+            assert isinstance(item["var"], tk.Variable)
             item["var"].set(val)
 
     def groups_set(self):
@@ -695,6 +707,7 @@ class UserDialog(tk.Toplevel):
 
         # mise à jour des infos de l'utilisateur
         for key, item in self.entries.items():
+            assert isinstance(item["var"], tk.Variable)
             val = item["var"].get()
             if key in self.users.attribs_cust:
                 user.attribs_cust[key] = val
@@ -717,7 +730,7 @@ class UserDialog(tk.Toplevel):
             overlay.hide()
 
             if error_msg:
-                messagebox.showerror(title="Erreur Enregistrement", message=error_msg, parent=self, type=messagebox.OK)
+                messagebox.showerror(title="Erreur Enregistrement", message=error_msg, parent=self)
             else:
                 self.user_modified = True
                 self.close()
@@ -726,7 +739,7 @@ class UserDialog(tk.Toplevel):
         Thread(target=worker, daemon=True).start()
         tk_call_when_ready(self, result_queue, save_end)
 
-    def close(self, _: Event = None):
+    def close(self, _: Event | None = None):
         ui_utils.ui_undisable_parent(self, self.parent)
 
         if self.user_modified:
@@ -738,22 +751,22 @@ class UserDialog(tk.Toplevel):
 
 class GroupsDialog(tk.Toplevel):
     @classmethod
-    def add(cls, parent: UserDialog, usernames: list[str]):
+    def add(cls, parent: UsersWindow, usernames: tuple[str, ...]):
         dialog = GroupsDialog(parent=parent, usernames=usernames, remove_mode=False)
-        cls.wait_window(dialog)
+        dialog.wait_window()
         return
 
     @classmethod
-    def remove(cls, parent: UserDialog, usernames: list[str]):
+    def remove(cls, parent: UsersWindow, usernames: tuple[str, ...]):
         dialog = GroupsDialog(parent=parent, usernames=usernames, remove_mode=True)
-        cls.wait_window(dialog)
+        dialog.wait_window()
         return
 
-    def __init__(self, parent, usernames: list[str], remove_mode: bool = False):
+    def __init__(self, parent, usernames: tuple[str, ...], remove_mode: bool = False):
         super().__init__(master=parent)
         self.parent: UsersWindow = parent
         self.users: Users = Users()
-        self.usernames: list[str] = usernames
+        self.usernames: tuple[str, ...] = usernames
 
         self.focus_set()
         ui_utils.ui_disable_parent(self, self.parent)
@@ -811,7 +824,7 @@ class GroupsDialog(tk.Toplevel):
         if theme_is_on():
             self.listbox.configure(selectbackground=ThemeColors.accent, selectforeground=ThemeColors.text_secondary)
         ybar = ttk.Scrollbar(self.groups_frame, orient="vertical", command=self.listbox.yview)
-        self.listbox.configure(yscroll=ybar.set)
+        self.listbox.configure(yscrollcommand=ybar.set)
         self.listbox.configure(selectbackground=select_bg_color, selectforeground="black")
 
         title_label.grid(row=0, column=0, padx=2, pady=2, sticky="nswe")
@@ -866,7 +879,7 @@ class GroupsDialog(tk.Toplevel):
         if not groups:
             action = "ajouter" if not self.remove_mode else "retirer"
             msg = f"Aucun groupe à {action} sélectionné !"
-            messagebox.showerror(title="Erreur modification", message=msg, parent=self, type=messagebox.OK)
+            messagebox.showerror(title="Erreur modification", message=msg, parent=self)
             return
 
         if not self.remove_mode:
@@ -876,7 +889,7 @@ class GroupsDialog(tk.Toplevel):
 
         self.close(refresh_tree=True)
 
-    def close(self, _: Event = None, refresh_tree: bool = False):
+    def close(self, _: Event | None = None, refresh_tree: bool = False):
         ui_utils.ui_undisable_parent(self, self.parent)
 
         if refresh_tree:
@@ -888,18 +901,18 @@ class GroupsDialog(tk.Toplevel):
 
 class AttribsDialog(tk.Toplevel):
     @classmethod
-    def modify(cls, parent: UserDialog):
+    def modify(cls, parent: UsersWindow):
         dialog = AttribsDialog(parent=parent, remove_mode=False)
-        cls.wait_window(dialog)
+        dialog.wait_window()
         return
 
     @classmethod
-    def remove(cls, parent: UserDialog):
+    def remove(cls, parent: UsersWindow):
         dialog = AttribsDialog(parent=parent, remove_mode=True)
-        cls.wait_window(dialog)
+        dialog.wait_window()
         return
 
-    def __init__(self, parent, remove_mode: bool = False):
+    def __init__(self, parent: UsersWindow, remove_mode: bool = False):
         super().__init__(master=parent)
         self.parent: UsersWindow = parent
         self.users: Users = self.parent.users
@@ -960,7 +973,7 @@ class AttribsDialog(tk.Toplevel):
         if theme_is_on():
             self.listbox.configure(selectbackground=ThemeColors.accent, selectforeground=ThemeColors.text_secondary)
         ybar = ttk.Scrollbar(self.attribs_frame, orient="vertical", command=self.listbox.yview)
-        self.listbox.configure(yscroll=ybar.set)
+        self.listbox.configure(yscrollcommand=ybar.set)
         self.listbox.configure(selectbackground=select_bg_color, selectforeground="black")
 
         title_label.grid(row=0, column=0, padx=2, pady=2, sticky="nswe")
@@ -1003,11 +1016,11 @@ class AttribsDialog(tk.Toplevel):
             return
         elif any(new_attrib.lower() == attrib.lower() for attrib in curr_attribs):
             msg = f"{new_attrib} existe déjà."
-            messagebox.showerror(title="Erreur ajout champs", message=msg, parent=self, type=messagebox.OK)
+            messagebox.showerror(title="Erreur ajout champs", message=msg, parent=self)
             return
         elif any(new_attrib.lower() == attrib.lower() for attrib in list(self.users.attribs_std)):
             msg = f"{new_attrib} est déjà utilisé en interne."
-            messagebox.showerror(title="Erreur ajout champs", message=msg, parent=self, type=messagebox.OK)
+            messagebox.showerror(title="Erreur ajout champs", message=msg, parent=self)
             return
 
         pos = 0
@@ -1026,7 +1039,7 @@ class AttribsDialog(tk.Toplevel):
         if not attribs:
             action = "ajouter" if not self.remove_mode else "retirer"
             msg = f"Aucun champs à {action} sélectionné !"
-            messagebox.showerror(title="Erreur modification", message=msg, parent=self, type=messagebox.OK)
+            messagebox.showerror(title="Erreur modification", message=msg, parent=self)
             return
 
         if not self.remove_mode:
@@ -1036,7 +1049,7 @@ class AttribsDialog(tk.Toplevel):
 
         self.close(refresh_tree=True)
 
-    def close(self, _: Event = None, refresh_tree: bool = False):
+    def close(self, _: Event | None = None, refresh_tree: bool = False):
         ui_utils.ui_undisable_parent(self, self.parent)
 
         if refresh_tree:

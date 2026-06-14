@@ -796,11 +796,8 @@ class QueryExecute:
             + f"\nDébut : {starting_date.strftime(self.print_date_format)}"
             + f"\nFin : {ending_date.strftime(self.print_date_format)}"
             + f"\nDurée : {int(elapsed_time) // 60:02d}:{int(elapsed_time) % 60:02d}"
+            + f"\n{str('=') * 50}"
         )
-        if rows_count > 0:
-            self._broadcast(f"Fichier extrait : {self.config.extract_file}\n" + str("=") * 50)
-        else:
-            self._broadcast("Fichier extrait : aucune ligne de récupérée, pas de fichier\n" + str("=") * 50)
 
     def _extract_to_list(self, cursor) -> tuple[int, list[list[str]]]:
         buffer = []

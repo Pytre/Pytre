@@ -6,6 +6,7 @@ import uuid
 import hashlib
 import json
 import random
+from dataclasses import dataclass
 from os import getpid, fsync
 from socket import gethostname
 from datetime import datetime
@@ -280,12 +281,21 @@ class FileDriven(CentralLogs):
         else:
             try:
                 active_index, folder_to_process = self.get_active_export_folder()
-                if not self.set_active_export_folder(active_index + 1):  # change active folder
+
+                # check if previous folder has unprocessed files and synchronize them first
+                previous_index = (active_index - 1) % len(self.export_folders)
+                previous_folder = self.export_folders[previous_index]
+                if next(previous_folder.glob("*.json"), None):
+                    print("Previous active folder not empty, attempting to synchronize it")
+                    try:
+                        self.synchronize_folder(previous_folder)
+                    except Exception as e:
+                        print(f"Error processing previous folder : {e}")
+
+                # switch active folder and synchronize vacated folder
+                if not self.set_active_export_folder(active_index + 1):
                     raise Exception("Couldn't change active folder")
-                if not self.wait_for_folder_completion(folder_to_process):
-                    raise Exception("Timed out while waiting for folder completion")
-                if not self.process_files(folder_to_process):
-                    raise Exception("Problem occured while processing exported files")
+                self.synchronize_folder(folder_to_process)
 
                 print("Successfully processed export files")
                 return True
@@ -295,6 +305,13 @@ class FileDriven(CentralLogs):
                 self.release_lock()
 
         return True
+
+    def synchronize_folder(self, folder_path: Path):
+        files = self.wait_for_files_completion(folder_path)
+        if not files:
+            raise TimeoutError("No stable file found before timeout")
+        if not self.process_files(files):
+            raise RuntimeError("Problem occurred while processing exported files")
 
     # ------------------------------------------------------------------------------------------
     # Functions to export data to sync into files
@@ -358,52 +375,63 @@ class FileDriven(CentralLogs):
     # ------------------------------------------------------------------------------------------
     # Functions to update central database
     # ------------------------------------------------------------------------------------------
-    def wait_for_folder_completion(self, folder_path: Path, max_wait: int = 60) -> bool:
+    def wait_for_files_completion(self, folder_path: Path, max_wait: int = 60) -> set[str] | None:
         check_interval = 5  # seconds
-        stable_period = 15  # seconds without changes
+        required_stable_count = 3  # scan with no change before assuming file is stable
 
-        last_sizes = {}
-        stable_since = None
+        @dataclass
+        class FileStats:
+            size: int | None = None
+            stable_count: int = 0
 
+        files: dict[str, FileStats] = {}
         start_time = time.time()
+        stable_files: set[str] = set()
         while time.time() - start_time < max_wait:
             if self.stop_event.is_set():
-                return False
+                return None
 
-            current_sizes = {f: f.stat().st_size for f in folder_path.glob("*.json")}
+            for f in folder_path.glob("*.json"):
+                key = str(f)
 
-            if current_sizes == last_sizes:
-                if stable_since is None:
-                    stable_since = time.time()
-                elif time.time() - stable_since >= stable_period:
-                    print(f"Folder {folder_path} stable for {stable_period}s with {len(current_sizes)} files")
-                    return True
-            else:
-                stable_since = None
-                last_sizes = current_sizes
+                try:
+                    f_size = f.stat().st_size
+                except FileNotFoundError:
+                    files.pop(key, None)
+                    continue
+
+                if files.get(key) is None:
+                    files[key] = FileStats()
+
+                if f_size == files[key].size:
+                    files[key].stable_count += 1
+                else:
+                    files[key].size = f_size
+                    files[key].stable_count = 0
+
+            stable_files = {k for k, v in files.items() if v.stable_count >= required_stable_count}
+
+            if len(stable_files) == len(files):
+                print(f"Folder {folder_path} stable for all {len(files)} files")
+                return stable_files
 
             time.sleep(check_interval)
 
-        print(f"Max wait time reached, {len(last_sizes)} files (possibly incomplete)")
-        return False
+        print(f"Max wait time reached, {len(stable_files)} files from {len(files)} will be processed")
+        return stable_files if stable_files else None
 
-    def process_files(self, folder_to_process: Path) -> bool:
+    def process_files(self, files_to_process: set[str] | None) -> bool:
         if self.stop_event.is_set():
             return False
-        if not folder_to_process.exists():
-            print(f"The export folder does not exist: {folder_to_process}")
-            return False
-
-        exported_files = list(folder_to_process.glob("*.json"))
-        if not exported_files:
+        if not files_to_process:
             print("No exported files to process!")
             return False
 
-        print(f"Starting processing {len(exported_files)} file(s)")
+        print(f"Starting processing {len(files_to_process)} file(s)")
 
         rows_values: list = []
         processed_files: list[Path] = []
-        rows_values, processed_files = self.files_extract_infos(exported_files)
+        rows_values, processed_files = self.files_extract_infos(list(files_to_process))
 
         if rows_values:
             success = self.insert_into_central_db(rows_values)
@@ -418,7 +446,7 @@ class FileDriven(CentralLogs):
 
         return True
 
-    def files_extract_infos(self, exported_files: list[Path]) -> tuple[list[str], list[Path]]:
+    def files_extract_infos(self, exported_files: list[Path] | list[str]) -> tuple[list[str], list[Path]]:
         rows_values: list = []
         processed_files: list[Path] = []
         failed_files: list[Path] = []
@@ -428,10 +456,12 @@ class FileDriven(CentralLogs):
                 with open(file, "r") as f:
                     rows = json.load(f)
                 rows_values.extend(rows)
-                processed_files.append(file)
+                processed_files.append(Path(file))
+            except FileNotFoundError:
+                print(f"Import error, file not found : {file}")
             except Exception as e:
                 print(f"Error processing {file} : {e}")
-                failed_files.append(file)
+                failed_files.append(Path(file))
 
         if failed_files:
             timestamp = datetime.now().strftime("%Y%m%d%H%M%S")

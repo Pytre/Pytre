@@ -112,7 +112,7 @@ class ExecutionRunner:
                 while True:
                     queue.get_nowait()
             except QueueIsEmpty:
-                break
+                pass
 
         # recreate process
         self.create_process()

@@ -834,6 +834,7 @@ class QueryExecute:
                 self._time_log() + f" - Encodage pour extraction invalide, utilisation '{encoding}' par défaut"
             )
 
+        self.config.extract_file.parent.mkdir(parents=True, exist_ok=True)
         with open(self.config.extract_file, mode="w", encoding=encoding, errors="replace", newline="") as f:
             csv_writer = csv.writer(f, delimiter=self.field_separator, quotechar='"', quoting=csv.QUOTE_MINIMAL)
 

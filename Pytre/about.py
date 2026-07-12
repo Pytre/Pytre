@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from settings import get_app_path
+from utils import get_app_path
 
 APP_NAME = "Pytre"
 APP_VERSION = "1.7.6"

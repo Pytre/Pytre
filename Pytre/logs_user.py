@@ -1,14 +1,20 @@
 import sqlite3
 import json
+import logging
 from datetime import datetime
 from pathlib import Path
 
 import user_prefs
 from singleton_metaclass import Singleton
+from utils import log as _log, setup_standalone_logging
 
 USER_DB: Path = user_prefs.CONFIG_FOLDER / "Pytre_Logs.db"
 LATEST_VERSION: int = 2  # latest version model of user database
 LOG_MAX: int = 2500
+
+
+def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__) -> None:
+    _log(msg, level=level, sublogger=sublogger)
 
 
 class LogRecord:
@@ -112,7 +118,7 @@ class UserDb(metaclass=Singleton):
                 cursor.close()
                 return user_version
         except Exception as e:
-            print(f"Couldn't retrieve user_info pragma: {e}")
+            log(f"Couldn't retrieve user_info pragma: {e}", logging.ERROR)
             return -1
 
     # ------------------------------------------------------------------------------------------
@@ -144,7 +150,7 @@ class UserDb(metaclass=Singleton):
                 self.user_version = self.latest_version
                 return True
         except Exception as e:
-            print(f"Unexpected error during user database creation: {e}")
+            log(f"Unexpected error during user database creation: {e}", logging.ERROR)
             return False
 
     def update_db(self) -> bool:
@@ -161,10 +167,10 @@ class UserDb(metaclass=Singleton):
 
             update_func = getattr(self, f"update_db_{version}_to_{version + 1}")
             if not update_func():
-                print(f"Aborting user database update, migration to {version + 1} failed")
+                log(f"Aborting user database update, migration to {version + 1} failed", logging.ERROR)
                 return False
 
-        print(f"User database migration to version {self.latest_version} completed")
+        log(f"User database migration to version {self.latest_version} completed")
         return True
 
     def update_db_0_to_1(self) -> bool:
@@ -178,11 +184,11 @@ class UserDb(metaclass=Singleton):
                 conn.execute("CREATE INDEX IDX_SERVER_ID ON QUERIES_EXEC (SERVER_ID);")
 
                 conn.commit()
-                print(f"User database updated to version {new_version}")
+                log(f"User database updated to version {new_version}")
                 self.user_version = new_version
                 return True
         except Exception as e:
-            print(f"Unexpected error in schema update to version {new_version}: {e}")
+            log(f"Unexpected error in schema update to version {new_version}: {e}", logging.ERROR)
             return False
 
     def update_db_1_to_2(self) -> bool:
@@ -192,11 +198,11 @@ class UserDb(metaclass=Singleton):
                 conn.execute(f"PRAGMA user_version = {new_version};")
                 conn.execute("ALTER TABLE QUERIES_EXEC DROP COLUMN END;")
                 conn.commit()
-                print(f"User database updated to version {new_version}")
+                log(f"User database updated to version {new_version}")
                 self.user_version = new_version
                 return True
         except Exception as e:
-            print(f"Unexpected error in schema update to version {new_version}: {e}")
+            log(f"Unexpected error in schema update to version {new_version}: {e}", logging.ERROR)
             return False
 
     # ------------------------------------------------------------------------------------------
@@ -236,7 +242,7 @@ class UserDb(metaclass=Singleton):
 
                 conn.commit()
         except sqlite3.OperationalError as e:
-            print(f"SQLite operational error : {e}")
+            log(f"SQLite operational error : {e}", logging.ERROR)
 
     # ------------------------------------------------------------------------------------------
     # select methods
@@ -335,4 +341,5 @@ class UserDb(metaclass=Singleton):
 
 
 if __name__ == "__main__":
+    setup_standalone_logging()
     mydb = UserDb()

@@ -1,3 +1,4 @@
+import logging
 import tkinter as tk
 from threading import Thread
 from queue import Queue as ThreadQueue
@@ -36,6 +37,10 @@ from ui.app_password import PasswordWindow
 from ui.app_console import ConsoleWindow
 from ui.app_about import AboutWindow
 from ui.app_theme import set_theme, set_menus, theme_is_on
+
+
+def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__) -> None:
+    utils.log(msg, level=level, sublogger=sublogger)
 
 
 class ParamWidgetGroup(TypedDict, total=False):
@@ -594,7 +599,7 @@ class App(tk.Toplevel):
                     self.exec_check_queue()
                     return
             except RuntimeError as e:
-                print(f"Erreur lors du lancement de la requête : {e}")
+                log(f"Erreur lors du lancement de la requête : {e}", logging.ERROR)
 
             if not self.exec_runner.creating_process:
                 self.exec_runner.create_process()
@@ -627,7 +632,7 @@ class App(tk.Toplevel):
         self.start_time = None
         self.process_running = True
 
-        print("UI - Execution starting")
+        log("UI - Execution starting")
         self.lock_ui(query_exec=True)
         init_query_run()
 
@@ -663,13 +668,16 @@ class App(tk.Toplevel):
             while not self.exec_runner.queue_result.empty():
                 msg_type, data = self.exec_runner.queue_result.get_nowait()
                 if msg_type == "msg_print":
-                    print(data)
+                    log(data)
                 elif msg_type == "msg_output":
-                    print(data)
+                    log(data)
                     # si output pas vide, rajout retour à la ligne
                     if self.output_textbox.get("1.0", "end-1c"):
                         data = "\n" + data
                     self.output_msg(data, "end")
+                elif msg_type == "log":
+                    msg, level, sublogger = data
+                    log(msg, level, sublogger)
                 elif msg_type == "start_timer":
                     self.start_time = datetime.now()
                     self.exec_timer(wait_in_sec=60)
@@ -679,7 +687,7 @@ class App(tk.Toplevel):
                     self.rows_number, self.output_file = data
                 elif msg_type == "error":
                     msg = f"Erreur non gérée :\n{data}"
-                    print(msg)
+                    log(msg, level=logging.ERROR)
                     self.output_msg(msg, "end")
                 elif msg_type == "central_log" and (logs := self.get_central_logs()):
                     logs.trigger_sync(**data)
@@ -687,7 +695,7 @@ class App(tk.Toplevel):
                     self.exec_timer(stop=True)
                     done = True
         except Exception as e:
-            print(f"Error reading queue: {e}")
+            log(f"Error reading queue: {e}", logging.ERROR)
             done = True
 
         # si traitement fini ou erreur alors passer aux étapes de fin
@@ -715,7 +723,7 @@ class App(tk.Toplevel):
         self.exec_timer(stop=True)
         self.unlock_ui(query_exec=True)
         self.process_running = False
-        print("UI - Execution ending")
+        log("UI - Execution ending")
 
         # si arrêt forcé
         if self.exec_runner.task_killed:

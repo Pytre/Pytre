@@ -1,8 +1,52 @@
 import codecs
+import logging
 import os
 import subprocess
 import platform
+import sys
+
 from pathlib import Path
+
+LOGGER_ROOT_NAME = "Pytre"
+
+
+def get_app_path() -> Path:
+    # If app is run as a bundle then PyInstaller bootloader
+    # extends sys with a flag frozen = True and sets app path into _MEIPASS
+
+    if getattr(sys, "frozen", False):
+        application_path: str = getattr(sys, "_MEIPASS")
+    else:
+        application_path: str = os.path.dirname(os.path.abspath(__file__))
+
+    return Path(application_path)
+
+
+def log(msg: str | object, level: int = logging.INFO, sublogger: str = "") -> None:
+    """Log message to logger"""
+    if msg is None:
+        return
+
+    if not sublogger:
+        name = LOGGER_ROOT_NAME
+    elif sublogger.split(".")[0] == LOGGER_ROOT_NAME:
+        name = sublogger
+    else:
+        name = f"{LOGGER_ROOT_NAME}.{sublogger}"
+
+    logging.getLogger(name).log(level, str(msg))
+
+
+def _log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__) -> None:
+    log(msg, level=level, sublogger=sublogger)
+
+
+def setup_standalone_logging() -> None:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(levelname)s - %(message)s",
+        datefmt="%H:%M:%S",
+    )
 
 
 def get_system() -> str:
@@ -142,7 +186,7 @@ def detect_encoding(filepath: str | Path, encoding: str | None = None, sample_si
         except UnicodeDecodeError:
             continue
         except LookupError:
-            print(f"Unknown encoding format to test provided: '{tested_encoding}'")
+            _log(f"Unknown encoding format to test provided: '{tested_encoding}'", logging.ERROR)
 
     return ""
 
@@ -155,6 +199,6 @@ def get_valid_encoding(encoding: str, fallback: str = "", warn: bool = True) -> 
         return encoding
     except LookupError:
         if warn:
-            print(f"Unknown encoding format: '{encoding}'")
+            _log(f"Unknown encoding format: '{encoding}'", logging.ERROR)
 
     return None if not fallback else get_valid_encoding(fallback)

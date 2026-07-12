@@ -1,4 +1,5 @@
 import json
+import logging
 import shutil
 from dataclasses import dataclass
 from enum import Enum
@@ -6,10 +7,15 @@ from pathlib import Path
 from typing import Any
 
 from singleton_metaclass import Singleton
+from utils import log as _log, setup_standalone_logging
 
 CACHE_FOLDER: Path = Path.home() / "Pytre" / ".temp_cache"
 CONFIG_FOLDER: Path = Path.home() / "Pytre"
 SETTING_FILE: Path = CONFIG_FOLDER / "Pytre_Settings.json"
+
+
+def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__) -> None:
+    _log(msg, level=level, sublogger=sublogger)
 
 
 class PrefsEnum(Enum):
@@ -80,21 +86,21 @@ class UserPrefs(metaclass=Singleton):
             return None
         except (OSError, PermissionError) as e:
             err_msg = f"Impossible de créer {folder} : {e}"
-            print(err_msg)
+            log(err_msg, logging.WARNING)
             if folder != self._cache_folder and self._cache_folder.exists() and self._cache_folder.is_dir():
-                print(f"Dossier actuel conservé : {self._cache_folder}")
+                log(f"Dossier actuel conservé : {self._cache_folder}")
             elif folder != self._cache_folder and folder != CACHE_FOLDER:
-                print("Tentative utilisation dossier cache par défaut...")
+                log("Tentative utilisation dossier cache par défaut...")
                 return self._change_cache_folder(CACHE_FOLDER)
             else:
-                print("ATTENTION : Le dossier de cache par défaut est inaccessible.")
+                log("ATTENTION : Le dossier de cache par défaut est inaccessible.", logging.ERROR)
 
             return Issue(type=IssueType.ERROR, msg=f"{err_msg}\nDossier cache retenu : {self._cache_folder}")
 
     def _migrate_cache_from_config_folder(self) -> None:
-        print("Migration du cache : déplacement des fichiers CSV de CONFIG_FOLDER vers CACHE_FOLDER...")
+        log("Migration du cache : déplacement des fichiers CSV de CONFIG_FOLDER vers CACHE_FOLDER...")
         if self._change_cache_folder(CACHE_FOLDER) is not None:
-            print("Migration annulée : impossible de créer le dossier cache par défaut.")
+            log("Migration annulée : impossible de créer le dossier cache par défaut.", logging.ERROR)
             return
 
         moved = 0
@@ -103,9 +109,9 @@ class UserPrefs(metaclass=Singleton):
                 shutil.move(str(csv_file), self._cache_folder / csv_file.name)
                 moved += 1
             except (OSError, shutil.Error) as e:
-                print(f"Impossible de déplacer {csv_file.name} : {e}")
+                log(f"Impossible de déplacer {csv_file.name} : {e}", logging.ERROR)
 
-        print(f"Migration terminée : {moved} fichier(s) déplacé(s) vers {self._cache_folder}")
+        log(f"Migration terminée : {moved} fichier(s) déplacé(s) vers {self._cache_folder}")
         self.save()
 
     def to_json(self) -> dict:
@@ -129,10 +135,10 @@ class UserPrefs(metaclass=Singleton):
             result = self._change_cache_folder(new_cache_folder)
             if result is not None:
                 if result.type == IssueType.ERROR:
-                    print(f"Valeur invalide '{key.value}' : {new_cache_folder}\n{result.msg}")
+                    log(f"Valeur invalide '{key.value}' : {new_cache_folder}\n{result.msg}", logging.ERROR)
                     raise ValueError(result.msg)
                 if result.type == IssueType.WARNING:
-                    print(f"Warning '{key.value}' : {result.msg}")
+                    log(f"Warning '{key.value}' : {result.msg}", logging.WARNING)
                     warning = result.msg
             elif old_cache_folder.resolve() != self._cache_folder.resolve():
                 warning = "Le contenu du dossier cache est temporaire et nettoyé automatiquement."
@@ -160,7 +166,7 @@ class UserPrefs(metaclass=Singleton):
                 with open(self.file, mode="r", encoding="utf-8") as f:
                     json_dict: dict = {k.lower(): v for k, v in json.load(f).items()}  # force key to lower case
             except (json.JSONDecodeError, IOError) as e:
-                print(f"Erreur lors du chargement des préférences utilisateur : {e}")
+                log(f"Erreur lors du chargement des préférences utilisateur : {e}", logging.WARNING)
 
         for enum in PrefsEnum:
             value = json_dict.get(enum.name, None)
@@ -170,7 +176,7 @@ class UserPrefs(metaclass=Singleton):
             try:
                 self.set(enum, value, save=False)
             except (TypeError, ValueError) as e:
-                print(f"Valeur invalide pour '{enum.name}': {value} ({e})")
+                log(f"Valeur invalide pour '{enum.name}': {value} ({e})", logging.WARNING)
 
         self._cache = self.to_json()
 
@@ -182,7 +188,7 @@ class UserPrefs(metaclass=Singleton):
             with open(self.file, mode="w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
         except (OSError, PermissionError) as e:
-            print(f"Erreur lors de la sauvegarde des préférences utilisateur: {e}")
+            log(f"Erreur lors de la sauvegarde des préférences utilisateur: {e}", logging.ERROR)
             return False
 
         self._cache = data
@@ -191,6 +197,7 @@ class UserPrefs(metaclass=Singleton):
 
 
 if __name__ == "__main__":
+    setup_standalone_logging()
     user_prefs = UserPrefs()
     print(f"{'=' * 50}\nPreferences utilisateur courant\n{'=' * 50}")
     print(user_prefs)

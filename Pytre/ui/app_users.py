@@ -1,3 +1,4 @@
+import logging
 import tkinter as tk
 from tkinter import ttk, Event, font, messagebox, filedialog
 from threading import Thread
@@ -16,6 +17,10 @@ from ui.ui_utils_thread import tk_call_when_ready
 from ui.app_theme import set_theme, set_menus, ThemeColors, theme_is_on
 from ui.InputDialog import InputDialog
 from ui.MsgOverlay import MsgOverlay
+
+
+def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__) -> None:
+    utils.log(msg, level=level, sublogger=sublogger)
 
 
 class UsersWindow(tk.Toplevel):
@@ -181,7 +186,7 @@ class UsersWindow(tk.Toplevel):
         i = 0
         while i < len(cols):
             if cols[i] not in self.tree["columns"]:
-                print(f'Error when filtering : "{cols[i]}" do not exists in tree columns')
+                log(f'Error when filtering : "{cols[i]}" do not exists in tree columns', logging.WARNING)
                 cols.pop(i)
             else:
                 i += 1

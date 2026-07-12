@@ -1,6 +1,7 @@
 import re
 import csv
 import codecs
+import logging
 from collections.abc import Callable
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
@@ -16,6 +17,7 @@ import settings
 import users
 import servers
 import logs_user
+import utils
 from user_prefs import UserPrefs, PrefsEnum
 from sql_converter import SqlTypeConverter
 
@@ -31,6 +33,28 @@ DISPLAY_VALUE_PATTERN = re.compile(r"^[^=]*=\s*('.*?'|[^,\s]*)")
 TYPE_ARGS_PATTERN = re.compile(r"^[^(=]+\(([^)]+)\)")
 COMMENT_PATTERN = re.compile(r"--\s*(.+)")
 INFO_LIST_PATTERN = re.compile(r"^(.*?)(?=\(|$)\(?(.*?)\)?$")
+
+# Global variables used for logging
+_LOG_QUEUE: Queue | None = None
+# Logger to allow console output when module is directly launched
+# otherwise do nothing since the root log level not set to INFO by setup_standalone_logging
+_STANDALONE_BROADCAST_LOGGER: logging.Logger = logging.getLogger("sql_query_debug")
+
+
+def set_log_queue(queue: Queue | None) -> None:
+    """
+    Route log() through the queue used by Query/QueryExecute for exec msg, instead of logging locally.
+    Pass None to revert to local logging.
+    """
+    global _LOG_QUEUE
+    _LOG_QUEUE = queue
+
+
+def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__) -> None:
+    if _LOG_QUEUE is None:
+        utils.log(msg, level=level, sublogger=sublogger)
+    else:
+        _LOG_QUEUE.put(("log", (msg, level, sublogger)))
 
 
 @dataclass(frozen=True)
@@ -144,7 +168,7 @@ class Query:
 
     def _broadcast(self, msg_to_broadcast: str, msg_type: str = "msg_output") -> None:
         self.query_execute.queue.put((msg_type, msg_to_broadcast))
-        print(msg_to_broadcast)
+        _STANDALONE_BROADCAST_LOGGER.info(msg_to_broadcast)
 
     def serialize(self) -> dict:
         display_params: dict[str, str] = {}
@@ -893,7 +917,7 @@ class QueryExecute:
 
     def _broadcast(self, msg_to_display: str, msg_type: str = "msg_output") -> None:
         self.queue.put((msg_type, msg_to_display))
-        print(msg_to_display)
+        _STANDALONE_BROADCAST_LOGGER.info(msg_to_display)
 
     def _time_log(self) -> str:
         return datetime.now().strftime(self.print_date_format)
@@ -913,12 +937,12 @@ def get_queries(folder: Path) -> tuple[list[Query], list[str]]:
         except ValueError as e:
             error = f"Erreur chrgmt '{Path(file).name}' : ValueError, {e}"
             errors.append(error)
-            print(error)
+            log(error, level=logging.WARNING)
             continue
         except Exception as e:
             error = f"Erreur chrgmt '{Path(file).name}' : {e.__class__.__name__}, {e}"
             errors.append(error)
-            print(error)
+            log(error, level=logging.WARNING)
             continue  # si erreur, ne pas bloquer et ignorer la requête
 
         queries.append(my_query)
@@ -976,16 +1000,18 @@ def orphan_queries(folder: Path) -> list[Path]:
             query = Query(Path(file))
             if not set(query.servers_id) & set(all_ids):
                 orphan_files.append(Path(file))
-                print(f"Aucun serveur existant pour : {Path(file).name}")
+                log(f"Aucun serveur existant pour : {Path(file).name}", logging.WARNING)
         except Exception as e:
             error = f"Erreur chrgmt '{Path(file).name}' : {e.__class__.__name__}, {e}"
-            print(error)
+            log(error, logging.WARNING)
             continue  # si erreur, ne pas bloquer et ignorer la requête
 
     return orphan_files
 
 
 if __name__ == "__main__":
+    utils.setup_standalone_logging()
+
     app_settings: settings.Settings = settings.Settings()
     APP_PATH = app_settings.app_path
 
@@ -996,8 +1022,8 @@ if __name__ == "__main__":
 
     my_query = Query(sql_script)
     my_query.update_values()
-    print(my_query.get_exec_config())
-    print(my_query.get_cmd_for_debug())
+    log(my_query.get_exec_config())
+    log(my_query.get_cmd_for_debug())
     my_query.execute(file_output=True)
 
     orphan_queries(settings.Settings().queries_folder)

@@ -1,10 +1,15 @@
+import logging
 from threading import Thread, Lock
 from queue import Empty as QueueIsEmpty
 from multiprocessing import Process, Queue, Event as proc_get_event
 from multiprocessing.synchronize import Event as ProcEvent
 from dataclasses import dataclass
 
-from sql_query import Query
+from sql_query import Query, set_log_queue, log as _log
+
+
+def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__) -> None:
+    _log(msg, level=level, sublogger=sublogger)
 
 
 @dataclass(frozen=True)
@@ -47,11 +52,11 @@ class ExecutionRunner:
                 if self.queue_result.get(timeout=90.0):  # long timeout : allow slow init (network, antivirus, ...)
                     with self._create_lock:
                         self.process_ready = True
-                    print("Execution process ready")
+                    log("Execution process ready")
             except QueueIsEmpty:
-                print("Execution process failed to initialize")
+                log("Execution process failed to initialize", logging.WARNING)
                 if self.process and self.process.is_alive():
-                    print("Terminating stuck execution process...")
+                    log("Terminating stuck execution process...")
                     self.process.terminate()
                     self.process.join(timeout=2.0)
                     if self.process.is_alive():
@@ -62,43 +67,43 @@ class ExecutionRunner:
 
         with self._create_lock:
             if self.creating_process:
-                print("Execution process already being created")
+                log("Execution process already being created")
                 return
             elif self.process and self.process.is_alive():
-                print("Execution process already exists and is alive")
+                log("Execution process already exists and is alive")
                 return
 
             self.process_ready = False
             self.creating_process = True
 
-        print("Execution process initializing")
+        log("Execution process initializing")
         Thread(target=create, daemon=True).start()
 
     def kill_and_restart(self):
-        print("Task has been asked to stop")
+        log("Task has been asked to stop")
 
         with self._create_lock:
             self.process_ready = False
 
         if not self.process:
-            print("Task, stopping error : execution process does not exist")
+            log("Task, stopping error : execution process does not exist", logging.WARNING)
         else:
             if not self.cannot_stop.is_set():
-                print("Trying to stop task normally")
+                log("Trying to stop task normally")
                 self.stop_process()
                 self.process.join(timeout=5.0)
 
             if self.process.is_alive():
-                print("Trying to stop task by terminating execution process")
+                log("Trying to stop task by terminating execution process")
                 self.process.terminate()  # SIGTERM
                 self.process.join(timeout=2.0)
 
             if self.process.is_alive():
-                print("Trying to stop task by killing execution process")
+                log("Trying to stop task by killing execution process")
                 self.process.kill()  # SIGKILL
                 self.process.join()
 
-            print("Task stopped")
+            log("Task stopped")
 
         # flag task as killed
         with self._create_lock:
@@ -142,6 +147,7 @@ class ExecutionRunner:
 
 class ExecutionProcess:
     def __init__(self, config: ProcessConfig):
+        set_log_queue(config.queue_result)
         self.queue_task: Queue = config.queue_task
         self.queue_result: Queue = config.queue_result
         self.stop_requested: ProcEvent = config.stop_requested
@@ -151,7 +157,7 @@ class ExecutionProcess:
         try:
             self.queue_result.put(True)
         except Exception as e:
-            print(f"Execution process failed to signal ready state : {e}")
+            log(f"Execution process failed to signal ready state : {e}", logging.ERROR)
             return
 
         try:
@@ -162,9 +168,9 @@ class ExecutionProcess:
                 elif msg_type == "start":
                     self.run_task(server_id, query_data)
         except Exception as e:
-            print(f"Execution process unexpected error : {e}")
+            log(f"Execution process unexpected error : {e}", logging.ERROR)
         finally:
-            print("Execution process ending")
+            log("Execution process ending")
 
     def run_task(self, server_id: str, query_data: dict):
         try:

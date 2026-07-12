@@ -1,5 +1,4 @@
-import sys
-import os
+import logging
 from pathlib import Path
 from typing import cast
 
@@ -8,6 +7,7 @@ from pykeepass.exceptions import CredentialsError
 from pykeepass.entry import Entry
 from pykeepass.group import Group
 
+from utils import get_app_path, log as _log
 from singleton_metaclass import Singleton
 from credentials import crypted_file_pwd_get, crypted_file_pwd_history, crypted_file_pwd_change
 
@@ -17,16 +17,8 @@ BLANK_FILE: str = "res/blank.db"  # relative path for blank db
 BLANK_PWD: str = "password"  # password for blank db
 
 
-def get_app_path() -> Path:
-    # If app is run as a bundle then PyInstaller bootloader
-    # extends sys with a flag frozen = True and sets app path into _MEIPASS
-
-    if getattr(sys, "frozen", False):
-        application_path: str = getattr(sys, "_MEIPASS")
-    else:
-        application_path: str = os.path.dirname(os.path.abspath(__file__))
-
-    return Path(application_path)
+def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__) -> None:
+    _log(msg, level=level, sublogger=sublogger)
 
 
 class Kee(metaclass=Singleton):
@@ -56,22 +48,22 @@ class Kee(metaclass=Singleton):
             try:
                 self.db = PyKeePass(self.file, password=self.pwd)
             except FileNotFoundError:
-                print(f"Base des paramètres introuvable : '{self.file}'")
+                log(f"Base des paramètres introuvable : '{self.file}'", logging.WARNING)
                 self.create_db()
             except CredentialsError:  # si erreur mot de passe, tentative avec les précédents
                 self.is_ko = True
                 db_unlocked = self.pwd_try()
                 if not db_unlocked:
-                    print("Accès base des paramètres impossible : mot de passe invalide.")
+                    log("Accès base des paramètres impossible : mot de passe invalide.", logging.ERROR)
                     return
 
             self.is_open = True
             self.opening_count += 1
-            print(f"Opening count : {self.opening_count}")
+            log(f"Opening count : {self.opening_count}", logging.DEBUG)
         elif reload and self.db is not None:
             self.db.reload()
             self.opening_count += 1
-            print(f"Opening count : {self.opening_count}")
+            log(f"Opening count : {self.opening_count}", logging.DEBUG)
 
         assert self.db is not None
         self.grp_settings = cast(Group | None, self.db.find_groups(name=self.grp_name_settings, first=True))
@@ -90,19 +82,19 @@ class Kee(metaclass=Singleton):
                 + "Vos modifications n'ont pas pu être enregistées.\n\n"
                 + "Merci d'alerter les administateurs."
             )
-            print(msg)
+            log(msg, logging.ERROR)
 
     def create_db(self, password: str = BLANK_PWD):
         self.is_ko = True
 
-        print("Création d'une nouvelle base en cours...")
+        log("Création d'une nouvelle base en cours...")
 
         self.db = PyKeePass(get_app_path() / BLANK_FILE, password=BLANK_PWD)
         self.db.filename = self.file
         self.pwd_change(password, True)
         self._create_db_set_default()
 
-        print("Nouvelle base créée ! Mettez à jour les paramètres et changer le mot de passe à l'aide du menu admin.")
+        log("Nouvelle base créée ! Mettez à jour les paramètres et changer le mot de passe à l'aide du menu admin.")
 
         self.is_ko = False
 
@@ -142,7 +134,7 @@ class Kee(metaclass=Singleton):
                 self.db = PyKeePass(self.file, password=pwd)
                 self.pwd_change(pwd, True)
                 self.is_ko = False
-                print("Accès à la base restauré")
+                log("Accès à la base restauré")
                 return True
             except CredentialsError:
                 pass

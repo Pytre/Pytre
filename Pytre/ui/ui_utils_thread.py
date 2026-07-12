@@ -1,5 +1,12 @@
+import logging
 import tkinter as tk
 from queue import Queue, Empty as QueueIsEmpty
+
+from utils import log as _log
+
+
+def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__) -> None:
+    _log(msg, level=level, sublogger=sublogger)
 
 
 def tk_call_when_ready(tk_window: tk.Toplevel, result_queue: Queue, callback, check_interval_ms: int = 100):
@@ -29,7 +36,8 @@ def tk_call_when_ready(tk_window: tk.Toplevel, result_queue: Queue, callback, ch
         except QueueIsEmpty:
             tk_window.after(check_interval_ms, check)
         except Exception as e:
-            print(f"Error while checking queue: {e}")
+            log(f"Error while checking queue: {e}", logging.ERROR)
+            tk_window.after(check_interval_ms, check)
 
     # start queue checking
     tk_window.after(check_interval_ms, check)

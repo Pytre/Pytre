@@ -1,21 +1,26 @@
 import codecs
 import json
+import logging
 from pathlib import Path, PureWindowsPath
 
 from pykeepass.entry import Entry
 from pykeepass.group import Group
 
-from kee import Kee, get_app_path
+from kee import Kee
 from singleton_metaclass import Singleton
-from utils import detect_encoding
+from utils import detect_encoding, get_app_path, log as _log, setup_standalone_logging
 
 DEFAULT_QUERIES_FOLDER = Path.home() / "Queries"
+
+
+def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__) -> None:
+    _log(msg, level=level, sublogger=sublogger)
 
 
 class Settings(metaclass=Singleton):
     def __init__(self):
         self.kee: Kee = Kee()
-        self.kee_grp: Group|None = None
+        self.kee_grp: Group | None = None
 
         self.app_path: Path = get_app_path()
         self.default_encoding: str = "utf-8-sig"  # format à utiliser par défaut
@@ -67,25 +72,28 @@ class Settings(metaclass=Singleton):
 
     def load(self, reload: bool = False) -> None:
         if not self.open_db(reload=reload):
-            print("Error, couldn't load settings : base failed to open")
+            log("Error, couldn't load settings : base failed to open", logging.ERROR)
             return
 
         for kee_title, attr_name in self._params.items():
-            info: Entry = self.kee.db.find_entries(title=kee_title, group=self.kee_grp, first=True) # type: ignore
+            info: Entry = self.kee.db.find_entries(title=kee_title, group=self.kee_grp, first=True)  # type: ignore
             if not info:
                 continue
 
             value: str | int | bool | Path = info.username if info.username is not None else ""
 
             if kee_title == "FIELD_SEPARATOR" and (not value or len(value) != 1):
-                print(f"Invalid field separator '{value}', using default ';'")
+                log(f"Invalid field separator '{value}', using default ';'", logging.WARNING)
                 value = ";"
             elif kee_title == "DECIMAL_SEPARATOR":
                 if not value or len(value) != 1:
-                    print(f"Invalid decimal separator '{value}', using default ','")
+                    log(f"Invalid decimal separator '{value}', using default ','")
                     value = ","
                 if value == self.field_separator:
-                    print(f"Invalid decimal separator '{value}' already used by field separator, using default ','")
+                    log(
+                        f"Invalid decimal separator '{value}' already used by field separator, using default ','",
+                        logging.WARNING,
+                    )
                     value = ","
             elif kee_title == "DATE_FORMAT":
                 if not value:
@@ -94,7 +102,10 @@ class Settings(metaclass=Singleton):
                 try:
                     self._validate_encoding_format(value)
                 except LookupError:
-                    print(f"Invalid encoding settings '{value}', using default '{self.default_encoding}'")
+                    log(
+                        f"Invalid encoding settings '{value}', using default '{self.default_encoding}'",
+                        logging.WARNING,
+                    )
                     value = self.default_encoding
             elif kee_title == "LOGS_ARE_ON":
                 value = True if value.lower() == "true" else False
@@ -104,7 +115,10 @@ class Settings(metaclass=Singleton):
                 if value.isnumeric():
                     value = int(value)
                 else:
-                    print(f"Invalid users cache expiration '{value}', using '{self.users_cache_expiration}' days")
+                    log(
+                        f"Invalid users cache expiration '{value}', using '{self.users_cache_expiration}' days",
+                        logging.WARNING,
+                    )
                     value = self.users_cache_expiration
 
             setattr(self, attr_name, value)
@@ -116,7 +130,7 @@ class Settings(metaclass=Singleton):
         self.open_db()
 
         for kee_title, attr_name in self._params.items():
-            info: Entry = self.kee.db.find_entries(title=kee_title, group=self.kee_grp, first=True) # type: ignore
+            info: Entry = self.kee.db.find_entries(title=kee_title, group=self.kee_grp, first=True)  # type: ignore
             if not info:
                 info = self.kee.db.add_entry(self.kee_grp, kee_title, username="", password="")
 
@@ -160,14 +174,14 @@ class Settings(metaclass=Singleton):
 
             if min_application == "0.0.0":
                 retrieve_failed = True
-                print("Warning: a minimum version is required but couldn't be retrieved for application")
+                log("Warning: a minimum version is required but couldn't be retrieved for application", logging.ERROR)
             if min_settings == "0":
                 retrieve_failed = True
-                print("Warning: a minimum version is required but couldn't be retrieved for settings")
+                log("Warning: a minimum version is required but couldn't be retrieved for settings", logging.ERROR)
 
             return min_application, min_settings, retrieve_failed
 
-        print(f"No minimal version required for queries in {queries_folder}")
+        log(f"No minimal version required for queries in {queries_folder}")
         return "0.0.0", "0", retrieve_failed
 
     def ctrl_version(self, curr_version: str, min_version: str) -> bool:
@@ -193,12 +207,14 @@ class Settings(metaclass=Singleton):
 
 
 if __name__ == "__main__":
+    setup_standalone_logging()
+
     my_settings = Settings()
 
     try:
         min_app, min_settings, retrieve_failed = my_settings.get_min_version(my_settings.queries_folder)
     except ValueError as e:
-        print(f"Contrôle de version ignoré : {e}")
+        log(f"Contrôle de version ignoré : {e}")
         min_app, min_settings, retrieve_failed = "0.0.0", "0", True
 
     print(f"Version mini Application : {min_app}")
@@ -206,6 +222,6 @@ if __name__ == "__main__":
     print(f"Version utilisée Settings : {my_settings.settings_version}")
 
     param_attr = my_settings._params.values()
-    print(f"{'='*50}\nSettings / Paramètres généraux\n{'='*50}")
+    print(f"{'=' * 50}\nSettings / Paramètres généraux\n{'=' * 50}")
     for attr in param_attr:
         print(f"- {attr}: {getattr(my_settings, attr)}")

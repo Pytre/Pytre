@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import sqlite3
 import time
 import uuid
@@ -14,10 +15,15 @@ from threading import Thread, Event
 from pathlib import Path
 
 from singleton_metaclass import Singleton
+from utils import log as _log, setup_standalone_logging
 
 
 CENTRAL_DB: Path | str = "Pytre_Central_Logs.db"
 LATEST_VERSION: int = 2  # latest version model of central database
+
+
+def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__) -> None:
+    _log(msg, level=level, sublogger=sublogger)
 
 
 class CentralLogs(metaclass=Singleton):
@@ -63,7 +69,7 @@ class CentralLogs(metaclass=Singleton):
                 cursor.close()
                 return user_version
         except Exception as e:
-            print(f"Couldn't retrieve user_info pragma for central db: {e}")
+            log(f"Couldn't retrieve user_info pragma for central db: {e}", logging.ERROR)
             return -1
 
     # ------------------------------------------------------------------------------------------
@@ -95,7 +101,7 @@ class CentralLogs(metaclass=Singleton):
                 conn.commit()
                 self.central_version = self.latest_version
         except sqlite3.OperationalError as e:
-            print(f"The central SQLite log database could not be created: {e}")
+            log(f"The central SQLite log database could not be created: {e}", logging.ERROR)
             return False
 
         return True
@@ -114,10 +120,10 @@ class CentralLogs(metaclass=Singleton):
 
             update_func = getattr(self, f"update_db_{version}_to_{version + 1}")
             if not update_func():
-                print(f"Aborting central database update, migration to {version + 1} failed")
+                log(f"Aborting central database update, migration to {version + 1} failed", logging.ERROR)
                 return False
 
-        print(f"Central database migration to version {self.latest_version} completed")
+        log(f"Central database migration to version {self.latest_version} completed")
         return True
 
     def update_db_0_to_1(self) -> bool:
@@ -129,13 +135,13 @@ class CentralLogs(metaclass=Singleton):
                 conn.execute("DROP INDEX IF EXISTS IDX_SERVER_ID;")
                 conn.execute("CREATE INDEX IDX_SERVER_ID ON QUERIES_EXEC (SERVER_ID);")
                 conn.commit()
-                print("Added SERVER_ID column to QUERIES_EXEC table")
+                log("Added SERVER_ID column to QUERIES_EXEC table")
 
-                print(f"Central database updated to version {new_version}")
+                log(f"Central database updated to version {new_version}")
                 self.central_version = new_version
                 return True
         except Exception as e:
-            print(f"Unexpected error in schema update to version {new_version}: {e}")
+            log(f"Unexpected error in schema update to version {new_version}: {e}", logging.ERROR)
             return False
 
     def update_db_1_to_2(self) -> bool:
@@ -145,11 +151,11 @@ class CentralLogs(metaclass=Singleton):
                 conn.execute(f"PRAGMA user_version = {new_version};")
                 conn.execute("ALTER TABLE QUERIES_EXEC DROP COLUMN END;")
                 conn.commit()
-                print(f"Central database updated to version {new_version}")
+                log(f"Central database updated to version {new_version}")
                 self.central_version = new_version
                 return True
         except Exception as e:
-            print(f"Unexpected error in schema update to version {new_version}: {e}")
+            log(f"Unexpected error in schema update to version {new_version}: {e}", logging.ERROR)
             return False
 
     # ------------------------------------------------------------------------------------------
@@ -181,15 +187,15 @@ class CentralLogs(metaclass=Singleton):
     # ------------------------------------------------------------------------------------------
     def trigger_sync(self, user_db: Path, user_id: str = "", user_name: str = ""):
         if not self.central_db:
-            print("Error: Central log database not specified")
+            log("Error: Central log database not specified", logging.ERROR)
             return
 
         if not self.check_db():
-            print(f"Aborting sync, failed to check central database: {self.central_db}")
+            log(f"Aborting sync, failed to check central database: {self.central_db}", logging.ERROR)
             return
 
         if not user_db or not Path(user_db).exists():
-            print(f"Error: User log database does not exist: {user_db}")
+            log(f"Error: User log database does not exist: {user_db}", logging.ERROR)
             return
 
         if self.sync_thread is None or not self.sync_thread.is_alive():
@@ -237,10 +243,10 @@ class FileDriven(CentralLogs):
         self.stop_heartbeat: Event = Event()
 
     def sync_thread_start(self):
-        print("Thread logs sync starting")
+        log("Thread logs sync starting")
 
         if not self.create_dirs(self.export_folders):
-            print("Error: required folders does not exist and failed to create them")
+            log("Error: required folders does not exist and failed to create them", logging.ERROR)
             return
 
         retries_delay: list[int] = [30, 60, 120]  # in seconds
@@ -248,23 +254,23 @@ class FileDriven(CentralLogs):
             try:
                 sync_result: bool = self.synchronization_attempt()
                 if sync_result:
-                    print("Synchronization completed successfully")
+                    log("Synchronization completed successfully")
                     break
             except Exception as e:
-                print(f"Unexpected error while syncing logs : {e}")
+                log(f"Unexpected error while syncing logs : {e}", logging.ERROR)
 
             if self.stop_event.is_set():
                 break
             if attempt == len(retries_delay) - 1:
-                print("Max retries reached")
+                log("Max retries reached", logging.WARNING)
                 break
 
             jitter_factor = 0.8 + (0.4 * random.random())  # to add jitter to retry delay
-            print(f"Next attempt in {delay * jitter_factor:.2f} sec")
+            log(f"Next attempt in {delay * jitter_factor:.2f} sec")
             time.sleep(delay * jitter_factor)
 
         self.sync_thread: Thread | None = None
-        print("Thread logs sync ending")
+        log("Thread logs sync ending")
 
     def synchronization_attempt(self) -> bool:
         self.export_unsynced_data()
@@ -273,11 +279,11 @@ class FileDriven(CentralLogs):
         for folder in self.export_folders:
             nb_to_sync += len(list(folder.glob("*.json")))
         if nb_to_sync == 0:
-            print("Stopping sync, no exported files to process")
+            log("Stopping sync, no exported files to process")
             return False
 
         if not self.try_acquire_lock():
-            print("Lock could not be acquired")
+            log("Lock could not be acquired")
         else:
             try:
                 active_index, folder_to_process = self.get_active_export_folder()
@@ -286,21 +292,21 @@ class FileDriven(CentralLogs):
                 previous_index = (active_index - 1) % len(self.export_folders)
                 previous_folder = self.export_folders[previous_index]
                 if next(previous_folder.glob("*.json"), None):
-                    print("Previous active folder not empty, attempting to synchronize it")
+                    log("Previous active folder not empty, attempting to synchronize it")
                     try:
                         self.synchronize_folder(previous_folder)
                     except Exception as e:
-                        print(f"Error processing previous folder : {e}")
+                        log(f"Error processing previous folder : {e}", logging.WARNING)
 
                 # switch active folder and synchronize vacated folder
                 if not self.set_active_export_folder(active_index + 1):
                     raise Exception("Couldn't change active folder")
                 self.synchronize_folder(folder_to_process)
 
-                print("Successfully processed export files")
+                log("Successfully processed export files")
                 return True
             except Exception as e:
-                print(f"Error : {e}")
+                log(f"Error : {e}", logging.ERROR)
             finally:
                 self.release_lock()
 
@@ -322,7 +328,7 @@ class FileDriven(CentralLogs):
 
         _, active_folder = self.get_active_export_folder()
         if not active_folder.exists() and not self.create_dirs(active_folder):
-            print(f"Error: required folder do not exist and failed to create it: {active_folder}")
+            log(f"Error: required folder do not exist and failed to create it: {active_folder}", logging.ERROR)
             return False
 
         try:
@@ -345,7 +351,7 @@ class FileDriven(CentralLogs):
 
             return True
         except Exception as e:
-            print(f"Error during data export: {e}")
+            log(f"Error during data export: {e}", logging.ERROR)
             return False
 
     def rows_get_unsynced(self) -> list[tuple] | None:
@@ -412,22 +418,22 @@ class FileDriven(CentralLogs):
             stable_files = {k for k, v in files.items() if v.stable_count >= required_stable_count}
 
             if len(stable_files) == len(files):
-                print(f"Folder {folder_path} stable for all {len(files)} files")
+                log(f"Folder {folder_path} stable for all {len(files)} files")
                 return stable_files
 
             time.sleep(check_interval)
 
-        print(f"Max wait time reached, {len(stable_files)} files from {len(files)} will be processed")
+        log(f"Max wait time reached, {len(stable_files)} files from {len(files)} will be processed")
         return stable_files if stable_files else None
 
     def process_files(self, files_to_process: set[str] | None) -> bool:
         if self.stop_event.is_set():
             return False
         if not files_to_process:
-            print("No exported files to process!")
+            log("No exported files to process!")
             return False
 
-        print(f"Starting processing {len(files_to_process)} file(s)")
+        log(f"Starting processing {len(files_to_process)} file(s)")
 
         rows_values: list = []
         processed_files: list[Path] = []
@@ -438,11 +444,11 @@ class FileDriven(CentralLogs):
             if success:
                 self.processed_files_remove(processed_files)
             else:
-                print("Failed to insert into central database, moving files to active folder...")
+                log("Failed to insert into central database, moving files to active folder...", logging.WARNING)
                 _, active_folder = self.get_active_export_folder()
                 self.processed_files_move(processed_files, active_folder)
 
-        print("Export processing completed")
+        log("Export processing completed")
 
         return True
 
@@ -458,9 +464,9 @@ class FileDriven(CentralLogs):
                 rows_values.extend(rows)
                 processed_files.append(Path(file))
             except FileNotFoundError:
-                print(f"Import error, file not found : {file}")
+                log(f"Import error, file not found : {file}", logging.WARNING)
             except Exception as e:
-                print(f"Error processing {file} : {e}")
+                log(f"Error processing {file} : {e}", logging.WARNING)
                 failed_files.append(Path(file))
 
         if failed_files:
@@ -471,7 +477,7 @@ class FileDriven(CentralLogs):
 
     def failed_files_move(self, failed_files: list[Path], timestamp: str):
         if not self.create_dirs(self.failed_folder):
-            print("Error: failed folder doesn't exist and unable to create it")
+            log("Error: failed folder doesn't exist and unable to create it", logging.ERROR)
             return
 
         for file in failed_files:
@@ -483,11 +489,11 @@ class FileDriven(CentralLogs):
             try:
                 file.unlink()
             except Exception as e:
-                print(f"Error deleting processed file {file}: {e}")
+                log(f"Error deleting processed file {file}: {e}", logging.WARNING)
 
     def processed_files_move(self, processed_files: list[Path], active_folder: Path):
         if not active_folder.exists():
-            print(f"Aborting moving files, active folder doesn't exist: {active_folder}")
+            log(f"Aborting moving files, active folder doesn't exist: {active_folder}", logging.ERROR)
             return
 
         for file in processed_files:
@@ -516,13 +522,13 @@ class FileDriven(CentralLogs):
                 cursor.close()
                 return True
         except sqlite3.OperationalError as e:
-            print(f"Operational error while writing to central database: {e}")
+            log(f"Operational error while writing to central database: {e}", logging.ERROR)
             return False
         except sqlite3.DatabaseError as e:
-            print(f"Database error while accessing central database: {e}")
+            log(f"Database error while accessing central database: {e}", logging.ERROR)
             return False
         except Exception as e:
-            print(f"Unexpected error while syncing to central database: {e}")
+            log(f"Unexpected error while syncing to central database: {e}", logging.ERROR)
             return False
 
     # ------------------------------------------------------------------------------------------
@@ -538,7 +544,7 @@ class FileDriven(CentralLogs):
 
         # Check if lock is taken
         if self.sync_locked_file.exists():
-            print("Lock is currently held by another process")
+            log("Lock is currently held by another process")
             return False
 
         try:
@@ -554,18 +560,18 @@ class FileDriven(CentralLogs):
                     "pid": getpid(),
                 }
                 if not self.write_atomic(self.sync_locked_file, lock_data):
-                    print("Lock writing data failed! Another process may have taken lock")
+                    log("Lock writing data failed! Another process may have taken lock")
                     return False
 
                 # Check if lock file contains expected content
                 with open(self.sync_locked_file, "r") as f:
                     content: dict = json.load(f)
                     if not content == lock_data:
-                        print("Lock verification failed! Another process may have taken it")
+                        log("Lock verification failed! Another process may have taken it")
                         return False
 
                 self.heartbeat_thread: Thread = self.start_heartbeat_thread()
-                print("Successfully acquired lock")
+                log("Successfully acquired lock")
                 return True
             else:
                 # Check for stale lock before giving up and try again if unlocked file appears
@@ -574,10 +580,10 @@ class FileDriven(CentralLogs):
                     return self.try_acquire_lock()
                 return False
         except json.JSONDecodeError:
-            print("Could not verify locked file contents")
+            log("Could not verify locked file contents", logging.ERROR)
             return False
         except OSError:
-            print("Failed to acquire lock, another process got it first")
+            log("Failed to acquire lock, another process got it first")
             return False
 
     def break_stale_lock(self) -> bool:
@@ -591,12 +597,12 @@ class FileDriven(CentralLogs):
             time_since_heartbeat = (datetime.now() - last_heartbeat).total_seconds()
 
             if time_since_heartbeat > self.sync_lock_timeout:
-                print(f"Breaking stale lock (last heartbeat {time_since_heartbeat:.2f} secs ago)")
+                log(f"Breaking stale lock (last heartbeat {time_since_heartbeat:.2f} secs ago)")
                 self.sync_locked_file.rename(self.sync_unlocked_file)
                 self.set_unlocked_data()
                 return True
         except Exception as e:
-            print(f"Error while breaking/checking stale lock: {e}")
+            log(f"Error while breaking/checking stale lock: {e}", logging.ERROR)
             return False
 
         return True
@@ -612,10 +618,10 @@ class FileDriven(CentralLogs):
 
                 self.sync_locked_file.rename(self.sync_unlocked_file)
                 self.set_unlocked_data()
-                print("Lock released")
+                log("Lock released")
                 return True
             except Exception as e:
-                print(f"Failed to release lock: {e}")
+                log(f"Failed to release lock: {e}", logging.WARNING)
                 return False
         return False
 
@@ -626,7 +632,7 @@ class FileDriven(CentralLogs):
         timestamp = datetime.now().isoformat()
         unlocked_data = {"status": "unlocked", "created": timestamp, "user": self.user_id}
         if not self.write_atomic(self.sync_unlocked_file, unlocked_data):
-            print("Failed to set unlocked data")
+            log("Failed to set unlocked data")
 
     # ------------------------------------------------------------------------------------------
     # Functions to add heartbeat to lock file
@@ -658,7 +664,7 @@ class FileDriven(CentralLogs):
                 f.truncate()  # Remove any remaining content
             return True
         except Exception as e:
-            print(f"Heartbeat update failed: {e}")
+            log(f"Heartbeat update failed: {e}", logging.WARNING)
             return False
 
     # ------------------------------------------------------------------------------------------
@@ -685,24 +691,24 @@ class FileDriven(CentralLogs):
             self.temp_files.remove(temp_file)
             return True
         except FileExistsError:
-            print(f"Temp file {temp_file} already exists")
+            log(f"Temp file {temp_file} already exists", logging.ERROR)
             return False
         except PermissionError:
-            print(f"Permission denied when writing to {temp_file}")
+            log(f"Permission denied when writing to {temp_file}", logging.ERROR)
             return False
         except OSError as e:
-            print(f"OS error when writing file {target_path}: {e}")
+            log(f"OS error when writing file {target_path}: {e}", logging.ERROR)
             return False
         except Exception as e:
-            print(f"Unexpected error writing file {target_path}: {e}")
+            log(f"Unexpected error writing file {target_path}: {e}", logging.ERROR)
             return False
         finally:
             try:
                 if temp_file.exists():
                     temp_file.unlink()
                     self.temp_files.remove(temp_file)
-            except Exception:
-                pass
+            except Exception as e:
+                log(f"Failed to clean up temp file {temp_file}: {e}", logging.ERROR)
 
     def cleanup_temp_files(self):
         for temp_file in list(self.logs_folder.glob("**/*.tmp")):
@@ -714,9 +720,9 @@ class FileDriven(CentralLogs):
             try:
                 if temp_file.exists():
                     temp_file.unlink()
-                    print(f"Cleaned up temp file: {temp_file}")
+                    log(f"Cleaned up temp file: {temp_file}")
             except Exception as e:
-                print(f"Error cleaning up temp file {temp_file}: {e}")
+                log(f"Error cleaning up temp file {temp_file}: {e}", logging.WARNING)
 
         self.temp_files = []
 
@@ -733,10 +739,10 @@ class FileDriven(CentralLogs):
             try:
                 dir_path.mkdir(exist_ok=True, parents=True)
             except PermissionError:
-                print(f"Warning: No permission to create directory: {dir_path}")
+                log(f"Warning: No permission to create directory: {dir_path}", logging.ERROR)
                 success = False
             except OSError as e:
-                print(f"OS error when creating directory {dir_path}: {e}")
+                log(f"OS error when creating directory {dir_path}: {e}", logging.ERROR)
                 success = False
 
         return success
@@ -750,7 +756,7 @@ class FileDriven(CentralLogs):
             "updated": datetime.now().isoformat(),
         }
         if not self.write_atomic(self.queue_ctrl_file, content):
-            print(f"Error updating active export folder to {folder_name}")
+            log(f"Error updating active export folder to {folder_name}", logging.ERROR)
             return False
 
         return True
@@ -766,7 +772,7 @@ class FileDriven(CentralLogs):
                 self.set_active_export_folder(0)
                 return 0, self.export_folders[0]
         except Exception as e:
-            print(f"Error reading active folder, using default: {e}")
+            log(f"Error reading active folder, using default: {e}", logging.ERROR)
             return 0, self.export_folders[0]
 
 
@@ -775,6 +781,8 @@ def get_default_class():
 
 
 if __name__ == "__main__":
+    setup_standalone_logging()
+
     Path_Home: Path = Path.home() / "Pytre"
     central_log = FileDriven(Path_Home)
     central_log.trigger_sync(Path_Home / "Pytre_Logs.db", "id_test", "name_test")

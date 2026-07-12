@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import getpass
 
@@ -13,7 +14,11 @@ from pykeepass.group import Group
 
 from kee import Kee
 from singleton_metaclass import Singleton
-from utils import detect_encoding
+from utils import detect_encoding, log as _log, setup_standalone_logging
+
+
+def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__) -> None:
+    _log(msg, level=level, sublogger=sublogger)
 
 
 class Users(metaclass=Singleton):
@@ -248,7 +253,7 @@ class Users(metaclass=Singleton):
             for row_num, row in enumerate(csv_reader, start=2):
                 username = row["id"].strip()
                 if not username:
-                    print(f"Ligne {row_num} ignorée : aucun id renseigné")
+                    log(f"Ligne {row_num} ignorée : aucun id renseigné", logging.WARNING)
                     continue
 
                 # contrôle si utilisateurs à modifier ou à créer
@@ -521,6 +526,8 @@ class CurrentUser(User, metaclass=Singleton):
 
 
 if __name__ == "__main__":
+    setup_standalone_logging()
+
     user = CurrentUser()
 
     print(f"{'=' * 50}\nSettings / Utilisateur courant\n{'=' * 50}")

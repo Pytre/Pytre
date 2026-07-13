@@ -115,7 +115,7 @@ class AboutWindow(tk.Toplevel):
         self.license_frame.config(labelwidget=title_label, borderwidth=2, labelanchor="n")
 
         license_textbox = tk.Text(self.license_frame, wrap="word", font=("TkDefaultFont", 8, "normal"))
-        license_textbox.insert("0.0", about.LICENSE_TEXT)
+        license_textbox.insert("0.0", about.get_license_text())
         license_textbox["state"] = "disabled"
 
         license_textbox.grid(row=0, column=0, padx=4, pady=4, sticky="nswe")

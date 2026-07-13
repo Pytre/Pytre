@@ -297,10 +297,8 @@ class Server:
         self.password = str(s_entry.password or "")
 
         for property in s_entry.custom_properties:
-            val = val if (val := s_entry.get_custom_property(property)) is not None else ""
-            if not isinstance(val, str):
-                pass
-            elif property == "charset":
+            val = str(val) if (val := s_entry.get_custom_property(property)) is not None else ""
+            if property == "charset":
                 val = val.upper() if val else self.charset
             elif property == "login_timeout":
                 val = int(val) if val.isdigit() else self.login_timeout
@@ -337,9 +335,13 @@ class Server:
         if self.servers.kee.db is None:
             raise RuntimeError("Database not opened, can't save it")
 
-        # contrôle
+        # contrôles
         if [s for s in self.servers.get_all_servers().values() if s.id == self.id and not s.uuid == self.uuid]:
             raise ValueError(f"{self.id} est déjà utilisé comme identifiant")
+        if not str(self.timeout).isdigit():
+            raise ValueError(f"La valeur de timeout doit être un nombre : {self.timeout}")
+        if not str(self.login_timeout).isdigit():
+            raise ValueError(f"La valeur de login_timeout doit être un nombre : {self.login_timeout}")
 
         # récupération d'une entrée pour la sauvegarde
         entry = self.servers.kee.db.find_entries(uuid=UUID(self.uuid), first=True) if self.uuid else None
@@ -358,11 +360,6 @@ class Server:
         for key, val in self.to_dict().items():
             if key in ["uuid", "id", "description", "user", "password", "grp_authorized"]:
                 continue  # attributs qui ne sont pas dans custom_property
-            elif key in ["timeout", "login_timeout"]:
-                if val.isdigit():
-                    entry.set_custom_property(key, val)
-                else:
-                    return False
             else:
                 entry.set_custom_property(key, val)
 

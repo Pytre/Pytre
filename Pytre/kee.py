@@ -28,7 +28,7 @@ class Kee(metaclass=Singleton):
         self.db: PyKeePass | None = None
         self.is_open: bool = False
         self.is_ko: bool = False
-        self.opening_count: int = 0
+        self.access_count: int = 0
 
         self.grp_name_settings: str = "Paramètres"
         self.grp_settings: Group | None = None
@@ -58,12 +58,12 @@ class Kee(metaclass=Singleton):
                     return
 
             self.is_open = True
-            self.opening_count += 1
-            log(f"Opening count : {self.opening_count}", logging.DEBUG)
+            self.access_count += 1
+            log(f"Database opened, access count : {self.access_count}", logging.DEBUG)
         elif reload and self.db is not None:
             self.db.reload()
-            self.opening_count += 1
-            log(f"Opening count : {self.opening_count}", logging.DEBUG)
+            self.access_count += 1
+            log(f"Database reloaded, access count : {self.access_count}", logging.DEBUG)
 
         assert self.db is not None
         self.grp_settings = cast(Group | None, self.db.find_groups(name=self.grp_name_settings, first=True))
@@ -125,7 +125,7 @@ class Kee(metaclass=Singleton):
 
         self.save_db()
 
-    def pwd_try(self, pwds_list: list[str] = []) -> bool:
+    def pwd_try(self, pwds_list: list[str] | None = None) -> bool:
         if not pwds_list:
             pwds_list = crypted_file_pwd_history()[1:]
 

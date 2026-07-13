@@ -165,7 +165,7 @@ class CentralLogs(metaclass=Singleton):
         return f"""
             SELECT 
                 ROWID, SERVER_ID,
-                '{self.user_id}' AS USER_ID, '{self.user_name}' AS USER_NAME, 
+                :user_id AS USER_ID, :user_name AS USER_NAME, 
                 QUERY, START, DURATION_SECS, NB_ROWS, PARAMETERS 
             FROM
                 QUERIES_EXEC 
@@ -361,7 +361,7 @@ class FileDriven(CentralLogs):
         with sqlite3.connect(f"file:{self.user_db}?mode=ro", uri=True) as conn:
             cursor: sqlite3.Cursor = conn.cursor()
             sql_cmd = self.sql_rows_get_unsynced()
-            cursor.execute(sql_cmd)
+            cursor.execute(sql_cmd, {"user_id": self.user_id, "user_name": self.user_name})
             unsynced = cursor.fetchall()
             cursor.close()
 

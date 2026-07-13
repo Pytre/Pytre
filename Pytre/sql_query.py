@@ -952,7 +952,8 @@ def get_queries(folder: Path) -> tuple[list[Query], list[str]]:
     return queries, errors
 
 
-def filter_queries(queries: list[Query], server_id: str, user: users.CurrentUser = users.CurrentUser()) -> list[Query]:
+def filter_queries(queries: list[Query], server_id: str, user: users.User | None = None) -> list[Query]:
+    user = user or users.CurrentUser()
     filtered: list[Query] = []
 
     # check if user is authorized for server

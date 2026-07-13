@@ -237,7 +237,8 @@ class UserDb(metaclass=Singleton):
                 # nettoyage pour ne garder que les requêtes les plus récentes
                 conn.execute(
                     f"""DELETE FROM QUERIES_EXEC
-                    WHERE START IN (SELECT START FROM QUERIES_EXEC ORDER BY START DESC LIMIT -1 OFFSET {self.log_max})"""
+                    WHERE START IN (SELECT START FROM QUERIES_EXEC ORDER BY START DESC LIMIT -1 OFFSET :log_max)""",
+                    {"log_max": self.log_max},
                 )
 
                 conn.commit()

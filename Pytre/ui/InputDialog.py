@@ -10,12 +10,12 @@ from ui.app_theme import set_theme
 
 class InputDialog(tk.Toplevel):
     @classmethod
-    def ask(cls, title, prompt: str, parent: tk.Tk | tk.Toplevel | None = None) -> str | None:
-        dialog = InputDialog(title, prompt, parent=parent)
+    def ask(cls, title, prompt: str, parent: tk.Tk | tk.Toplevel | None = None, is_pwd: bool = False) -> str | None:
+        dialog = InputDialog(title, prompt, parent=parent, is_pwd=is_pwd)
         dialog.wait_window()
         return dialog.answer
 
-    def __init__(self, title, prompt: str, parent: tk.Tk | tk.Toplevel | None = None):
+    def __init__(self, title, prompt: str, parent: tk.Tk | tk.Toplevel | None = None, is_pwd: bool = False):
         super().__init__()
 
         self.parent: tk.Tk | tk.Toplevel | None = parent
@@ -27,6 +27,7 @@ class InputDialog(tk.Toplevel):
             ui_utils.ui_disable_parent(self, self.parent)
             self.transient(self.parent)
 
+        self.is_pwd = is_pwd
         self.answer = None
 
         set_theme(self)
@@ -62,7 +63,8 @@ class InputDialog(tk.Toplevel):
         minsize_width = self.minsize()[0]
         label = ttk.Label(self.input_frame, text=prompt, wraplength=minsize_width)
         self.tk_var_answer = tk.StringVar()
-        self.entry = ttk.Entry(self.input_frame, textvariable=self.tk_var_answer)
+        show = "*" if self.is_pwd else ""
+        self.entry = ttk.Entry(self.input_frame, textvariable=self.tk_var_answer, show=show)
 
         label.grid(row=0, column=0, padx=2, pady=2, sticky="nswe")
         self.entry.grid(row=1, column=0, columnspan=2, padx=2, pady=2, sticky="nswe")

@@ -104,7 +104,7 @@ class App(tk.Toplevel):
         remaining = max_attempts
         title = "Mot de passe"
         for _ in range(max_attempts):
-            pwd = InputDialog.ask(title, "Accès aux paramètres impossible !\nMot de passe :")
+            pwd = InputDialog.ask(title, "Accès aux paramètres impossible !\nMot de passe :", is_pwd=True)
 
             # si aucun mot de passe saisi, on quitte
             if not pwd:

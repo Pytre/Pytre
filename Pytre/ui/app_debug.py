@@ -102,7 +102,9 @@ class DebugWindow(tk.Toplevel):
         self.syntax_color(self.tabs["template"]["textbox"], self.query.get_params_for_debug(True))
         self.syntax_color(self.tabs["params"]["textbox"])
 
-    def syntax_color(self, tbox: tk.Text, forced: dict[int, int] = dict()):
+    def syntax_color(self, tbox: tk.Text, forced: dict[int, int] | None = None):
+        forced = forced or {}
+
         tbox.tag_configure(TokenType.KEYWORD.value, foreground="blue")
         tbox.tag_configure(TokenType.PARAMETER.value, foreground="purple", background="gray90")
         tbox.tag_configure(TokenType.NUMBER.value, foreground="red")

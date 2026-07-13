@@ -11,6 +11,7 @@ from singleton_metaclass import Singleton
 from utils import detect_encoding, get_app_path, log as _log, setup_standalone_logging
 
 DEFAULT_QUERIES_FOLDER = Path.home() / "Queries"
+DEFAULT_LOGS_FOLDER = Path.home() / "Logs"
 
 
 def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__) -> None:
@@ -109,7 +110,9 @@ class Settings(metaclass=Singleton):
                     value = self.default_encoding
             elif kee_title == "LOGS_ARE_ON":
                 value = True if value.lower() == "true" else False
-            elif kee_title in ("QUERIES_FOLDER", "LOGS_FOLDER"):
+            elif kee_title == "LOGS_FOLDER":
+                value = Path(value) if value and Path(value).is_dir() else DEFAULT_LOGS_FOLDER
+            elif kee_title == "QUERIES_FOLDER":
                 value = Path(value) if value and Path(value).is_dir() else DEFAULT_QUERIES_FOLDER
             elif kee_title == "USERS_CACHE_EXPIRATION":
                 if value.isnumeric():

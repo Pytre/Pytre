@@ -38,9 +38,6 @@ class MainSettingsWindow(tk.Toplevel):
 
         self.entries: dict[str, dict] = {}
 
-        self.settings = Settings()
-        self.settings.reload()
-
         set_theme(self)
         self._setup_ui()
         self._events_binds()
@@ -135,7 +132,9 @@ class MainSettingsWindow(tk.Toplevel):
 
 
 class SettingsWindow(MainSettingsWindow):
-    def __init__(self, parent=None, on_close_callback=None):
+    def __init__(self, settings: Settings, parent=None, on_close_callback=None):
+        self.settings = settings
+        self.settings.reload()
         super().__init__(parent=parent, on_close_callback=on_close_callback)
 
     # ------------------------------------------------------------------------------------------
@@ -221,8 +220,8 @@ class SettingsWindow(MainSettingsWindow):
 
 
 class UserPrefsWindow(MainSettingsWindow):
-    def __init__(self, parent=None, on_close_callback=None):
-        self.user_prefs = UserPrefs()
+    def __init__(self, user_prefs: UserPrefs, parent=None, on_close_callback=None):
+        self.user_prefs = user_prefs
         super().__init__(parent=parent, on_close_callback=on_close_callback)
 
     # ------------------------------------------------------------------------------------------
@@ -309,6 +308,10 @@ class UserPrefsWindow(MainSettingsWindow):
 
 
 if __name__ == "__main__":
-    # my_app = SettingsWindow()
-    my_app = UserPrefsWindow()
+    # settings = Settings()
+    # my_app = SettingsWindow(settings)
+
+    user_prefs = UserPrefs()
+    my_app = UserPrefsWindow(user_prefs)
+
     my_app.mainloop()

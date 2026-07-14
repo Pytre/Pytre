@@ -12,7 +12,7 @@ from ui.app_theme import set_theme, ThemeColors, theme_is_on
 
 
 class PasswordWindow(tk.Toplevel):
-    def __init__(self, parent: tk.Toplevel | None = None):
+    def __init__(self, kee: Kee, parent: tk.Toplevel | None = None):
         super().__init__()
 
         self.parent: tk.Toplevel | None = parent
@@ -24,7 +24,7 @@ class PasswordWindow(tk.Toplevel):
             ui_utils.ui_disable_parent(self, self.parent)
             self.transient(self.parent)
 
-        self.kee: Kee = Kee()
+        self.kee: Kee = kee
         self.kee._open_db(True)
         self.history: list[str] = self.kee.pwd_history()
 
@@ -109,13 +109,7 @@ class PasswordWindow(tk.Toplevel):
         self.protocol("WM_DELETE_WINDOW", self.close)  # arrêter le programme quand fermeture de la fenêtre
 
     def toggle_password(self, hide_char: str = "\U000025cf"):
-        if self.entry["show"] == "":
-            self.reveal.config(text="Voir")
-            self.entry.config(show=hide_char)
-        else:
-            self.reveal.config(text="Masquer")
-            self.entry.config(show="")
-
+        ui_utils.toggle_password(self.reveal, self.entry, hide_char)
         self.entry.focus_set()
 
     def toggle_history(self):
@@ -154,5 +148,6 @@ class PasswordWindow(tk.Toplevel):
 
 
 if __name__ == "__main__":
-    my_app = PasswordWindow()
+    kee = Kee()
+    my_app = PasswordWindow(kee)
     my_app.mainloop()

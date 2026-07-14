@@ -7,7 +7,6 @@ from pykeepass.entry import Entry
 from pykeepass.group import Group
 
 from kee import Kee
-from singleton_metaclass import Singleton
 from utils import detect_encoding, get_app_path, log as _log, setup_standalone_logging
 
 DEFAULT_QUERIES_FOLDER = Path.home() / "Queries"
@@ -18,9 +17,9 @@ def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__)
     _log(msg, level=level, sublogger=sublogger)
 
 
-class Settings(metaclass=Singleton):
-    def __init__(self):
-        self.kee: Kee = Kee()
+class Settings:
+    def __init__(self, kee: Kee):
+        self.kee: Kee = kee
         self.kee_grp: Group | None = None
 
         self.app_path: Path = get_app_path()
@@ -212,7 +211,8 @@ class Settings(metaclass=Singleton):
 if __name__ == "__main__":
     setup_standalone_logging()
 
-    my_settings = Settings()
+    kee = Kee()
+    my_settings = Settings(kee)
 
     try:
         min_app, min_settings, retrieve_failed = my_settings.get_min_version(my_settings.queries_folder)

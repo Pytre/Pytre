@@ -131,10 +131,13 @@ class DebugWindow(tk.Toplevel):
 
 
 if __name__ == "__main__":
+    from app_context import build_app_context
+
     filename = next((Path.cwd() / "Requetes SQL").glob("*.sql"), None)
     if filename is None:
         print("No query file to load !")
     else:
-        my_query = sql_query.Query(filename)
+        ctx = build_app_context()
+        my_query = sql_query.Query(ctx, filename)
         my_app = DebugWindow(my_query)
         my_app.mainloop()

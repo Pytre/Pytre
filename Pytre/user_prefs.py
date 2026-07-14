@@ -6,7 +6,6 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from singleton_metaclass import Singleton
 from utils import log as _log, setup_standalone_logging
 
 CACHE_FOLDER: Path = Path.home() / "Pytre" / ".temp_cache"
@@ -37,7 +36,7 @@ class Issue:
     msg: str
 
 
-class UserPrefs(metaclass=Singleton):
+class UserPrefs:
     def __init__(self):
         self.file: Path = SETTING_FILE
         self._cache_folder: Path = CACHE_FOLDER

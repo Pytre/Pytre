@@ -7,14 +7,12 @@ if not __package__:
 from user_prefs import PrefsEnum, UserPrefs
 
 
-def save_as(parent, src_file: Path | str) -> Path | None:
+def save_as(user_prefs: UserPrefs, parent, src_file: Path | str) -> Path | None:
     if not src_file:
         return None
     elif not Path(src_file).exists():
         messagebox.showerror("Erreur", "Le fichier source n'existe pas", parent=parent)
         return None
-
-    user_prefs = UserPrefs()
 
     dest = filedialog.asksaveasfilename(
         title="Enregistrer sous",
@@ -35,4 +33,5 @@ def save_as(parent, src_file: Path | str) -> Path | None:
 
 if __name__ == "__main__":
     file = [file for file in list(Path(".").glob("*")) if file.is_file()][0]
-    save_as(None, file)
+    user_prefs = UserPrefs()
+    save_as(user_prefs, None, file)

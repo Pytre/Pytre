@@ -9,6 +9,7 @@ if not __package__:
     import syspath_insert  # noqa: F401  # disable unused-import warning
 
 import utils
+from kee import Kee
 from users import Users, User
 from about import APP_NAME
 
@@ -24,7 +25,7 @@ def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__)
 
 
 class UsersWindow(tk.Toplevel):
-    def __init__(self, parent=None):
+    def __init__(self, users: Users, parent=None):
         super().__init__()
         self.parent = parent
         if self.parent:
@@ -36,7 +37,7 @@ class UsersWindow(tk.Toplevel):
         self.detached_items: set[str] = set()
         self.filter_var: tk.StringVar
 
-        self.users: Users = Users()
+        self.users: Users = users
         self.default_sort_col: str = "title"
         self.sort_info: dict[str, str | bool | None] = {"col": None, "reverse": None}
         self.groups: set = set()
@@ -301,44 +302,19 @@ class UsersWindow(tk.Toplevel):
 
     def tree_autosize(self):
         sort_max_width = max([font.Font().measure(item) for item in self.sort_symbols])
-
-        tkfont = font.nametofont("TkTextFont")
-        for col in self.tree["columns"]:
-            max_width = tkfont.measure(self.tree.heading(col)["text"] + "    ") + sort_max_width
-            for item in self.tree.get_children(""):
-                item_width = tkfont.measure(str(self.tree.set(item, col)) + "    ")
-                max_width = max(max_width, item_width)
-            self.tree.column(col, width=max_width)
+        ui_utils.tree_autosize(self.tree, extra_width=sort_max_width)
 
     def tree_select_pos(self, pos: int, e: Event | None = None):
         if e is not None and e.widget is self.filter:  # désactivation si le filtre est en saisi
             return
 
-        max_pos = len(self.tree.get_children()) - 1
-
-        if max_pos < 0:
-            return
-        elif pos < 0 or pos > max_pos:
-            pos = max_pos
-        elif pos < 0:
-            pos = 0
-
-        item = self.tree.get_children()[pos]
-        self.tree.selection_set(item)
-        self.tree.focus(item)
-        self.tree.see(item)
+        ui_utils.tree_select_pos(self.tree, pos)
 
     def tree_select_move(self, offset: int, e: Event | None = None):
         if e is not None and e.widget is self.filter:  # désactivation si le filtre est en saisi
             return
 
-        curr_item = self.tree.selection()
-        if not curr_item == ():
-            pos = self.tree.index(curr_item[0])
-        else:
-            pos = 0
-
-        self.tree_select_pos(pos + offset)
+        ui_utils.tree_select_move(self.tree, offset)
 
     def app_exit(self, _: Event | None = None):
         self.destroy()
@@ -549,11 +525,11 @@ class UsersWindow(tk.Toplevel):
 
 
 class UserDialog(tk.Toplevel):
-    def __init__(self, parent, user: User | None = None):
+    def __init__(self, parent: UsersWindow, user: User | None = None):
         super().__init__(master=parent)
         self.parent: UsersWindow = parent
 
-        self.users: Users = Users()
+        self.users: Users = self.parent.users
         self.user: User | None = user
         self.user_modified: bool = False
 
@@ -689,24 +665,14 @@ class UserDialog(tk.Toplevel):
                     self.listbox.selection_set(i)
 
     def group_add(self):
-        curr_groups = self.listbox.get(0, tk.END)
         new_group = InputDialog.ask("Nouveau groupe", "Groupe à ajouter :", parent=self)
-        if new_group and new_group not in curr_groups:
-            pos = 0
-            for line in curr_groups:
-                if new_group > line:
-                    pos += 1
-                else:
-                    break
-
-            self.listbox.insert(pos, new_group)
-            self.listbox.selection_set(pos)
+        ui_utils.listbox_add_sorted(self.listbox, new_group)
 
     def user_save(self):
         if self.user:
             user = self.user
         else:
-            user: User = User(detect_user=False)
+            user: User = User(self.users, detect_user=False)
 
         overlay = MsgOverlay.display(self, "Enregistrement en cours...", 0)
 
@@ -767,10 +733,10 @@ class GroupsDialog(tk.Toplevel):
         dialog.wait_window()
         return
 
-    def __init__(self, parent, usernames: tuple[str, ...], remove_mode: bool = False):
+    def __init__(self, parent: UsersWindow, usernames: tuple[str, ...], remove_mode: bool = False):
         super().__init__(master=parent)
         self.parent: UsersWindow = parent
-        self.users: Users = Users()
+        self.users: Users = self.parent.users
         self.usernames: tuple[str, ...] = usernames
 
         self.focus_set()
@@ -862,21 +828,8 @@ class GroupsDialog(tk.Toplevel):
             self.listbox.insert(tk.END, group)
 
     def group_add(self):
-        curr_groups: list[str] = self.listbox.get(0, tk.END)
         new_group = InputDialog.ask("Nouveau groupe", "Groupe à ajouter :", parent=self)
-
-        if not new_group or any(new_group.lower() == group.lower() for group in curr_groups):
-            return
-
-        pos = 0
-        for line in curr_groups:
-            if new_group > line:
-                pos += 1
-            else:
-                break
-
-        self.listbox.insert(pos, new_group)
-        self.listbox.selection_set(pos)
+        ui_utils.listbox_add_sorted(self.listbox, new_group)
 
     def users_update_groups(self):
         groups = [self.listbox.get(line) for line in self.listbox.curselection()]
@@ -1066,5 +1019,7 @@ class AttribsDialog(tk.Toplevel):
 
 
 if __name__ == "__main__":
-    my_app = UsersWindow()
+    kee = Kee()
+    users = Users(kee)
+    my_app = UsersWindow(users)
     my_app.mainloop()

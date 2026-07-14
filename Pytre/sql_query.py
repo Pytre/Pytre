@@ -18,6 +18,7 @@ import users
 import servers
 import logs_user
 import utils
+from app_context import AppContext, build_app_context
 from user_prefs import UserPrefs, PrefsEnum
 from sql_converter import SqlTypeConverter
 
@@ -69,9 +70,10 @@ class ExecuteConfig:
 
 
 class Query:
-    def __init__(self, filename: Path = Path(), encoding: str = "utf-8"):
+    def __init__(self, ctx: AppContext, filename: Path = Path(), encoding: str = "utf-8"):
         parser = FileParser(filename, encoding)
 
+        self.ctx: AppContext = ctx
         self.filename: Path = filename
         self.file_content: str = parser.content
         self.infos: dict = parser.extract_header_infos()
@@ -81,12 +83,12 @@ class Query:
         self.hide: int = self._set_hide_level()
         self.description: str = self._set_description()
         self.grp_authorized: list[str] = self.infos.get("grp_authorized", [])
-        all_servers_id = list(servers.Servers().servers_dict.keys())
+        all_servers_id = list(ctx.servers.servers_dict.keys())
         self.servers_id: list[str] = self.infos.get("servers", all_servers_id)
 
-        self.parameters = SqlParameters(self.file_content)
-        self.cmd_builder = CmdBuilder(self.raw_cmd, self.parameters)
-        self.query_execute: QueryExecute = QueryExecute()
+        self.parameters = SqlParameters(self.ctx.settings, self.ctx.current_user, self.file_content)
+        self.cmd_builder = CmdBuilder(self.ctx.settings, self.ctx.user_prefs, self.raw_cmd, self.parameters)
+        self.query_execute: QueryExecute = QueryExecute(self.ctx)
 
     def _set_hide_level(self) -> int:
         hide: str = self.infos.get("hide", "0")
@@ -191,8 +193,8 @@ class Query:
         }
 
     @classmethod
-    def deserialize(cls, data: dict) -> "Query":
-        query: Query = cls()
+    def deserialize(cls, ctx: AppContext, data: dict) -> "Query":
+        query: Query = cls(ctx)
 
         query.filename = Path(data["filename"])
         query.file_content = data["file_content"]
@@ -204,8 +206,8 @@ class Query:
         query.grp_authorized = data["grp_authorized"]
         query.servers_id = data["servers_id"]
 
-        query.parameters = SqlParameters(query.file_content)
-        query.cmd_builder = CmdBuilder(query.raw_cmd, query.parameters)
+        query.parameters = SqlParameters(ctx.settings, ctx.current_user, query.file_content)
+        query.cmd_builder = CmdBuilder(ctx.settings, ctx.user_prefs, query.raw_cmd, query.parameters)
 
         display_params: dict[str, str] = data["display_params"]
         for key, val in display_params.items():
@@ -279,14 +281,16 @@ class FileParser:
 
 
 class SqlParam:
-    def __init__(self, sql_declare: str):
+    def __init__(self, settings: settings.Settings, user: users.CurrentUser, sql_declare: str):
         self.sql_declare = sql_declare
 
-        app_settings: settings.Settings = settings.Settings()
+        app_settings: settings.Settings = settings
         self.converter = SqlTypeConverter(
             date_display=app_settings.date_format,
             decimal_separator=app_settings.decimal_separator,
         )  # object to convert string to value or value to string
+
+        self.user: users.CurrentUser = user
 
         self.var_name: str = ""
         self.type_name: str = ""
@@ -408,11 +412,10 @@ class SqlParam:
     # ------------------------------------------------------------------------------------------
     def _funcs_init(self) -> dict[str, Callable[..., str]]:
         def user_info(attr: str) -> str:
-            user: users.CurrentUser = users.CurrentUser()
-            if attr in user.users.attribs_std:
-                info = getattr(user, attr, "")
+            if attr in self.user.users.attribs_std:
+                info = getattr(self.user, attr, "")
             else:
-                info = user.attribs_cust.get(attr, "")
+                info = self.user.attribs_cust.get(attr, "")
 
             return info
 
@@ -528,7 +531,9 @@ class SqlParam:
 
 
 class SqlParameters:
-    def __init__(self, file_content: str):
+    def __init__(self, settings: settings.Settings, user: users.CurrentUser, file_content: str):
+        self.settings = settings
+        self.user = user
         self.params: dict[str, SqlParam] = self._parse_declare(file_content)
 
     def _parse_declare(self, file_content: str) -> dict[str, SqlParam]:
@@ -538,7 +543,7 @@ class SqlParameters:
         params_txt = regex_match.group(1) if regex_match is not None else ""
         for line in params_txt.splitlines():
             if line[0:1] == "@":
-                param = SqlParam(line)
+                param = SqlParam(self.settings, self.user, line)
                 params_dict[param.var_name] = param
 
         return params_dict
@@ -578,7 +583,9 @@ class SqlParameters:
 
 
 class CmdBuilder:
-    def __init__(self, raw_cmd: str, parameters: SqlParameters):
+    def __init__(self, settings: settings.Settings, user_prefs: UserPrefs, raw_cmd: str, parameters: SqlParameters):
+        self.settings: settings.Settings = settings
+        self.user_prefs: UserPrefs = user_prefs
         self.raw_cmd: str = raw_cmd
         self.parameters: SqlParameters = parameters
         self.template: str = self._build_template()
@@ -607,8 +614,7 @@ class CmdBuilder:
         extract_file: Path = Path()
         if file_output:
             file_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            prefs: UserPrefs = UserPrefs()
-            extract_file = prefs.get(PrefsEnum.cache_folder) / (f"{query_name}_{file_stamp}.csv")
+            extract_file = self.user_prefs.get(PrefsEnum.cache_folder) / (f"{query_name}_{file_stamp}.csv")
 
         # metadata des paramètres
         params_metadata: dict = {}
@@ -627,7 +633,7 @@ class CmdBuilder:
             cmd_template=cmd_template,
             cmd_parameters=cmd_parameters,
             extract_file=extract_file,
-            extract_encoding=settings.Settings().extract_encoding,
+            extract_encoding=self.settings.extract_encoding,
             params_metadata=params_metadata,
         )
 
@@ -689,13 +695,15 @@ class CmdBuilder:
 
 
 class QueryExecute:
-    def __init__(self):
-        self.converter = SqlTypeConverter()
+    def __init__(self, ctx: AppContext):
+        self.ctx: AppContext = ctx
+
+        self.converter: SqlTypeConverter = SqlTypeConverter()
 
         self.config: ExecuteConfig | None = None
         self.server: servers.Server | None = None
 
-        self.app_settings: settings.Settings = settings.Settings()
+        self.app_settings: settings.Settings = ctx.settings
         self.field_separator = self.app_settings.field_separator
         self.print_date_format = PRINT_DATE_FORMAT
 
@@ -722,7 +730,7 @@ class QueryExecute:
 
     def get_server(self, server_id) -> servers.Server | None:
         try:
-            self.server = servers.Servers().servers_dict[server_id]
+            self.server = self.ctx.servers.servers_dict[server_id]
         except KeyError:
             error_msg = f"Infos du serveur non trouvé, id : {server_id}"
             self._broadcast(self._time_log() + f" - {error_msg}")
@@ -795,7 +803,7 @@ class QueryExecute:
         assert self.server is not None and self.config is not None
 
         # writing user log
-        user_log: logs_user.UserDb = logs_user.UserDb()
+        user_log: logs_user.UserDb = self.ctx.user_db
         user_log.insert_exec(
             self.server.id,
             self.config.query_name,
@@ -808,7 +816,7 @@ class QueryExecute:
 
         # if on, launch central log
         if self.app_settings.logs_are_on:
-            user: users.CurrentUser = users.CurrentUser()
+            user: users.CurrentUser = self.ctx.current_user
             log_infos: dict = {"user_db": user_log.user_db, "user_id": user.username, "user_name": user.title}
             self.queue.put(("central_log", log_infos))
 
@@ -923,7 +931,7 @@ class QueryExecute:
         return datetime.now().strftime(self.print_date_format)
 
 
-def get_queries(folder: Path) -> tuple[list[Query], list[str]]:
+def get_queries(ctx: AppContext, folder: Path) -> tuple[list[Query], list[str]]:
     if not Path(folder).is_dir():
         raise ValueError(f"Erreur : le répertoire {Path(folder)} n'a pas été trouvé ou n'est pas accessible !")
 
@@ -933,7 +941,7 @@ def get_queries(folder: Path) -> tuple[list[Query], list[str]]:
     files = list(Path(folder).glob("*.sql"))
     for file in files:
         try:
-            my_query = Query(Path(file))
+            my_query = Query(ctx, Path(file))
         except ValueError as e:
             error = f"Erreur chrgmt '{Path(file).name}' : ValueError, {e}"
             errors.append(error)
@@ -952,12 +960,11 @@ def get_queries(folder: Path) -> tuple[list[Query], list[str]]:
     return queries, errors
 
 
-def filter_queries(queries: list[Query], server_id: str, user: users.User | None = None) -> list[Query]:
-    user = user or users.CurrentUser()
+def filter_queries(servers: servers.Servers, queries: list[Query], server_id: str, user: users.User) -> list[Query]:
     filtered: list[Query] = []
 
     # check if user is authorized for server
-    all_servers: servers.Servers = servers.Servers()
+    all_servers: servers.Servers = servers
     server: servers.Server | None = all_servers.servers_dict.get(server_id, None)
     if server is None:
         return []
@@ -986,19 +993,18 @@ def filter_queries(queries: list[Query], server_id: str, user: users.User | None
     return filtered
 
 
-def orphan_queries(folder: Path) -> list[Path]:
+def orphan_queries(ctx: AppContext, folder: Path) -> list[Path]:
     if not Path(folder).is_dir():
         raise ValueError(f"Erreur : le répertoire {folder} n'a pas été trouvé ou n'est pas accessible !")
 
     orphan_files: list[Path] = []
 
-    all_servers: servers.Servers = servers.Servers()
-    all_ids = all_servers.servers_dict.keys()
+    all_ids = ctx.servers.servers_dict.keys()
 
     files = list(Path(folder).glob("*.sql"))
     for file in files:
         try:
-            query = Query(Path(file))
+            query = Query(ctx, Path(file))
             if not set(query.servers_id) & set(all_ids):
                 orphan_files.append(Path(file))
                 log(f"Aucun serveur existant pour : {Path(file).name}", logging.WARNING)
@@ -1013,18 +1019,18 @@ def orphan_queries(folder: Path) -> list[Path]:
 if __name__ == "__main__":
     utils.setup_standalone_logging()
 
-    app_settings: settings.Settings = settings.Settings()
-    APP_PATH = app_settings.app_path
+    ctx = build_app_context()
+    APP_PATH = ctx.settings.app_path
 
     # queries, errors = get_queries(Path(app_settings.queries_folder))
 
-    sql_script = list(Path(app_settings.queries_folder).glob("*.sql"))[0]
-    sql_script = Path(app_settings.queries_folder) / "ZCOMP.sql"
+    sql_script = list(Path(ctx.settings.queries_folder).glob("*.sql"))[0]
+    sql_script = Path(ctx.settings.queries_folder) / "ZCOMP.sql"
 
-    my_query = Query(sql_script)
+    my_query = Query(ctx, sql_script)
     my_query.update_values()
     log(my_query.get_exec_config())
     log(my_query.get_cmd_for_debug())
     my_query.execute(file_output=True)
 
-    orphan_queries(settings.Settings().queries_folder)
+    orphan_queries(ctx, ctx.settings.queries_folder)

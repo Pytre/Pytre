@@ -5,6 +5,7 @@ from multiprocessing import Process, Queue, Event as proc_get_event
 from multiprocessing.synchronize import Event as ProcEvent
 from dataclasses import dataclass
 
+from app_context import AppContext, build_app_context
 from sql_query import Query, set_log_queue, log as _log
 
 
@@ -152,6 +153,7 @@ class ExecutionProcess:
         self.queue_result: Queue = config.queue_result
         self.stop_requested: ProcEvent = config.stop_requested
         self.cannot_stop: ProcEvent = config.cannot_stop
+        self.ctx: AppContext = build_app_context()
 
     def start(self):
         try:
@@ -176,7 +178,7 @@ class ExecutionProcess:
         try:
             self.queue_result.put(("msg_print", "Query task starting"))
 
-            query: Query = Query.deserialize(query_data)
+            query: Query = Query.deserialize(self.ctx, query_data)
             query.query_execute.queue = self.queue_result
             query.query_execute.stop_requested = self.stop_requested
             query.query_execute.cannot_stop = self.cannot_stop

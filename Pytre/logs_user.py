@@ -5,7 +5,6 @@ from datetime import datetime
 from pathlib import Path
 
 import user_prefs
-from singleton_metaclass import Singleton
 from utils import log as _log, setup_standalone_logging
 
 USER_DB: Path = user_prefs.CONFIG_FOLDER / "Pytre_Logs.db"
@@ -88,7 +87,7 @@ class LogStats:
         )
 
 
-class UserDb(metaclass=Singleton):
+class UserDb:
     def __init__(self, user_db: Path = USER_DB, log_max: int = LOG_MAX):
         self.user_db: Path = Path(user_db)
         self.log_max = log_max

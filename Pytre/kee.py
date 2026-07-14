@@ -8,7 +8,6 @@ from pykeepass.entry import Entry
 from pykeepass.group import Group
 
 from utils import get_app_path, log as _log
-from singleton_metaclass import Singleton
 from credentials import crypted_file_pwd_get, crypted_file_pwd_history, crypted_file_pwd_change
 
 
@@ -21,7 +20,7 @@ def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__)
     _log(msg, level=level, sublogger=sublogger)
 
 
-class Kee(metaclass=Singleton):
+class Kee:
     def __init__(self, password: str = ""):
         self.file: str | Path = KEE_FILE
         self.pwd: str = password

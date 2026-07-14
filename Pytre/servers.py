@@ -10,14 +10,13 @@ from pykeepass.entry import Entry
 from pykeepass.group import Group
 
 from kee import Kee
-from singleton_metaclass import Singleton
 from utils import detect_encoding
 from about import APP_NAME, APP_VERSION
 
 
-class Servers(metaclass=Singleton):
-    def __init__(self):
-        self.kee: Kee = Kee()
+class Servers:
+    def __init__(self, kee: Kee):
+        self.kee: Kee = kee
         self.kee_grp: Group | None = None
         self.kee_users_grp: Group | None = None
 
@@ -187,8 +186,8 @@ class ServerType(Enum):
 
 
 class Server:
-    def __init__(self, entry: Entry | None = None, servers: Servers | None = None):
-        self.servers: Servers = servers or Servers()
+    def __init__(self, servers: Servers, entry: Entry | None = None):
+        self.servers: Servers = servers
 
         self.uuid: str = ""
         self.id: str = ""
@@ -388,7 +387,8 @@ class Server:
 
 
 if __name__ == "__main__":
-    servers = Servers()
+    kee = Kee()
+    servers = Servers(kee)
 
     print("--------------")
     print("Servers list :")

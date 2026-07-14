@@ -1,5 +1,7 @@
 import platform
 import tkinter as tk
+from collections.abc import Sequence
+from tkinter import ttk, font
 
 
 def ui_center(tk_window: tk.Tk | tk.Toplevel, tk_parent: tk.Tk | tk.Toplevel | None = None) -> None:
@@ -35,3 +37,85 @@ def ui_undisable_parent(tk_window: tk.Tk | tk.Toplevel, tk_parent: tk.Tk | tk.To
         tk_window.grab_release()
     elif tk_parent:
         tk_parent.wm_attributes("-disabled", False)
+
+
+def listbox_add_sorted(listbox: tk.Listbox, new_value: str | None) -> bool:
+    """Insère new_value dans listbox en position triée.
+    Ignore les doublons (insensibles à la casse).
+    Retourne True si inséré, False si ignoré (vide ou doublon)."""
+
+    curr_values: list[str] = listbox.get(0, tk.END)
+    if not new_value or any(new_value.lower() == v.lower() for v in curr_values):
+        return False
+
+    pos = 0
+    for line in curr_values:
+        if new_value > line:
+            pos += 1
+        else:
+            break
+
+    listbox.insert(pos, new_value)
+    listbox.selection_set(pos)
+    return True
+
+
+def toggle_password(w_caller: ttk.Button, w_target: ttk.Entry, hide_char: str = "\U000025cf") -> None:
+    if w_target["show"] == "":
+        w_caller.config(text="Voir")
+        w_target.config(show=hide_char)
+    else:
+        w_caller.config(text="Masquer")
+        w_target.config(show="")
+
+
+def tree_select_pos(tree: ttk.Treeview, pos: int) -> None:
+    max_pos = len(tree.get_children()) - 1
+
+    if max_pos < 0:
+        return
+    elif pos == -1:
+        pos = max_pos
+    elif pos < 0:
+        pos = 0
+    elif pos > max_pos:
+        pos = max_pos
+
+    item = tree.get_children()[pos]
+    tree.selection_set(item)
+    tree.focus(item)
+    tree.see(item)
+
+
+def tree_select_move(tree: ttk.Treeview, offset: int) -> None:
+    curr_item = tree.selection()
+    if not curr_item == ():
+        pos = tree.index(curr_item[0])
+    else:
+        pos = 0
+
+    tree_select_pos(tree, pos + offset)
+
+
+def tree_autosize(
+    tree: ttk.Treeview,
+    columns: Sequence[int | str] | None = None,
+    min_size: int = 0,
+    extra_width: int = 0,
+) -> None:
+    cols_to_autosize = columns if columns is not None else tree["columns"]
+
+    style = ttk.Style(tree)
+    style_name = tree.cget("style") or "Treeview"
+    font_spec = style.lookup(style_name, "font") or "TkDefaultFont"
+    tkfont = font.Font(font=font_spec)
+
+    for col in cols_to_autosize:
+        max_width = tkfont.measure(tree.heading(col)["text"] + "    ") + extra_width
+
+        for item in tree.get_children(""):
+            item_width = tkfont.measure(str(tree.set(item, col)) + "    ")
+            max_width = max(max_width, item_width)
+
+        max_width = max(max_width, min_size)
+        tree.column(col, width=max_width)

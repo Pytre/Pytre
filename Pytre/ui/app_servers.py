@@ -1,10 +1,11 @@
 import tkinter as tk
-from tkinter import ttk, Event, filedialog, messagebox, font
+from tkinter import ttk, Event, filedialog, messagebox
 
 if not __package__:
     import syspath_insert  # noqa: F401  # disable unused-import warning
 
 import utils
+from kee import Kee
 from servers import Servers, Server, ServerType
 from about import APP_NAME
 
@@ -14,7 +15,7 @@ from ui.InputDialog import InputDialog
 
 
 class ServersWindow(tk.Toplevel):
-    def __init__(self, parent=None):
+    def __init__(self, servers: Servers, parent=None):
         super().__init__()
         self.parent = parent
         if self.parent:
@@ -25,7 +26,7 @@ class ServersWindow(tk.Toplevel):
             assert isinstance(self.master, tk.Tk)
             self.master.withdraw()
 
-        self.servers = Servers()
+        self.servers = servers
         self.servers.get_all_servers()
         self.type_server: tuple[str, ...] = tuple([type.value for type in ServerType])
         self.groups: set[str] = set()
@@ -233,41 +234,14 @@ class ServersWindow(tk.Toplevel):
             messagebox.showinfo(title="Mise à jour infos", message=msg, parent=self)
 
     def tree_select_move(self, offset: int):
-        curr_item = self.tree.selection()
-        if not curr_item == ():
-            pos = self.tree.index(curr_item[0])
-        else:
-            pos = 0
-
-        self.tree_select_pos(pos + offset)
+        ui_utils.tree_select_move(self.tree, offset)
 
     def tree_select_pos(self, pos: int):
-        max_pos = len(self.tree.get_children()) - 1
-
-        if max_pos < 0:
-            return
-        elif pos < 0 or pos > max_pos:
-            pos = max_pos
-        elif pos < 0:
-            pos = 0
-
-        item = self.tree.get_children()[pos]
-        self.tree.selection_set(item)
-        self.tree.focus(item)
-        self.tree.see(item)
+        ui_utils.tree_select_pos(self.tree, pos)
 
     def tree_autosize(self):
         cols_to_autosize = (0,)  # uniquement première colonne
-        min_size = 100
-
-        tkfont = font.nametofont("TkTextFont")
-        for col in cols_to_autosize:
-            max_width = tkfont.measure(self.tree.heading(col)["text"] + "    ")
-            for item in self.tree.get_children(""):
-                item_width = tkfont.measure(self.tree.set(item, col) + "    ")
-                max_width = max(max(max_width, item_width), min_size)
-
-            self.tree.column(col, width=max_width)
+        ui_utils.tree_autosize(self.tree, columns=cols_to_autosize, min_size=100)
 
     def tree_selection_change(self, _: Event):
         if self.new_server and not self.tree.focus() == str(id(self.server)):
@@ -299,12 +273,7 @@ class ServersWindow(tk.Toplevel):
         self.groups_set()
 
     def toggle_password(self, w_caller: ttk.Button, w_target: ttk.Entry, hide_char: str = "\U000025cf"):
-        if w_target["show"] == "":
-            w_caller.config(text="Voir")
-            w_target.config(show=hide_char)
-        else:
-            w_caller.config(text="Masquer")
-            w_target.config(show="")
+        ui_utils.toggle_password(w_caller, w_target, hide_char)
 
     def groups_set(self):
         if self.server is None:
@@ -341,7 +310,7 @@ class ServersWindow(tk.Toplevel):
     # Autres traitements
     # ------------------------------------------------------------------------------------------
     def server_new(self):
-        self.server = Server()
+        self.server = Server(self.servers)
         iid = id(self.server)
         self.tree.insert("", tk.END, values=("", ""), iid=iid)
 
@@ -454,5 +423,7 @@ class ServersWindow(tk.Toplevel):
 
 
 if __name__ == "__main__":
-    my_app = ServersWindow()
+    kee = Kee()
+    servers = Servers(kee)
+    my_app = ServersWindow(servers)
     my_app.mainloop()

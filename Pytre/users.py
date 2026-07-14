@@ -13,7 +13,6 @@ from pykeepass.entry import Entry
 from pykeepass.group import Group
 
 from kee import Kee
-from singleton_metaclass import Singleton
 from utils import detect_encoding, log as _log, setup_standalone_logging
 
 
@@ -21,9 +20,9 @@ def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__)
     _log(msg, level=level, sublogger=sublogger)
 
 
-class Users(metaclass=Singleton):
-    def __init__(self):
-        self.kee: Kee = Kee()
+class Users:
+    def __init__(self, kee: Kee):
+        self.kee: Kee = kee
         self.kee_grp: Group | None = None
         self.kee_servers_grp: Group | None = None
 
@@ -67,7 +66,7 @@ class Users(metaclass=Singleton):
         u_list: list[User] = []
         attribs_set: set[str] = set()
         for entry in self.kee_grp.entries:
-            u_list.append(User(entry=entry))
+            u_list.append(User(self, entry=entry))
             attribs_set.update(self._get_cust_attribs_list(entry))
 
         self.attribs_cust = sorted(attribs_set)
@@ -369,17 +368,17 @@ class Users(metaclass=Singleton):
         if self.kee.db is None:
             raise RuntimeError("Database not opened, can't find user by uuid")
         entry = self.kee.db.find_entries(uuid=UUID(uuid), first=True)
-        return User(entry=entry) if entry and isinstance(entry, Entry) else None
+        return User(self, entry=entry) if entry and isinstance(entry, Entry) else None
 
 
 class User:
-    def __init__(self, username: str = "", entry: Entry | None = None, detect_user: bool = True):
+    def __init__(self, users: Users, username: str = "", entry: Entry | None = None, detect_user: bool = True):
         """
         si pas de username et d'entry, et que detect_user est faux
         alors pas de chrgmt à partir de la base keepass
         """
 
-        self.users: Users = Users()
+        self.users: Users = users
 
         self.uuid: str = ""
         self.username: str = ""
@@ -521,18 +520,19 @@ class User:
         return True
 
 
-class CurrentUser(User, metaclass=Singleton):
+class CurrentUser(User):
     pass
 
 
 if __name__ == "__main__":
     setup_standalone_logging()
 
-    user = CurrentUser()
+    kee = Kee()
+    users = Users(kee)
+    user = CurrentUser(users)
 
     print(f"{'=' * 50}\nSettings / Utilisateur courant\n{'=' * 50}")
     for key, val in user.to_dict().items():
         print(f"- {key}: {val}")
 
-    users = Users()
     print(f"Groups list : {users.groups}")

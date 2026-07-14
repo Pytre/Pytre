@@ -11,6 +11,7 @@ if not __package__:
 import logs_user
 import utils
 from about import APP_NAME
+from user_prefs import UserPrefs
 
 import ui.ui_utils as ui_utils
 from ui.save_as import save_as
@@ -21,7 +22,7 @@ TIME_FORMAT = "%H:%M:%S"
 
 
 class LogsWindow(tk.Toplevel):
-    def __init__(self, parent=None, query_name=""):
+    def __init__(self, user_db: logs_user.UserDb, user_prefs: UserPrefs, parent=None, query_name=""):
         super().__init__()
         self.parent = parent
         if self.parent:
@@ -30,7 +31,8 @@ class LogsWindow(tk.Toplevel):
             assert isinstance(self.master, tk.Tk)
             self.master.withdraw()
 
-        self.user_db: logs_user.UserDb = logs_user.UserDb()
+        self.user_db: logs_user.UserDb = user_db
+        self.user_prefs: UserPrefs = user_prefs
 
         self.query_name: str = query_name
         self.saved_query_name: str = ""  # pour pouvoir refiltrer après tout montrer
@@ -288,28 +290,10 @@ class LogsWindow(tk.Toplevel):
         self.show_query_stats()
 
     def tree_select_move(self, offset: int):
-        curr_item = self.tree.selection()
-        if not curr_item == ():
-            pos = self.tree.index(curr_item[0])
-        else:
-            pos = 0
-
-        self.tree_select_pos(pos + offset)
+        ui_utils.tree_select_move(self.tree, offset)
 
     def tree_select_pos(self, pos: int):
-        max_pos = len(self.tree.get_children()) - 1
-
-        if max_pos < 0:
-            return
-        elif pos < 0 or pos > max_pos:
-            pos = max_pos
-        elif pos < 0:
-            pos = 0
-
-        item = self.tree.get_children()[pos]
-        self.tree.selection_set(item)
-        self.tree.focus(item)
-        self.tree.see(item)
+        ui_utils.tree_select_pos(self.tree, pos)
 
     def tree_header_click(self, col: str):
         reverse = False
@@ -444,7 +428,7 @@ class LogsWindow(tk.Toplevel):
     def save_as(self):
         src: Path | None = self.get_extract_path()
         if src:
-            save_as(self, src)
+            save_as(self.user_prefs, self, src)
 
     def get_extract_path(self) -> Path | None:
         item = self.tree.selection()
@@ -459,5 +443,7 @@ class LogsWindow(tk.Toplevel):
 
 
 if __name__ == "__main__":
-    my_app = LogsWindow()
+    user_db = logs_user.UserDb()
+    user_prefs = UserPrefs()
+    my_app = LogsWindow(user_db, user_prefs)
     my_app.mainloop()

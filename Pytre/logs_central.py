@@ -14,7 +14,6 @@ from datetime import datetime
 from threading import Thread, Event
 from pathlib import Path
 
-from singleton_metaclass import Singleton
 from utils import log as _log, setup_standalone_logging
 
 
@@ -26,7 +25,7 @@ def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__)
     _log(msg, level=level, sublogger=sublogger)
 
 
-class CentralLogs(metaclass=Singleton):
+class CentralLogs:
     def __init__(self, logs_folder: Path = Path.cwd() / "logs"):
         self.sync_thread: Thread | None = None
         self.logs_folder: Path = Path(logs_folder)

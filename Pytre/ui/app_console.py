@@ -186,6 +186,8 @@ class ConsoleWindow(tk.Toplevel):
                 break
             except Exception as e:
                 print(f"Error while processing console queue: {e}")
+                self.after(100, self._process_console_queue)
+                break
 
     # ------------------------------------------------------------------------------------------
     # Window lifecycle

@@ -47,7 +47,7 @@ class Servers:
         for entry in self.kee_grp.entries:
             server = Server(entry=entry, servers=self)
             if grp_filter is None or not server.grp_authorized or set(server.grp_authorized) & set(grp_filter):
-                self.servers_dict[str(entry.title)] = Server(entry=entry, servers=self)
+                self.servers_dict[str(entry.title)] = server
 
         return self.servers_dict
 

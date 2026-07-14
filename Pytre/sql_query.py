@@ -642,7 +642,10 @@ class CmdBuilder:
         cmd_template = self.template
         cmd_parameters = {}
 
-        for key, param in self.parameters.params.items():
+        # tri décroissant pour éviter replace à tort (par exemple @!ID vs @!ID2)
+        sorted_params = sorted(self.parameters.params.items(), key=lambda item: len(item[0]), reverse=True)
+
+        for key, param in sorted_params:
             if param.is_inlined:
                 cmd_template = cmd_template.replace(key, str(param.value_cmd))
             else:
@@ -653,7 +656,11 @@ class CmdBuilder:
     def build_debug_command(self) -> str:
         """Retourne la commande pour debug"""
         cmd_debug = self.template
-        for key, param in self.parameters.params.items():
+
+        # tri décroissant pour éviter replace à tort (par exemple @!ID vs @!ID2)
+        sorted_params = sorted(self.parameters.params.items(), key=lambda item: len(item[0]), reverse=True)
+
+        for key, param in sorted_params:
             if param.is_inlined:  # pas une variable
                 cmd_debug = cmd_debug.replace(key, str(param.value_cmd))
                 continue

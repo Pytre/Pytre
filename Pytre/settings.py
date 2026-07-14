@@ -26,13 +26,13 @@ class Settings:
         self.default_encoding: str = "utf-8-sig"  # format à utiliser par défaut
 
         self.settings_version: str = ""  # version actuelle des settings
-        self.field_separator: str = ""  # délimitateur de champs pour exports
-        self.decimal_separator: str = ""  # séparateur décimal pour exports
-        self.date_format: str = ""  # format date pour les exports
-        self.extract_encoding: str = "utf-8-sig"  # encoding format pour les exports
-        self.queries_folder: Path = Path("")  # répertoire des requêtes SQL
+        self.field_separator: str = ";"  # délimitateur de champs pour exports
+        self.decimal_separator: str = ","  # séparateur décimal pour exports
+        self.date_format: str = "dd/MM/yyyy"  # format date pour les exports
+        self.extract_encoding: str = self.default_encoding  # encoding format pour les exports
+        self.queries_folder: Path = DEFAULT_QUERIES_FOLDER  # répertoire des requêtes SQL
         self.logs_are_on: bool = False  # indicateur si logs centraux
-        self.logs_folder: Path = Path("")  # répertoire où stocker les logs centraux
+        self.logs_folder: Path = DEFAULT_LOGS_FOLDER  # répertoire où stocker les logs centraux
         self.users_cache_expiration: int = 10  # nombre de jours du cache utilisateur pour ses requêtes
 
         self._params: dict[str, str] = self._get_params()  # mapping entre keepass title et attributs
@@ -194,18 +194,17 @@ class Settings:
         except ValueError:
             return True  # si erreur format, ne pas bloquer
 
-        if not len(curr_nums) == len(min_nums):
-            return False
+        max_len = max(len(curr_nums), len(min_nums))
+        curr_nums += [0] * (max_len - len(curr_nums))
+        min_nums += [0] * (max_len - len(min_nums))
 
-        if curr_nums == min_nums:
-            return True
-        for i in range(len(min_nums)):
+        for i in range(max_len):
             if curr_nums[i] > min_nums[i]:
                 return True
             elif curr_nums[i] < min_nums[i]:
                 return False
 
-        return False
+        return True  # égalité
 
 
 if __name__ == "__main__":

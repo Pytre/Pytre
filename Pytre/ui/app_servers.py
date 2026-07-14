@@ -409,7 +409,7 @@ class ServersWindow(tk.Toplevel):
             messagebox.showerror(title="Export", message=msg, parent=self)
             return
 
-        msg = "Fin de l'export des utilisateurs"
+        msg = "Fin de l'export des serveurs"
         messagebox.showinfo(title="Export", message=msg, parent=self)
 
     def app_exit(self, _: Event | None = None):

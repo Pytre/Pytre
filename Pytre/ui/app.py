@@ -709,6 +709,7 @@ class App(tk.Toplevel):
         # si demande d'interruption et que l'execution n'est pas déjà finie
         if self.exec_runner.stop_requested.is_set() and self.process_running:
             self.exec_force_stop()
+            return
 
         # auto relance toutes les x ms
         self.after(100, self.exec_check_queue)

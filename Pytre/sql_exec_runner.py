@@ -54,8 +54,10 @@ class ExecutionRunner:
                     with self._create_lock:
                         self.process_ready = True
                     log("Execution process ready")
+                else:
+                    log("Execution process aborted : database access unavailable", logging.ERROR)
             except QueueIsEmpty:
-                log("Execution process failed to initialize", logging.WARNING)
+                log("Execution process failed to initialize (timeout)", logging.WARNING)
                 if self.process and self.process.is_alive():
                     log("Terminating stuck execution process...")
                     self.process.terminate()
@@ -156,6 +158,14 @@ class ExecutionProcess:
         self.ctx: AppContext = build_app_context()
 
     def start(self):
+        if self.ctx.kee.is_ko:
+            log("Execution process aborting : database access to settings is broken", logging.ERROR)
+            try:
+                self.queue_result.put(False)
+            except Exception as e:
+                log(f"Execution process failed to signal not-ready state : {e}", logging.ERROR)
+            return
+
         try:
             self.queue_result.put(True)
         except Exception as e:

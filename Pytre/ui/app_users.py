@@ -18,6 +18,7 @@ from ui.ui_utils_thread import tk_call_when_ready
 from ui.app_theme import set_theme, set_menus, ThemeColors, theme_is_on
 from ui.InputDialog import InputDialog
 from ui.MsgOverlay import MsgOverlay
+from ui.ui_utils_csv import CsvTaskConfig, csv_process_async
 
 
 def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__) -> None:
@@ -464,33 +465,19 @@ class UsersWindow(tk.Toplevel):
         if not filename:
             return
 
-        overlay = MsgOverlay.display(self, "Import des utilisateurs...", 1500)
-        self.lock_ui()
+        csv_task_cfg = CsvTaskConfig(
+            ui_parent=self,
+            ui_lock_fn=self.lock_ui,
+            ui_unlock_fn=self.unlock_ui,
+            overlay_dialog_msg="Import des utilisateurs...",
+            overlay_dialog_wait_ms=1500,
+            csv_process_fn=lambda: self.users.csv_import(filename),
+            end_msgbox_title="Import",
+            end_msgbox_msg="Fin de l'import des utilisateurs",
+            end_fn=self.tree_refresh,
+        )
 
-        def worker():
-            result: bool = False
-            error: Exception | None = None
-            try:
-                result = self.users.csv_import(filename)
-            except Exception as err:
-                error = err
-            finally:
-                # retour dans le thread principal pour mettre à jour l'UI et finaliser
-                result_queue.put((result, error))
-
-        def end(result, error):
-            overlay.hide(callback=self.unlock_ui)
-            if result:
-                msg = "Fin de l'import des utilisateurs"
-                messagebox.showinfo(title="Import", message=msg, parent=self)
-            else:
-                msg = "Quelque chose ne s'est pas bien passé lors de l'import :\n" + str(error)
-                messagebox.showerror(title="Import", message=msg, parent=self)
-            self.tree_refresh()
-
-        result_queue = Queue()
-        Thread(target=worker, daemon=True).start()
-        tk_call_when_ready(self, result_queue, end)
+        csv_process_async(csv_task_cfg)
 
     def export_users(self):
         title = "Fichier à exporter"
@@ -499,29 +486,19 @@ class UsersWindow(tk.Toplevel):
         if not filename:
             return
 
-        overlay = MsgOverlay.display(self, "Export des utilisateurs...", 1500)
-        self.lock_ui()
+        csv_task_cfg = CsvTaskConfig(
+            ui_parent=self,
+            ui_lock_fn=self.lock_ui,
+            ui_unlock_fn=self.unlock_ui,
+            overlay_dialog_msg="Export des utilisateurs...",
+            overlay_dialog_wait_ms=1500,
+            csv_process_fn=lambda: self.users.csv_export(filename, overwrite=True),
+            end_msgbox_title="Export",
+            end_msgbox_msg="Fin de l'export des utilisateurs",
+            end_fn=None,
+        )
 
-        def worker():
-            result: bool = False
-            try:
-                result = self.users.csv_export(filename, overwrite=True)
-            finally:
-                # retour dans le thread principal pour mettre à jour l'UI et finaliser
-                result_queue.put(result)
-
-        def end(result):
-            overlay.hide(callback=self.unlock_ui)
-            if result:
-                msg = "Fin de l'export des utilisateurs"
-                messagebox.showinfo(title="Export", message=msg, parent=self)
-            else:
-                msg = "Quelque chose ne s'est pas bien passé lors de l'export !"
-                messagebox.showerror(title="Export", message=msg, parent=self)
-
-        result_queue = Queue()
-        Thread(target=worker, daemon=True).start()
-        tk_call_when_ready(self, result_queue, end)
+        csv_process_async(csv_task_cfg)
 
 
 class UserDialog(tk.Toplevel):

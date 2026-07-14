@@ -1,5 +1,6 @@
 import tkinter as tk
 from tkinter import ttk, Event, filedialog, messagebox
+from collections.abc import Iterator
 
 if not __package__:
     import syspath_insert  # noqa: F401  # disable unused-import warning
@@ -12,6 +13,7 @@ from about import APP_NAME
 import ui.ui_utils as ui_utils
 from ui.app_theme import set_theme, set_menus, ThemeColors, theme_is_on
 from ui.InputDialog import InputDialog
+from ui.ui_utils_csv import CsvTaskConfig, csv_process_async
 
 
 class ServersWindow(tk.Toplevel):
@@ -307,6 +309,64 @@ class ServersWindow(tk.Toplevel):
         self.listbox.selection_set(pos)
 
     # ------------------------------------------------------------------------------------------
+    # Verrouillage / Déverrouillage de l'UI
+    # ------------------------------------------------------------------------------------------
+    def menu_commands(self, menu: tk.Menu) -> Iterator[tuple[tk.Menu, int]]:
+        end_index = menu.index("end")
+        if end_index is None:
+            return
+
+        for i in range(end_index + 1):
+            try:
+                entry_type = menu.type(i)
+            except tk.TclError:
+                continue
+
+            if entry_type == "command":
+                yield (menu, i)
+            elif entry_type == "cascade":
+                submenu_name = menu.entrycget(i, "menu")
+                if submenu_name:
+                    submenu = menu.nametowidget(submenu_name)
+                    yield from self.menu_commands(submenu)
+
+    def lock_ui(self):
+        # disable all menus
+        menu: tk.Menu
+        for menu, index in self.menu_commands(self.menubar):
+            menu.entryconfig(index, state="disable")
+
+        # disable all widgets
+        frames_lst = (self.tree_frame, self.buttons_frame, self.entries_frame, self.groups_frame)
+        for frame in frames_lst:
+            for widget in frame.winfo_children():
+                if type(widget) in [ttk.Button, ttk.Entry]:
+                    widget["state"] = "disable"
+                elif widget in [self.type_box, self.listbox]:
+                    widget["state"] = "disable"
+                elif widget in [self.tree]:
+                    self.tree["selectmode"] = "none"
+
+    def unlock_ui(self):
+        # enable all menus
+        menu: tk.Menu
+        for menu, index in self.menu_commands(self.menubar):
+            menu.entryconfig(index, state="normal")
+
+        # enable all widgets
+        frames_lst = (self.tree_frame, self.buttons_frame, self.entries_frame, self.groups_frame)
+        for frame in frames_lst:
+            for widget in frame.winfo_children():
+                if type(widget) in [ttk.Button, ttk.Entry]:
+                    widget["state"] = "enable"
+                elif widget in [self.type_box]:
+                    widget["state"] = "readonly"
+                elif widget in [self.tree]:
+                    widget["selectmode"] = "extended"
+                elif widget in [self.listbox]:
+                    widget["state"] = "normal"
+
+    # ------------------------------------------------------------------------------------------
     # Autres traitements
     # ------------------------------------------------------------------------------------------
     def server_new(self):
@@ -384,16 +444,19 @@ class ServersWindow(tk.Toplevel):
         if not filename:
             return
 
-        try:
-            self.servers.csv_import(filename)
-        except Exception as err:
-            msg = "Quelque chose ne s'est pas bien passé lors de l'import :\n" + str(err)
-            messagebox.showerror(title="Import", message=msg, parent=self)
-            return
+        csv_task_cfg = CsvTaskConfig(
+            ui_parent=self,
+            ui_lock_fn=self.lock_ui,
+            ui_unlock_fn=self.unlock_ui,
+            overlay_dialog_msg="Import des serveurs...",
+            overlay_dialog_wait_ms=1500,
+            csv_process_fn=lambda: self.servers.csv_import(filename),
+            end_msgbox_title="Import",
+            end_msgbox_msg="Fin de l'import des serveurs",
+            end_fn=self.reload_all,
+        )
 
-        self.reload_all()
-        msg = "Fin de l'import des serveurs"
-        messagebox.showinfo(title="Import", message=msg, parent=self)
+        csv_process_async(csv_task_cfg)
 
     def export_servers(self):
         title = "Fichier à exporter"
@@ -402,15 +465,19 @@ class ServersWindow(tk.Toplevel):
         if not filename:
             return
 
-        try:
-            self.servers.csv_export(filename, overwrite=True)
-        except Exception as err:
-            msg = "Quelque chose ne s'est pas bien passé lors de l'export :" + str(err)
-            messagebox.showerror(title="Export", message=msg, parent=self)
-            return
+        csv_task_cfg = CsvTaskConfig(
+            ui_parent=self,
+            ui_lock_fn=self.lock_ui,
+            ui_unlock_fn=self.unlock_ui,
+            overlay_dialog_msg="Export des serveurs...",
+            overlay_dialog_wait_ms=1500,
+            csv_process_fn=lambda: self.servers.csv_export(filename, overwrite=True),
+            end_msgbox_title="Export",
+            end_msgbox_msg="Fin de l'export des serveurs",
+            end_fn=None,
+        )
 
-        msg = "Fin de l'export des serveurs"
-        messagebox.showinfo(title="Export", message=msg, parent=self)
+        csv_process_async(csv_task_cfg)
 
     def app_exit(self, _: Event | None = None):
         if self.parent:

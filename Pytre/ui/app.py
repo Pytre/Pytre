@@ -95,7 +95,7 @@ class App(tk.Toplevel):
         self.check_user_access()  # quitte l'application si pas d'accès
 
         self._queries_first_load: bool = True
-        self.refresh_queries(reload_servers=True)
+        self.refresh_queries(reload_servers=False)
 
         self.cache_folder_cleanup()
 
@@ -270,7 +270,7 @@ class App(tk.Toplevel):
 
         self.menu_query = tk.Menu(menubar, tearoff=False)
         self.menu_query.add_command(label="Executer", state="disabled", command=self.execute_query)
-        self.menu_query.add_command(label="Recharger", command=lambda: self.refresh_queries())
+        self.menu_query.add_command(label="Recharger", command=lambda: self.refresh_queries(reload_servers=True))
         self.menu_query.add_separator()
         self.menu_query.add_command(label="Journal...", command=lambda: self.open_logs(True))
         self.menu_query.add_command(label="Debug...", state="disabled", command=self.debug_query)
@@ -334,7 +334,7 @@ class App(tk.Toplevel):
         self.queries_label_filter = ttk.Label(self.left_frame, text="Filtre :", justify=tk.LEFT)
         self.queries_entry_filter = ttk.Entry(self.left_frame, textvariable=self.queries_filter_text, width=25)
         self.queries_btn_refresh = ttk.Button(
-            self.left_frame, text="\U00002b6e", width=4, command=lambda: self.refresh_queries()
+            self.left_frame, text="\U00002b6e", width=4, command=lambda: self.refresh_queries(reload_servers=True)
         )
 
         self.queries_tree = ttk.Treeview(self.left_frame, columns=(1, 2), show="headings", selectmode="browse")

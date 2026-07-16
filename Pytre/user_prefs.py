@@ -98,7 +98,7 @@ class UserPrefs:
 
     def _migrate_cache_from_config_folder(self) -> None:
         log("Migration du cache : déplacement des fichiers CSV de CONFIG_FOLDER vers CACHE_FOLDER...")
-        if self._change_cache_folder(CACHE_FOLDER) is not None:
+        if self._change_cache_folder(CACHE_FOLDER, init_load=True) is not None:
             log("Migration annulée : impossible de créer le dossier cache par défaut.", logging.ERROR)
             return
 
@@ -120,7 +120,7 @@ class UserPrefs:
             PrefsEnum.last_server.name: self._last_server,
         }
 
-    def set(self, key: PrefsEnum, value: Any, save: bool = True) -> str | None:
+    def set(self, key: PrefsEnum, value: Any, save: bool = True, init_load: bool = False) -> str | None:
         warning = ""
 
         if not isinstance(key, PrefsEnum):
@@ -131,7 +131,7 @@ class UserPrefs:
         if key is PrefsEnum.cache_folder:
             old_cache_folder = self._cache_folder
             new_cache_folder: Path = Path(value) if value else CACHE_FOLDER
-            result = self._change_cache_folder(new_cache_folder)
+            result = self._change_cache_folder(new_cache_folder, init_load=init_load)
             if result is not None:
                 if result.type == IssueType.ERROR:
                     log(f"Valeur invalide '{key.value}' : {new_cache_folder}\n{result.msg}", logging.ERROR)
@@ -173,7 +173,7 @@ class UserPrefs:
                 continue
 
             try:
-                self.set(enum, value, save=False)
+                self.set(enum, value, save=False, init_load=True)
             except (TypeError, ValueError) as e:
                 log(f"Valeur invalide pour '{enum.name}': {value} ({e})", logging.WARNING)
 

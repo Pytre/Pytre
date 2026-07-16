@@ -2,7 +2,10 @@ import re
 from enum import Enum
 from pathlib import Path
 
-from sql_keywords import sql_keywords
+if not __package__:
+    import syspath_insert  # noqa: F401  # disable unused-import warning
+
+from sql_query.sql_keywords import sql_keywords
 
 
 class TokenType(Enum):

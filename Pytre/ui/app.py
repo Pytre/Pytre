@@ -20,7 +20,7 @@ import utils
 import logs_central
 from app_context import AppContext, build_app_context
 from user_prefs import UserPrefs, PrefsEnum
-from sql_exec_runner import ExecutionRunner
+from sql_query import ExecutionRunner
 from about import APP_NAME, APP_VERSION, APP_STATUS
 
 import ui.ui_utils as ui_utils

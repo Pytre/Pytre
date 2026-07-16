@@ -7,7 +7,7 @@ if not __package__:
     import syspath_insert  # noqa: F401  # disable unused-import warning
 
 import sql_query
-from sql_lexer import SqlLexer, TokenType
+from sql_query import SqlLexer, TokenType
 from ui.app_theme import set_theme
 
 

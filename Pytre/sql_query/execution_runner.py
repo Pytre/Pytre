@@ -6,7 +6,8 @@ from multiprocessing.synchronize import Event as ProcEvent
 from dataclasses import dataclass
 
 from app_context import AppContext, build_app_context
-from sql_query import Query, set_log_queue, log as _log
+from sql_query.query import Query
+from sql_query.log_utils import set_log_queue, log as _log
 
 
 def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__) -> None:

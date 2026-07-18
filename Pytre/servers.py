@@ -185,6 +185,10 @@ class ServerType(Enum):
     postgre = "PostgreSQL"
 
 
+class ServerConnectionError(Exception):
+    """Connection error to server"""
+
+
 class Server:
     def __init__(self, servers: Servers, entry: Entry | None = None):
         self.servers: Servers = servers
@@ -256,8 +260,9 @@ class Server:
         }
         try:
             conn: pymssql.Connection = pymssql.connect(**conn_params)
-        except pymssql._pymssql.OperationalError:
-            raise  # raise original exception for traceback
+        except pymssql._pymssql.OperationalError as err:
+            err_msg = err.args[0][1].decode("utf-8", errors="replace")
+            raise ServerConnectionError(err_msg) from err
 
         return conn
 
@@ -279,11 +284,12 @@ class Server:
             cursor.execute("SET statement_timeout = %s", (self.timeout * 1000,))  # needs to be milliseconds
             cursor.execute("SET default_transaction_read_only = on")
             cursor.close()
-        except psycopg2.OperationalError:
-            raise  # raise original exception for traceback
+        except psycopg2.OperationalError as err:
+            err_msg = "".join(err.args[0])
+            raise ServerConnectionError(err_msg) from err
         except UnicodeDecodeError as err:
-            decoded_msg = err.args[1].decode(err.args[0], errors="replace")
-            raise psycopg2.OperationalError(decoded_msg) from err
+            err_msg = err.args[1].decode(err.args[0], errors="replace")
+            raise ServerConnectionError(err_msg) from err
 
         return conn
 

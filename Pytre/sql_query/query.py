@@ -1,9 +1,7 @@
 from pathlib import Path
 
-import pymssql
-import psycopg2
-
 from app_context import AppContext
+from servers import ServerConnectionError
 from sql_query.file_parser import FileParser
 from sql_query.parameters import SqlParam, SqlParameters
 from sql_query.cmd_builder import CmdBuilder
@@ -31,6 +29,7 @@ class Query:
 
         self.parameters = SqlParameters(self.ctx.settings, self.ctx.current_user, self.file_content)
         self.cmd_builder = CmdBuilder(self.ctx.settings, self.ctx.user_prefs, self.raw_cmd, self.parameters)
+
         self.query_execute: QueryExecute = QueryExecute(self.ctx)
 
     def _set_hide_level(self) -> int:
@@ -87,7 +86,7 @@ class Query:
             try:
                 result = self.query_execute.execute(exec_config)
                 return result
-            except (pymssql._pymssql.OperationalError, psycopg2.OperationalError) as err:
+            except ServerConnectionError as err:
                 self._execute_operational_errors(err)
                 return (-1, None)
             except Exception as err:
@@ -98,14 +97,8 @@ class Query:
             self._broadcast(err_msg)
             return (-1, None)
 
-    def _execute_operational_errors(self, err: Exception):
-        err_msg = str("=") * 50 + "\n"
-
-        if isinstance(err, pymssql._pymssql.OperationalError):
-            err_msg += err.args[0][1].decode("utf-8", errors="replace")
-        if isinstance(err, psycopg2.OperationalError):
-            err_msg += "".join(err.args[0])
-
+    def _execute_operational_errors(self, err: ServerConnectionError):
+        err_msg = str("=") * 50 + "\n" + str(err)
         if not err_msg[-1] == "\n":
             err_msg += "\n"
         err_msg += str("=") * 50

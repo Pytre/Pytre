@@ -30,7 +30,7 @@ class Query:
         self.parameters = SqlParameters(self.ctx.settings, self.ctx.current_user, self.file_content)
         self.cmd_builder = CmdBuilder(self.ctx.settings, self.ctx.user_prefs, self.raw_cmd, self.parameters)
 
-        self.query_execute: QueryExecute = QueryExecute(self.ctx)
+        self._query_execute: QueryExecute | None = None
 
     def _set_hide_level(self) -> int:
         hide: str = self.infos.get("hide", "0")
@@ -42,6 +42,12 @@ class Query:
             description = f"({'*' * self.hide}) {description}"
 
         return description
+
+    @property
+    def query_execute(self) -> QueryExecute:
+        if self._query_execute is None:
+            self._query_execute = QueryExecute(self.ctx)
+        return self._query_execute
 
     # ------------------------------------------------------------------------------------------
     # Gestion des paramètres avec SqlParameters

@@ -4,7 +4,7 @@ from utils import get_app_path
 
 
 APP_NAME = "Pytre"
-APP_VERSION = "1.7.6"
+APP_VERSION = "1.8.0"
 APP_STATUS = ""
 APP_BUILD = "1"
 COPYRIGHT_YEAR = "2021"

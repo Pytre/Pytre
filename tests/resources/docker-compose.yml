@@ -1,0 +1,15 @@
+# Local-only mssql-test container used by integration tests marked @requires_docker.
+# Started automatically by tests/integration/conftest.py (_ensure_docker_test_server) when the
+# container isn't already reachable on 127.0.0.1:1433 - no manual docker run needed.
+# MSSQL_SA_PASSWORD is injected at "docker compose up" time from
+# tests/resources/build_test_keepass.py's TEST_SQL_SERVER["password"], not hardcoded here.
+services:
+  mssql-test:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: mssql-test
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_PID: "Developer"
+      MSSQL_SA_PASSWORD: "${MSSQL_SA_PASSWORD}"
+    ports:
+      - "1433:1433"

@@ -1,0 +1,8 @@
+argon2-cffi>=25.1.0
+fastapi>=0.140.0
+fastmssql>=0.7.7
+httpx2>=2.9.1      # pour TestClient (tests de routes)
+keyring>=25.7.0
+pyjwt>=2.10.1
+uvicorn>=0.51.0
+

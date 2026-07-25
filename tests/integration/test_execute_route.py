@@ -1,0 +1,284 @@
+"""
+Integration test for the POST /execute route (real query_id + hash + parameters,
+never raw SQL). Uses the shared `client` fixture (dedicated test KeePass database) for every
+test - only the two tests doing a real SQL execution also need the local mssql-test docker
+container (marked with `requires_docker`).
+"""
+
+import pytest
+
+from tests.integration.conftest import TEST_QUERY_ID, TEST_SERVER_ID, TEST_USERNAME, requires_docker
+
+pytestmark = pytest.mark.integration
+
+
+def _get_real_hash(client, auth_headers, server_id: str, query_id: str) -> str:
+    response = client.get("/queries", params={"server_id": server_id}, headers=auth_headers)
+    queries = {q["name"]: q for q in response.json()}
+    return queries[query_id]["cmd_template"]
+
+
+@requires_docker
+def test_execute_returns_rows_with_correct_hash(client, auth_headers):
+    import hashlib
+    import json
+
+    template = _get_real_hash(client, auth_headers, TEST_SERVER_ID, TEST_QUERY_ID)
+    template_hash = hashlib.sha256(template.encode("utf-8")).hexdigest()
+
+    response = client.post(
+        "/execute",
+        json={
+            "server_id": TEST_SERVER_ID,
+            "query_id": TEST_QUERY_ID,
+            "template_hash": template_hash,
+            "parameters": {"@1": ""},
+        },
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/x-ndjson"
+    lines = [json.loads(line) for line in response.text.splitlines() if line]
+
+    # first line is always a {"__columns__": [...]} header, data lines are {"__row__": [...]}
+    # positional lists (see Pytre_Server/result_streaming.py)
+    columns = lines[0]["__columns__"]
+    rows = [dict(zip(columns, line["__row__"])) for line in lines[1:]]
+
+    assert set(columns) == {"id", "label", "filter_date"}
+    assert len(rows) > 0
+    assert set(rows[0].keys()) == {"id", "label", "filter_date"}
+
+
+def test_execute_rejects_unknown_query_id(client, auth_headers):
+    response = client.post(
+        "/execute",
+        json={"server_id": TEST_SERVER_ID, "query_id": "DOES_NOT_EXIST", "template_hash": "x"},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 404
+
+
+def test_execute_rejects_unknown_server_id(client, auth_headers):
+    response = client.post(
+        "/execute",
+        json={"server_id": "nope_server", "query_id": TEST_QUERY_ID, "template_hash": "x"},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 404
+
+
+def test_execute_rejects_stale_hash(client, auth_headers):
+    response = client.post(
+        "/execute",
+        json={
+            "server_id": TEST_SERVER_ID,
+            "query_id": TEST_QUERY_ID,
+            "template_hash": "stale_hash_value",
+        },
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 409
+
+
+def test_execute_rejects_parameter_mismatch(client, auth_headers):
+    """An unknown/missing parameter is caught by the exact parameter-set check rather than by
+    set_display_values()'s KeyError - same staleness family as a stale hash, hence 409 rather
+    than 400."""
+    import hashlib
+
+    template = _get_real_hash(client, auth_headers, TEST_SERVER_ID, TEST_QUERY_ID)
+    template_hash = hashlib.sha256(template.encode("utf-8")).hexdigest()
+
+    response = client.post(
+        "/execute",
+        json={
+            "server_id": TEST_SERVER_ID,
+            "query_id": TEST_QUERY_ID,
+            "template_hash": template_hash,
+            "parameters": {"@unknown": "x"},
+        },
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 409
+
+
+@requires_docker
+def test_execute_ignores_stale_hash_when_exempted(client, auth_headers):
+    """A query listed in resources.ignore_hash_until, with a still-future date, must let a
+    stale template_hash through - the hash check is the only thing waived, not the query
+    itself (real parameters and real execution still apply, hence requires_docker)."""
+    from datetime import datetime, timedelta
+
+    client.app.state.server.resources.ignore_hash_until[TEST_QUERY_ID] = datetime.now() + timedelta(days=1)
+
+    response = client.post(
+        "/execute",
+        json={
+            "server_id": TEST_SERVER_ID,
+            "query_id": TEST_QUERY_ID,
+            "template_hash": "stale_hash_value",
+            "parameters": {"@1": ""},
+        },
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 200
+
+
+def test_execute_still_checks_parameters_when_hash_exempted(client, auth_headers):
+    """The parameter-set check must stay active even while the hash check is waived - the
+    hash exemption only covers SQL body drift, not the parameter contract (see point 10:
+    template_hash never covers the DECLARE block, so it can't stand in for this check)."""
+    from datetime import datetime, timedelta
+
+    client.app.state.server.resources.ignore_hash_until[TEST_QUERY_ID] = datetime.now() + timedelta(days=1)
+
+    response = client.post(
+        "/execute",
+        json={
+            "server_id": TEST_SERVER_ID,
+            "query_id": TEST_QUERY_ID,
+            "template_hash": "stale_hash_value",
+            "parameters": {"@unknown": "x"},
+        },
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 409
+
+
+def test_execute_rejects_stale_hash_once_exemption_expired(client, auth_headers):
+    """A past exemption date must not waive the hash check - it should behave exactly as if
+    no exemption had ever been set (regression guard against an off-by-one on the comparison
+    direction, e.g. accidentally using < instead of > against datetime.now())."""
+    from datetime import datetime, timedelta
+
+    client.app.state.server.resources.ignore_hash_until[TEST_QUERY_ID] = datetime.now() - timedelta(days=1)
+
+    response = client.post(
+        "/execute",
+        json={
+            "server_id": TEST_SERVER_ID,
+            "query_id": TEST_QUERY_ID,
+            "template_hash": "stale_hash_value",
+        },
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 409
+
+
+def test_execute_returns_503_when_pool_saturated(client, auth_headers, monkeypatch):
+    """SqlConnectionError from driver.execute() (e.g. pool exhausted, connection_timeout_secs
+    elapsed) must surface as a clean 503, not an unhandled 500 - and must not leak the
+    caller's concurrency slot (the per-user semaphore must be released, not left locked).
+    The driver itself is monkeypatched, so no real docker connection is attempted."""
+    import hashlib
+
+    from fastmssql import SqlConnectionError
+    from Pytre_Server.execution.fastmssql_driver import FastMssqlDriver
+
+    async def _raise_pool_timeout(self, template, params):
+        raise SqlConnectionError("Connection pool timeout - all connections are busy.")
+
+    monkeypatch.setattr(FastMssqlDriver, "execute", _raise_pool_timeout)
+
+    template = _get_real_hash(client, auth_headers, TEST_SERVER_ID, TEST_QUERY_ID)
+    template_hash = hashlib.sha256(template.encode("utf-8")).hexdigest()
+
+    response = client.post(
+        "/execute",
+        json={
+            "server_id": TEST_SERVER_ID,
+            "query_id": TEST_QUERY_ID,
+            "template_hash": template_hash,
+            "parameters": {"@1": ""},
+        },
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 503
+    assert not client.app.state.server.resources.user_semaphores[TEST_USERNAME].locked()
+
+
+def test_execute_returns_503_when_server_unreachable(client, auth_headers, monkeypatch):
+    """SqlConnectionError from the initial connect() (server down/unreachable) must also
+    surface as 503, not an unhandled 500 - same semaphore-leak concern as above. The driver
+    itself is monkeypatched, so no real docker connection is attempted."""
+    import hashlib
+
+    from fastmssql import SqlConnectionError
+    from Pytre_Server.execution.fastmssql_driver import FastMssqlDriver
+
+    async def _raise_unreachable(self):
+        raise SqlConnectionError("Failed to connect: connection refused.")
+
+    monkeypatch.setattr(FastMssqlDriver, "connect", _raise_unreachable)
+
+    template = _get_real_hash(client, auth_headers, TEST_SERVER_ID, TEST_QUERY_ID)
+    template_hash = hashlib.sha256(template.encode("utf-8")).hexdigest()
+
+    response = client.post(
+        "/execute",
+        json={
+            "server_id": TEST_SERVER_ID,
+            "query_id": TEST_QUERY_ID,
+            "template_hash": template_hash,
+            "parameters": {"@1": ""},
+        },
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 503
+    assert not client.app.state.server.resources.user_semaphores[TEST_USERNAME].locked()
+
+
+def test_execute_rejects_when_user_at_concurrency_limit(client, auth_headers):
+    """A user already at their concurrency limit (semaphore pre-locked here to avoid
+    firing real concurrent requests) must get a clean 429, not wait indefinitely."""
+    import asyncio
+    import hashlib
+
+    template = _get_real_hash(client, auth_headers, TEST_SERVER_ID, TEST_QUERY_ID)
+    template_hash = hashlib.sha256(template.encode("utf-8")).hexdigest()
+
+    client.app.state.server.resources.user_semaphores[TEST_USERNAME] = asyncio.Semaphore(0)  # already exhausted
+
+    response = client.post(
+        "/execute",
+        json={
+            "server_id": TEST_SERVER_ID,
+            "query_id": TEST_QUERY_ID,
+            "template_hash": template_hash,
+            "parameters": {"@1": ""},
+        },
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 429
+
+
+def test_execute_rejects_invalid_parameter_value(client, auth_headers):
+    import hashlib
+
+    template = _get_real_hash(client, auth_headers, TEST_SERVER_ID, TEST_QUERY_ID)
+    template_hash = hashlib.sha256(template.encode("utf-8")).hexdigest()
+
+    response = client.post(
+        "/execute",
+        json={
+            "server_id": TEST_SERVER_ID,
+            "query_id": TEST_QUERY_ID,
+            "template_hash": template_hash,
+            "parameters": {"@1": "not-a-date"},
+        },
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 400

@@ -4,10 +4,7 @@ from tkinter import Event
 from datetime import datetime, timedelta
 from typing import cast
 
-if not __package__:
-    import syspath_insert  # noqa: F401  # disable unused-import warning
-
-from ui.app_theme import ThemeColors
+from Pytre.ui.app_theme import ThemeColors
 
 
 class MsgOverlay:

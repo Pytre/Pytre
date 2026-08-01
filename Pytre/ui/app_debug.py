@@ -3,12 +3,9 @@ import tkinter as tk
 from tkinter import ttk, Event
 from pathlib import Path
 
-if not __package__:
-    import syspath_insert  # noqa: F401  # disable unused-import warning
-
-import sql_query
-from sql_query import SqlLexer, TokenType
-from ui.app_theme import set_theme
+from Pytre import sql_query
+from Pytre.sql_query import SqlLexer, TokenType
+from Pytre.ui.app_theme import set_theme
 
 
 class DebugWindow(tk.Toplevel):
@@ -131,7 +128,7 @@ class DebugWindow(tk.Toplevel):
 
 
 if __name__ == "__main__":
-    from app_context import build_app_context
+    from Pytre.app_context import build_app_context
 
     filename = next((Path.cwd() / "Requetes SQL").glob("*.sql"), None)
     if filename is None:

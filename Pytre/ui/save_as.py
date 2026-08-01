@@ -1,10 +1,7 @@
 from tkinter import messagebox, filedialog
 from pathlib import Path
 
-if not __package__:
-    import syspath_insert  # noqa: F401  # disable unused-import warning
-
-from user_prefs import PrefsEnum, UserPrefs
+from Pytre.user_prefs import PrefsEnum, UserPrefs
 
 
 def save_as(user_prefs: UserPrefs, parent, src_file: Path | str) -> Path | None:

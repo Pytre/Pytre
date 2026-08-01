@@ -7,6 +7,6 @@ if __name__ == "__main__":
 
     multiprocessing.set_start_method("spawn", force=True)
 
-    from ui.app import app_start  # import after managing multiprocess for it to work when frozen
+    from Pytre.ui.app import app_start  # import after managing multiprocess for it to work when frozen
 
     app_start()

@@ -2,10 +2,10 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-import settings
-from user_prefs import UserPrefs, PrefsEnum
-from sql_query.parameters import SqlParam, SqlParameters
-from sql_query.execute_config import ExecuteConfig
+from Pytre import settings
+from Pytre.user_prefs import UserPrefs, PrefsEnum
+from Pytre.sql_query.parameters import SqlParam, SqlParameters
+from Pytre.sql_query.execute_config import ExecuteConfig
 
 REPLACE_PARAM_PATTERN = re.compile(r"(?<![\d\w#_\$@])(@[\d\w#_\$@]+)")  # for cmd_builder
 

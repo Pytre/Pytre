@@ -1,7 +1,7 @@
 import logging
 from multiprocessing import Queue
 
-import utils
+from Pytre import utils
 
 # Global variables used for logging
 _LOG_QUEUE: Queue | None = None

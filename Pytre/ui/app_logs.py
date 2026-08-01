@@ -4,18 +4,13 @@ from tkinter import ttk, Event, messagebox
 from datetime import datetime
 from pathlib import Path
 
+from Pytre import logs_user, utils
+from Pytre.about import APP_NAME
+from Pytre.user_prefs import UserPrefs
 
-if not __package__:
-    import syspath_insert  # noqa: F401  # disable unused-import warning
-
-import logs_user
-import utils
-from about import APP_NAME
-from user_prefs import UserPrefs
-
-import ui.ui_utils as ui_utils
-from ui.save_as import save_as
-from ui.app_theme import set_theme, set_menus, theme_is_on
+import Pytre.ui.ui_utils as ui_utils
+from Pytre.ui.save_as import save_as
+from Pytre.ui.app_theme import set_theme, set_menus, theme_is_on
 
 DATE_FORMAT = "%d/%m/%Y"
 TIME_FORMAT = "%H:%M:%S"

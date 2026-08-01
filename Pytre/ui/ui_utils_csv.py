@@ -5,8 +5,8 @@ from queue import Queue
 from threading import Thread
 from tkinter import messagebox
 
-from ui.MsgOverlay import MsgOverlay
-from ui.ui_utils_thread import tk_call_when_ready
+from Pytre.ui.MsgOverlay import MsgOverlay
+from Pytre.ui.ui_utils_thread import tk_call_when_ready
 
 
 @dataclass(frozen=True)

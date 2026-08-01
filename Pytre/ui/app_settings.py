@@ -5,16 +5,13 @@ import tkinter as tk
 from tkinter import ttk, Event, messagebox
 from pathlib import Path
 
-if not __package__:
-    import syspath_insert  # noqa: F401  # disable unused-import warning
+from Pytre import utils
+from Pytre.settings import Settings
+from Pytre.user_prefs import UserPrefs, PrefsEnum
+from Pytre.about import APP_NAME
 
-import utils
-from settings import Settings
-from user_prefs import UserPrefs, PrefsEnum
-from about import APP_NAME
-
-import ui.ui_utils as ui_utils
-from ui.app_theme import set_theme
+import Pytre.ui.ui_utils as ui_utils
+from Pytre.ui.app_theme import set_theme
 
 
 @dataclass(frozen=True)

@@ -8,36 +8,27 @@ from pathlib import Path
 from datetime import datetime
 from typing import TypedDict
 
-if not __package__:
-    import syspath_insert  # noqa: F401  # disable unused-import warning
+from Pytre import old_files, sql_query, settings, users, servers, utils, logs_central
+from Pytre.app_context import AppContext, build_app_context
+from Pytre.user_prefs import UserPrefs, PrefsEnum
+from Pytre.sql_query import ExecutionRunner
+from Pytre.about import APP_NAME, APP_VERSION, APP_STATUS
 
-import old_files
-import sql_query
-import settings
-import users
-import servers
-import utils
-import logs_central
-from app_context import AppContext, build_app_context
-from user_prefs import UserPrefs, PrefsEnum
-from sql_query import ExecutionRunner
-from about import APP_NAME, APP_VERSION, APP_STATUS
-
-import ui.ui_utils as ui_utils
-from ui.ui_utils_thread import tk_call_when_ready
-from ui.save_as import save_as
-from ui.InputDialog import InputDialog
-from ui.MsgDialog import MsgDialog
-from ui.MsgOverlay import MsgOverlay
-from ui.app_logs import LogsWindow
-from ui.app_debug import DebugWindow
-from ui.app_users import UsersWindow
-from ui.app_servers import ServersWindow
-from ui.app_settings import SettingsWindow, UserPrefsWindow
-from ui.app_password import PasswordWindow
-from ui.app_console import ConsoleWindow
-from ui.app_about import AboutWindow
-from ui.app_theme import set_theme, set_menus, theme_is_on
+import Pytre.ui.ui_utils as ui_utils
+from Pytre.ui.ui_utils_thread import tk_call_when_ready
+from Pytre.ui.save_as import save_as
+from Pytre.ui.InputDialog import InputDialog
+from Pytre.ui.MsgDialog import MsgDialog
+from Pytre.ui.MsgOverlay import MsgOverlay
+from Pytre.ui.app_logs import LogsWindow
+from Pytre.ui.app_debug import DebugWindow
+from Pytre.ui.app_users import UsersWindow
+from Pytre.ui.app_servers import ServersWindow
+from Pytre.ui.app_settings import SettingsWindow, UserPrefsWindow
+from Pytre.ui.app_password import PasswordWindow
+from Pytre.ui.app_console import ConsoleWindow
+from Pytre.ui.app_about import AboutWindow
+from Pytre.ui.app_theme import set_theme, set_menus, theme_is_on
 
 
 def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__) -> None:

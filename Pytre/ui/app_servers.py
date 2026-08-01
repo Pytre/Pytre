@@ -2,18 +2,15 @@ import tkinter as tk
 from tkinter import ttk, Event, filedialog, messagebox
 from collections.abc import Iterator
 
-if not __package__:
-    import syspath_insert  # noqa: F401  # disable unused-import warning
+from Pytre import utils
+from Pytre.kee import Kee
+from Pytre.servers import Servers, Server, ServerType
+from Pytre.about import APP_NAME
 
-import utils
-from kee import Kee
-from servers import Servers, Server, ServerType
-from about import APP_NAME
-
-import ui.ui_utils as ui_utils
-from ui.app_theme import set_theme, set_menus, ThemeColors, theme_is_on
-from ui.InputDialog import InputDialog
-from ui.ui_utils_csv import CsvTaskConfig, csv_process_async
+import Pytre.ui.ui_utils as ui_utils
+from Pytre.ui.app_theme import set_theme, set_menus, ThemeColors, theme_is_on
+from Pytre.ui.InputDialog import InputDialog
+from Pytre.ui.ui_utils_csv import CsvTaskConfig, csv_process_async
 
 
 class ServersWindow(tk.Toplevel):

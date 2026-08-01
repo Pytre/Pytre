@@ -6,12 +6,9 @@ from datetime import datetime
 from queue import Queue, Empty as QueueIsEmpty
 from typing import TextIO
 
-if not __package__:
-    import syspath_insert  # noqa: F401  # disable unused-import warning
-
-from about import APP_NAME
-from utils import log, LOGGER_ROOT_NAME
-from ui.app_theme import set_theme, get_system
+from Pytre.about import APP_NAME
+from Pytre.utils import log, LOGGER_ROOT_NAME
+from Pytre.ui.app_theme import set_theme, get_system
 
 
 DATE_FORMAT = "%H:%M:%S"

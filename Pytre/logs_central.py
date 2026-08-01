@@ -14,7 +14,7 @@ from datetime import datetime
 from threading import Thread, Event
 from pathlib import Path
 
-from utils import log as _log, setup_standalone_logging
+from Pytre.utils import log as _log, setup_standalone_logging
 
 
 CENTRAL_DB: Path | str = "Pytre_Central_Logs.db"

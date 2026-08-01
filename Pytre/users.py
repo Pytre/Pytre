@@ -12,8 +12,8 @@ from pathlib import Path
 from pykeepass.entry import Entry
 from pykeepass.group import Group
 
-from kee import Kee
-from utils import detect_encoding, log as _log, setup_standalone_logging
+from Pytre.kee import Kee
+from Pytre.utils import detect_encoding, log as _log, setup_standalone_logging
 
 
 def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__) -> None:

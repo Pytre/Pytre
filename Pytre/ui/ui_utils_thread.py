@@ -2,7 +2,7 @@ import logging
 import tkinter as tk
 from queue import Queue, Empty as QueueIsEmpty
 
-from utils import log as _log
+from Pytre.utils import log as _log
 
 
 def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__) -> None:

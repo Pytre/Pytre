@@ -1,13 +1,13 @@
 from pathlib import Path
 
-from app_context import AppContext
-from servers import ServerConnectionError
-from sql_query.file_parser import FileParser
-from sql_query.parameters import SqlParam, SqlParameters
-from sql_query.cmd_builder import CmdBuilder
-from sql_query.query_execute import QueryExecute
-from sql_query.execute_config import ExecuteConfig
-from sql_query.log_utils import _STANDALONE_BROADCAST_LOGGER
+from Pytre.app_context import AppContext
+from Pytre.servers import ServerConnectionError
+from Pytre.sql_query.file_parser import FileParser
+from Pytre.sql_query.parameters import SqlParam, SqlParameters
+from Pytre.sql_query.cmd_builder import CmdBuilder
+from Pytre.sql_query.query_execute import QueryExecute
+from Pytre.sql_query.execute_config import ExecuteConfig
+from Pytre.sql_query.log_utils import _STANDALONE_BROADCAST_LOGGER
 
 
 class Query:

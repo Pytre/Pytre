@@ -7,8 +7,8 @@ from pykeepass.exceptions import CredentialsError
 from pykeepass.entry import Entry
 from pykeepass.group import Group
 
-from utils import get_app_path, log as _log
-from credentials import crypted_file_pwd_get, crypted_file_pwd_history, crypted_file_pwd_change
+from Pytre.utils import get_app_path, log as _log
+from Pytre.credentials import crypted_file_pwd_get, crypted_file_pwd_history, crypted_file_pwd_change
 
 
 KEE_FILE: Path = Path().cwd() / "Pytre.db"

@@ -1,13 +1,10 @@
 import tkinter as tk
 from tkinter import Event, ttk, font
 
-if not __package__:
-    import syspath_insert  # noqa: F401  # disable unused-import warning
+from Pytre.settings import get_app_path
 
-from settings import get_app_path
-
-import ui.ui_utils as ui_utils
-from ui.app_theme import set_theme
+import Pytre.ui.ui_utils as ui_utils
+from Pytre.ui.app_theme import set_theme
 
 
 class MsgDialog(tk.Toplevel):

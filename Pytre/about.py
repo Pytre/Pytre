@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from utils import get_app_path
+from Pytre.utils import get_app_path
 
 
 APP_NAME = "Pytre"

@@ -2,15 +2,11 @@ import tkinter as tk
 import webbrowser
 from tkinter import ttk, Event, font
 
-if not __package__:
-    import syspath_insert  # noqa: F401  # disable unused-import warning
+from Pytre import about, utils
+from Pytre.settings import get_app_path
 
-import utils
-import about
-from settings import get_app_path
-
-import ui.ui_utils as ui_utils
-from ui.app_theme import set_theme
+import Pytre.ui.ui_utils as ui_utils
+from Pytre.ui.app_theme import set_theme
 
 
 class AboutWindow(tk.Toplevel):

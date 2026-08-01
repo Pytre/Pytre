@@ -5,20 +5,17 @@ from threading import Thread
 from queue import Queue
 from collections.abc import Iterator
 
-if not __package__:
-    import syspath_insert  # noqa: F401  # disable unused-import warning
+from Pytre import utils
+from Pytre.kee import Kee
+from Pytre.users import Users, User
+from Pytre.about import APP_NAME
 
-import utils
-from kee import Kee
-from users import Users, User
-from about import APP_NAME
-
-import ui.ui_utils as ui_utils
-from ui.ui_utils_thread import tk_call_when_ready
-from ui.app_theme import set_theme, set_menus, ThemeColors, theme_is_on
-from ui.InputDialog import InputDialog
-from ui.MsgOverlay import MsgOverlay
-from ui.ui_utils_csv import CsvTaskConfig, csv_process_async
+import Pytre.ui.ui_utils as ui_utils
+from Pytre.ui.ui_utils_thread import tk_call_when_ready
+from Pytre.ui.app_theme import set_theme, set_menus, ThemeColors, theme_is_on
+from Pytre.ui.InputDialog import InputDialog
+from Pytre.ui.MsgOverlay import MsgOverlay
+from Pytre.ui.ui_utils_csv import CsvTaskConfig, csv_process_async
 
 
 def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__) -> None:

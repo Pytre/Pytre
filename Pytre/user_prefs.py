@@ -6,7 +6,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from utils import log as _log, setup_standalone_logging
+from Pytre.utils import log as _log, setup_standalone_logging
 
 CACHE_FOLDER: Path = Path.home() / "Pytre" / ".temp_cache"
 CONFIG_FOLDER: Path = Path.home() / "Pytre"

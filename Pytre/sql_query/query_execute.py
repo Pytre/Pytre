@@ -8,14 +8,11 @@ from multiprocessing.synchronize import Event as ProcEvent
 import pymssql
 import psycopg2
 
-import settings
-import users
-import servers
-import logs_user
-from app_context import AppContext
-from sql_query.execute_config import ExecuteConfig
-from sql_query.converter import SqlTypeConverter
-from sql_query.log_utils import _STANDALONE_BROADCAST_LOGGER
+from Pytre import settings, users, servers, logs_user
+from Pytre.app_context import AppContext
+from Pytre.sql_query.execute_config import ExecuteConfig
+from Pytre.sql_query.converter import SqlTypeConverter
+from Pytre.sql_query.log_utils import _STANDALONE_BROADCAST_LOGGER
 
 PRINT_DATE_FORMAT: str = "%d/%m/%Y à %H:%M:%S"  # pour le format de la date pour les logs / output
 

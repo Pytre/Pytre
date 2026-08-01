@@ -2,10 +2,7 @@ import re
 from enum import Enum
 from pathlib import Path
 
-if not __package__:
-    import syspath_insert  # noqa: F401  # disable unused-import warning
-
-from sql_query.sql_keywords import sql_keywords
+from Pytre.sql_query.sql_keywords import sql_keywords
 
 
 class TokenType(Enum):
@@ -117,7 +114,7 @@ class SqlLexer:
 
         i, level = pos, 0
         while i < text_length:
-            match: re.Match = pat_start.match(text, i) if level == 0 else pattern.search(text, i)
+            match: re.Match | None = pat_start.match(text, i) if level == 0 else pattern.search(text, i)
             if not match:
                 return
             value = match.group()

@@ -9,9 +9,9 @@ import psycopg2
 from pykeepass.entry import Entry
 from pykeepass.group import Group
 
-from kee import Kee
-from utils import detect_encoding
-from about import APP_NAME, APP_VERSION
+from Pytre.kee import Kee
+from Pytre.utils import detect_encoding
+from Pytre.about import APP_NAME, APP_VERSION
 
 
 class Servers:

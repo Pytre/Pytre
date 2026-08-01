@@ -6,8 +6,8 @@ from pathlib import Path, PureWindowsPath
 from pykeepass.entry import Entry
 from pykeepass.group import Group
 
-from kee import Kee
-from utils import detect_encoding, get_app_path, log as _log, setup_standalone_logging
+from Pytre.kee import Kee
+from Pytre.utils import detect_encoding, get_app_path, log as _log, setup_standalone_logging
 
 DEFAULT_QUERIES_FOLDER = Path.home() / "Queries"
 DEFAULT_LOGS_FOLDER = Path.home() / "Logs"

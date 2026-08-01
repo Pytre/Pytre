@@ -1,14 +1,11 @@
 import tkinter as tk
 from tkinter import Event, ttk
 
-if not __package__:
-    import syspath_insert  # noqa: F401  # disable unused-import warning
+from Pytre.kee import Kee
+from Pytre.about import APP_NAME
 
-from kee import Kee
-from about import APP_NAME
-
-import ui.ui_utils as ui_utils
-from ui.app_theme import set_theme, ThemeColors, theme_is_on
+import Pytre.ui.ui_utils as ui_utils
+from Pytre.ui.app_theme import set_theme, ThemeColors, theme_is_on
 
 
 class PasswordWindow(tk.Toplevel):

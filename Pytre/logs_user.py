@@ -4,8 +4,8 @@ import logging
 from datetime import datetime
 from pathlib import Path
 
-import user_prefs
-from utils import log as _log, setup_standalone_logging
+from Pytre import user_prefs
+from Pytre.utils import log as _log, setup_standalone_logging
 
 USER_DB: Path = user_prefs.CONFIG_FOLDER / "Pytre_Logs.db"
 LATEST_VERSION: int = 2  # latest version model of user database

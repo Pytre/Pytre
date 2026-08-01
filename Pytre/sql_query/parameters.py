@@ -3,9 +3,8 @@ from collections.abc import Callable
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
 
-import settings
-import users
-from sql_query.converter import SqlTypeConverter
+from Pytre import settings, users
+from Pytre.sql_query.converter import SqlTypeConverter
 
 # Patterns for parsing SQL parameters when SqlParam is initializated
 VAR_NAME_PATTERN = re.compile(r"^@!?[\d\w#_\$@]+")

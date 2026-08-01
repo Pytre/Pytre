@@ -1,14 +1,11 @@
 import logging
 from pathlib import Path
 
-if not __package__:
-    import syspath_insert  # noqa: F401  # disable unused-import warning
-
-import utils
-from app_context import build_app_context
-from sql_query.query import Query
-from sql_query.loader import orphan_queries
-from sql_query.log_utils import log as _log
+from Pytre import utils
+from Pytre.app_context import build_app_context
+from Pytre.sql_query.query import Query
+from Pytre.sql_query.loader import orphan_queries
+from Pytre.sql_query.log_utils import log as _log
 
 
 def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__) -> None:

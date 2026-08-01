@@ -3,10 +3,7 @@ from __future__ import annotations
 import tkinter as tk
 from tkinter import ttk, font
 
-if not __package__:
-    import syspath_insert  # noqa: F401  # disable unused-import warning
-
-from utils import get_system
+from Pytre.utils import get_system
 
 THEME_ON: bool = False
 

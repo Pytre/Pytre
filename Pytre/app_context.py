@@ -2,12 +2,12 @@ from collections.abc import Callable
 from threading import Lock
 from typing import TypeVar
 
-from kee import Kee
-from settings import Settings
-from servers import Servers
-from users import Users, CurrentUser
-from user_prefs import UserPrefs
-from logs_user import UserDb
+from Pytre.kee import Kee
+from Pytre.settings import Settings
+from Pytre.servers import Servers
+from Pytre.users import Users, CurrentUser
+from Pytre.user_prefs import UserPrefs
+from Pytre.logs_user import UserDb
 
 
 T = TypeVar("T")

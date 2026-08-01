@@ -6,9 +6,10 @@
     "configurations": [
         {
             "name": "Python : Fichier actuel",
-            "type": "python",
+            "type": "debugpy",
             "request": "launch",
             "program": "${file}",
+            "cwd": "${workspaceFolder}",
             "console": "integratedTerminal"
         }
     ]

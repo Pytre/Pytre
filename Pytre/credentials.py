@@ -1,7 +1,7 @@
 from pathlib import Path
 from cryptography.fernet import Fernet
 
-from credentials_secrets import KEY
+from Pytre.credentials_secrets import KEY
 
 
 KEY_FILE = Path().cwd() / "Pytre.key"

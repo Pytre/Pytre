@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+from enum import Enum
 from collections.abc import Callable
 
 import tkinter as tk
@@ -20,6 +21,27 @@ class SetupInfos:
     callbacks: tuple[Callable[[], None], ...] = field(default_factory=tuple)
 
 
+class EntryType(Enum):
+    TEXT = "text"
+    CHECKBOX = "checkbox"
+
+
+@dataclass(frozen=True)
+class EntrySpec:
+    text: str
+    type: EntryType = EntryType.TEXT
+    cmd: Callable[[], None] | None = None
+    transform: Callable[[str | Path], str] | None = None
+
+
+@dataclass(frozen=True)
+class EntryWidgets:
+    w_label: ttk.Label
+    w_entry: ttk.Widget
+    w_var: tk.Variable
+    transform: Callable[[str | Path], str] | None
+
+
 class MainSettingsWindow(tk.Toplevel):
     def __init__(self, parent=None, on_close_callback=None):
         super().__init__()
@@ -33,7 +55,7 @@ class MainSettingsWindow(tk.Toplevel):
             assert isinstance(self.master, tk.Tk)
             self.master.withdraw()
 
-        self.entries: dict[str, dict] = {}
+        self.entries: dict[str, EntryWidgets] = {}
 
         set_theme(self)
         self._setup_ui()
@@ -78,13 +100,35 @@ class MainSettingsWindow(tk.Toplevel):
             for func in setup_infos.callbacks:
                 func()
 
-    def _get_entries(self) -> dict[str, dict]:
+    def _get_entries_spec(self) -> dict[str, EntrySpec]:
         """Override dans les classes enfants pour définir les informations de champs de paramètres"""
         return {}
 
     def _setup_entries(self):
-        """Override dans les classes enfants pour créer les contrôles de paramètres pour l'UI"""
-        pass
+        """création des contrôles de paramètres pour l'UI"""
+        self.entries_frame.columnconfigure(1, weight=1)
+
+        specs = self._get_entries_spec()
+
+        num_row = 0
+        for key, spec in specs.items():
+            w_label = ttk.Label(self.entries_frame, text=spec.text + " : ")
+
+            w_entry: ttk.Widget
+            w_var: tk.Variable
+            if spec.type == EntryType.CHECKBOX:
+                w_var = tk.BooleanVar()
+                w_entry = ttk.Checkbutton(self.entries_frame, variable=w_var, onvalue=True, offvalue=False)
+                w_entry.configure(command=spec.cmd or "")
+            else:
+                w_var = tk.StringVar()
+                w_entry = ttk.Entry(self.entries_frame, textvariable=w_var)
+
+            self.entries[key] = EntryWidgets(w_label=w_label, w_entry=w_entry, w_var=w_var, transform=spec.transform)
+
+            w_label.grid(row=num_row, column=0, padx=2, pady=2, sticky="nswe")
+            w_entry.grid(row=num_row, column=1, columnspan=2, padx=2, pady=2, sticky="nswe")
+            num_row += 1
 
     def _setup_buttons(self):
         self.buttons_frame.columnconfigure(0, weight=1)
@@ -143,48 +187,26 @@ class SettingsWindow(MainSettingsWindow):
             callbacks=(self._set_logs_folder_state,),
         )
 
-    def _get_entries(self) -> dict[str, dict]:
+    def _get_entries_spec(self) -> dict[str, EntrySpec]:
         return {
-            "field_separator": {"text": "Séparateur de champs"},
-            "decimal_separator": {"text": "Séparateur décimal"},
-            "date_format": {"text": "Format date"},
-            "extract_encoding": {"text": "Encoding format"},
-            "queries_folder": {"text": "Dossier des requêtes", "transform": self.normalize_path},
-            "logs_are_on": {"text": "Activer les logs"},
-            "logs_folder": {"text": "Dossier des logs", "transform": self.normalize_path},
-            "users_cache_expiration": {"text": "Jours de cache utilisateurs"},
-            "settings_version": {"text": "Version des paramètres"},
+            "field_separator": EntrySpec(text="Séparateur de champs"),
+            "decimal_separator": EntrySpec(text="Séparateur décimal"),
+            "date_format": EntrySpec(text="Format date"),
+            "extract_encoding": EntrySpec(text="Encoding format"),
+            "queries_folder": EntrySpec(text="Dossier des requêtes", transform=self.normalize_path),
+            "logs_are_on": EntrySpec(
+                text="Activer les logs", type=EntryType.CHECKBOX, cmd=self._set_logs_folder_state
+            ),
+            "logs_folder": EntrySpec(text="Dossier des logs", transform=self.normalize_path),
+            "users_cache_expiration": EntrySpec(text="Jours de cache utilisateurs"),
+            "settings_version": EntrySpec(text="Version des paramètres"),
         }
 
-    def _setup_entries(self):
-        self.entries_frame.columnconfigure(1, weight=1)
-
-        self.entries = self._get_entries()
-
-        num_row = 0
-        for key, item in self.entries.items():
-            my_label = ttk.Label(self.entries_frame, text=item["text"] + " : ")
-
-            if key == "logs_are_on":
-                my_tk_var = tk.BooleanVar()
-                my_entry = ttk.Checkbutton(self.entries_frame, variable=my_tk_var, onvalue=True, offvalue=False)
-                my_entry["command"] = self._set_logs_folder_state
-            else:
-                my_tk_var = tk.StringVar()
-                my_entry = ttk.Entry(self.entries_frame, textvariable=my_tk_var)
-
-            new_keys = {"w_label": my_label, "w_entry": my_entry, "var": my_tk_var}
-            item.update(new_keys)
-
-            my_label.grid(row=num_row, column=0, padx=2, pady=2, sticky="nswe")
-            my_entry.grid(row=num_row, column=1, columnspan=2, padx=2, pady=2, sticky="nswe")
-
-            num_row += 1
-
     def _set_logs_folder_state(self):
-        state: bool = self.entries["logs_are_on"]["var"].get()
-        folder_entry: ttk.Entry = self.entries["logs_folder"]["w_entry"]
+        state: bool = self.entries["logs_are_on"].w_var.get()
+        folder_entry = self.entries["logs_folder"].w_entry
 
+        assert isinstance(folder_entry, ttk.Entry)
         folder_entry["state"] = "normal" if state else "disabled"
 
     # ------------------------------------------------------------------------------------------
@@ -193,14 +215,13 @@ class SettingsWindow(MainSettingsWindow):
     def settings_load(self):
         for key, item in self.entries.items():
             val = getattr(self.settings, key)
-            transform = item.get("transform")
-            if transform:
-                val = transform(val)
-            item["var"].set(val)
+            if item.transform:
+                val = item.transform(val)
+            item.w_var.set(val)
 
     def settings_save(self):
         for key, item in self.entries.items():
-            val = item["var"].get()
+            val = item.w_var.get()
             setattr(self.settings, key, val)
 
         try:
@@ -230,33 +251,13 @@ class UserPrefsWindow(MainSettingsWindow):
             callbacks=tuple(),
         )
 
-    def _get_entries(self) -> dict[str, dict]:
+    def _get_entries_spec(self) -> dict[str, EntrySpec]:
         return {
-            PrefsEnum.cache_folder.name: {
-                "text": "Dossier cache temporaire",
-                "transform": self.normalize_path,
-            },
+            PrefsEnum.cache_folder.name: EntrySpec(
+                text="Dossier cache temporaire",
+                transform=self.normalize_path,
+            ),
         }
-
-    def _setup_entries(self):
-        self.entries_frame.columnconfigure(1, weight=1)
-
-        self.entries = self._get_entries()
-
-        num_row = 0
-        for key, item in self.entries.items():
-            my_label = ttk.Label(self.entries_frame, text=item["text"] + " : ")
-
-            my_tk_var = tk.StringVar()
-            my_entry = ttk.Entry(self.entries_frame, textvariable=my_tk_var)
-
-            new_keys = {"w_label": my_label, "w_entry": my_entry, "var": my_tk_var}
-            item.update(new_keys)
-
-            my_label.grid(row=num_row, column=0, padx=2, pady=2, sticky="nswe")
-            my_entry.grid(row=num_row, column=1, columnspan=2, padx=2, pady=2, sticky="nswe")
-
-            num_row += 1
 
     # ------------------------------------------------------------------------------------------
     # Autres traitements
@@ -268,15 +269,14 @@ class UserPrefsWindow(MainSettingsWindow):
             if key not in prefs_dict:
                 continue
 
-            val = prefs_dict.get(key)
-            transform = item.get("transform")
-            if transform:
-                val = transform(val)
-            item["var"].set(val)
+            val = prefs_dict[key]
+            if item.transform:
+                val = item.transform(val)
+            item.w_var.set(val)
 
     def settings_save(self):
         for key, item in self.entries.items():
-            val = item["var"].get()
+            val = item.w_var.get()
 
             try:
                 enum_key = PrefsEnum[key]
@@ -305,10 +305,14 @@ class UserPrefsWindow(MainSettingsWindow):
 
 
 if __name__ == "__main__":
-    # settings = Settings()
-    # my_app = SettingsWindow(settings)
+    from Pytre.kee import Kee
+
+    kee = Kee()
+    settings = Settings(kee)
+    settings_app = SettingsWindow(settings)
 
     user_prefs = UserPrefs()
-    my_app = UserPrefsWindow(user_prefs)
+    user_app = UserPrefsWindow(user_prefs)
 
-    my_app.mainloop()
+    settings_app.mainloop()
+    user_app.mainloop()

@@ -4,9 +4,9 @@ from threading import Thread
 from queue import Queue as ThreadQueue
 from tkinter import Event as tkEvent, ttk, messagebox, font
 
+from dataclasses import dataclass
 from pathlib import Path
 from datetime import datetime
-from typing import TypedDict
 
 from Pytre import old_files, sql_query, settings, users, servers, utils, logs_central
 from Pytre.app_context import AppContext, build_app_context
@@ -35,11 +35,20 @@ def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__)
     utils.log(msg, level=level, sublogger=sublogger)
 
 
-class ParamWidgetGroup(TypedDict, total=False):
+@dataclass(frozen=True)
+class ParamWidgetGroup:
     label: ttk.Label
-    entry_var: tk.StringVar
-    entry: ttk.Widget
-    check: ttk.Label
+    entry_var: tk.StringVar | None = None
+    entry: ttk.Widget | None = None
+    check: ttk.Label | None = None
+
+    def contains_widget(self, widget: tk.Misc) -> bool:
+        return widget in (self.label, self.entry, self.check)
+
+    def destroy_widgets(self) -> None:
+        for widget in (self.label, self.entry, self.check):
+            if widget:
+                widget.destroy()
 
 
 class App(tk.Toplevel):
@@ -465,10 +474,8 @@ class App(tk.Toplevel):
     # Gestion de l'interface pour la frame de saisie des paramètres
     # ------------------------------------------------------------------------------------------
     def ui_params_reset(self):
-        for _, param_dict in self.params_widgets.items():
-            for _, obj in param_dict.items():
-                if isinstance(obj, tk.Widget):
-                    obj.destroy()
+        for _, param_group in self.params_widgets.items():
+            param_group.destroy_widgets()
 
         self.params_widgets = {}
 
@@ -486,50 +493,47 @@ class App(tk.Toplevel):
 
     def _ui_with_params_update(self, params: dict[str, sql_query.SqlParam]):
         for i, key in enumerate(params):
-            my_widgets: ParamWidgetGroup = {}
-
             # ne pas afficher le paramètre si il doit être caché
             # et que l'utilisateur n'est pas un super utilisateur
             if params[key].is_hidden and not self.user.admin:
                 continue
 
-            my_widgets["label"] = ttk.Label(self.params_inner, text=params[key].description + " : ", justify=tk.LEFT)
+            label = ttk.Label(self.params_inner, text=params[key].description + " : ", justify=tk.LEFT)
             if params[key].is_hidden:
-                my_widgets["label"]["text"] = "(*) " + params[key].description + " : "
-                my_widgets["label"]["foreground"] = "red"
+                label["text"] = "(*) " + params[key].description + " : "
+                label["foreground"] = "red"
 
-            my_widgets["entry_var"] = tk.StringVar(name=key, value=params[key].display_value)
+            entry_var = tk.StringVar(name=key, value=params[key].display_value)
 
+            entry: ttk.Widget
             if params[key].ui_control == "check":
-                my_widgets["entry"] = ttk.Checkbutton(self.params_inner, variable=my_widgets["entry_var"])
-                my_widgets["entry"]["onvalue"] = "on"
-                my_widgets["entry"]["offvalue"] = "off"
-                my_widgets["entry_var"].trace_add("write", self.param_input_trace)
+                entry = ttk.Checkbutton(self.params_inner, variable=entry_var)
+                entry["onvalue"] = "on"
+                entry["offvalue"] = "off"
+                entry_var.trace_add("write", self.param_input_trace)
 
             elif params[key].ui_control == "list":
-                widget_entry = ttk.Combobox(self.params_inner, textvariable=my_widgets["entry_var"])
-                my_widgets["entry"] = widget_entry
-                my_widgets["entry"]["state"] = "readonly"
-                my_widgets["entry"]["values"] = tuple(params[key].authorized_values.values())
-                my_widgets["entry_var"].trace_add("write", self.param_input_trace)
-                my_widgets["entry"].bind("<FocusOut>", lambda _: widget_entry.selection_clear())
+                widget_entry = ttk.Combobox(self.params_inner, textvariable=entry_var)
+                entry = widget_entry
+                entry["state"] = "readonly"
+                entry["values"] = tuple(params[key].authorized_values.values())
+                entry_var.trace_add("write", self.param_input_trace)
+                entry.bind("<FocusOut>", lambda _: widget_entry.selection_clear())
 
             else:
-                my_widgets["entry"] = ttk.Entry(self.params_inner, textvariable=my_widgets["entry_var"])
-                my_widgets["entry"].bind("<FocusIn>", self.param_focus_event)
-                my_widgets["entry"].bind("<FocusOut>", self.param_input_event)
-                my_widgets["entry"].bind("<Return>", self.param_input_event)
-                my_widgets["entry"].bind("<KP_Enter>", self.param_input_event)
+                entry = ttk.Entry(self.params_inner, textvariable=entry_var)
+                entry.bind("<FocusIn>", self.param_focus_event)
+                entry.bind("<FocusOut>", self.param_input_event)
+                entry.bind("<Return>", self.param_input_event)
+                entry.bind("<KP_Enter>", self.param_input_event)
 
-            my_widgets["check"] = ttk.Label(
-                self.params_inner, text="", width=3, relief="groove", justify=tk.LEFT, background="red"
-            )
+            check = ttk.Label(self.params_inner, text="", width=3, relief="groove", justify=tk.LEFT, background="red")
 
-            my_widgets["label"].grid(row=i, column=0, padx=2, pady=2, sticky="nswe")
-            my_widgets["entry"].grid(row=i, column=1, padx=2, pady=2, sticky="nswe")
-            my_widgets["check"].grid(row=i, column=2, padx=2, pady=2, sticky="nswe")
+            label.grid(row=i, column=0, padx=2, pady=2, sticky="nswe")
+            entry.grid(row=i, column=1, padx=2, pady=2, sticky="nswe")
+            check.grid(row=i, column=2, padx=2, pady=2, sticky="nswe")
 
-            self.params_widgets[key] = my_widgets
+            self.params_widgets[key] = ParamWidgetGroup(label=label, entry_var=entry_var, entry=entry, check=check)
 
         self.params_get_input()  # pour mise à jour aussi des widgets pour les checks
 
@@ -542,18 +546,16 @@ class App(tk.Toplevel):
         self.params_inner.columnconfigure(2, weight=0)
 
     def _ui_no_param_update(self):
-        my_widgets: ParamWidgetGroup = {}
-
-        my_widgets["label"] = ttk.Label(
+        label = ttk.Label(
             self.params_inner,
             text="Pas de paramètres à renseigner pour cette requête",
             font=("TkDefaultFont", 0, "bold"),
             wraplength=350,
             justify=tk.CENTER,
         )
-        my_widgets["label"].grid(row=0, column=0, columnspan=2, sticky="ns")
+        label.grid(row=0, column=0, columnspan=2, sticky="ns")
 
-        self.params_widgets["no_param"] = my_widgets
+        self.params_widgets["no_param"] = ParamWidgetGroup(label=label)
 
         self.params_inner.rowconfigure(0, weight=1)
         self.params_inner.columnconfigure(0, weight=1)
@@ -781,8 +783,8 @@ class App(tk.Toplevel):
         self.queries_tree["selectmode"] = "none"
 
         for key in self.params_widgets:
-            widget_entry = self.params_widgets[key].get("entry", None)
-            if isinstance(widget_entry, tk.Widget):
+            widget_entry = self.params_widgets[key].entry
+            if widget_entry:
                 widget_entry["state"] = "disable"
 
     def unlock_ui(self, query_exec: bool = False):
@@ -801,8 +803,8 @@ class App(tk.Toplevel):
         self.queries_tree["selectmode"] = "browse"
 
         for key in self.params_widgets:
-            widget_entry = self.params_widgets[key].get("entry", None)
-            if isinstance(widget_entry, tk.Widget):
+            widget_entry = self.params_widgets[key].entry
+            if widget_entry:
                 widget_entry["state"] = "enable" if not isinstance(widget_entry, ttk.Combobox) else "readonly"
 
     # ------------------------------------------------------------------------------------------
@@ -899,8 +901,8 @@ class App(tk.Toplevel):
             return True
 
         for key in self.params_widgets:
-            w_entry_var = self.params_widgets[key].get("entry_var", None)
-            w_check = self.params_widgets[key].get("check", None)
+            w_entry_var = self.params_widgets[key].entry_var
+            w_check = self.params_widgets[key].check
 
             if w_entry_var is not None and w_check is not None:
                 self.query.parameters.params[key].display_value = w_entry_var.get()
@@ -1057,12 +1059,9 @@ class App(tk.Toplevel):
             widget.selection_clear()
 
         key = ""
-        for param_key in self.params_widgets:
-            for widget_key in self.params_widgets[param_key]:
-                if widget is self.params_widgets[param_key][widget_key]:
-                    key = param_key
-                    break
-            if key != "":
+        for param_key, param_group in self.params_widgets.items():
+            if param_group.contains_widget(widget):
+                key = param_key
                 break
 
         self._param_input(key)
@@ -1077,9 +1076,9 @@ class App(tk.Toplevel):
         if self.query is None:
             return
 
-        entry_w = self.params_widgets[key].get("entry")
-        entry_var = self.params_widgets[key].get("entry_var")
-        check_w = self.params_widgets[key].get("check")
+        entry_w = self.params_widgets[key].entry
+        entry_var = self.params_widgets[key].entry_var
+        check_w = self.params_widgets[key].check
 
         if entry_var:
             self.query.parameters.params[key].display_value = entry_var.get()

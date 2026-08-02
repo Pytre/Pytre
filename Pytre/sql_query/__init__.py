@@ -9,6 +9,7 @@ from Pytre.sql_query.log_utils import set_log_queue, log
 from Pytre.sql_query.converter import SqlTypeConverter
 from Pytre.sql_query.execution_runner import ExecutionRunner
 from Pytre.sql_query.sql_lexer import SqlLexer, TokenType
+from Pytre.sql_query.execution_msg import ExecTaskMsg, ExecResultMsg
 
 __all__ = [
     "Query",
@@ -28,4 +29,6 @@ __all__ = [
     "ExecutionRunner",
     "SqlLexer",
     "TokenType",
+    "ExecTaskMsg",
+    "ExecResultMsg",
 ]

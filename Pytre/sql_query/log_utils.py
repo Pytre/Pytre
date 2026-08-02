@@ -2,6 +2,7 @@ import logging
 from multiprocessing import Queue
 
 from Pytre import utils
+from Pytre.sql_query.execution_msg import ExecResultMsg
 
 # Global variables used for logging
 _LOG_QUEUE: Queue | None = None
@@ -23,4 +24,4 @@ def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__)
     if _LOG_QUEUE is None:
         utils.log(msg, level=level, sublogger=sublogger)
     else:
-        _LOG_QUEUE.put(("log", (msg, level, sublogger)))
+        _LOG_QUEUE.put((ExecResultMsg.LOG, (msg, level, sublogger)))

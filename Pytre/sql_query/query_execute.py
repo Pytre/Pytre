@@ -11,6 +11,7 @@ import psycopg2
 from Pytre import settings, users, servers, logs_user
 from Pytre.app_context import AppContext
 from Pytre.sql_query.execute_config import ExecuteConfig
+from Pytre.sql_query.execution_msg import ExecResultMsg
 from Pytre.sql_query.converter import SqlTypeConverter
 from Pytre.sql_query.log_utils import _STANDALONE_BROADCAST_LOGGER
 
@@ -77,11 +78,11 @@ class QueryExecute:
         with self.server.get_connection() as conn, conn.cursor() as cursor:
             # execution de la requête et gestion des erreurs liées
             self._broadcast(self._time_log() + " - Requête en cours d'execution...")
-            self.queue.put(("start_timer", ""))
+            self.queue.put((ExecResultMsg.START_TIMER, ""))
             try:
                 cursor.execute(self.config.cmd_template, self.config.cmd_parameters)
                 self.cannot_stop.clear()
-                self.queue.put(("stop_timer", ""))
+                self.queue.put((ExecResultMsg.STOP_TIMER, ""))
             except (pymssql._pymssql.ProgrammingError, psycopg2.ProgrammingError) as err:
                 self._broadcast(self._time_log() + f" - Erreur SQL : {str(err)}")
                 return (-1, None)
@@ -141,7 +142,7 @@ class QueryExecute:
         if self.app_settings.logs_are_on:
             user: users.CurrentUser = self.ctx.current_user
             log_infos: dict = {"user_db": user_log.user_db, "user_id": user.username, "user_name": user.title}
-            self.queue.put(("central_log", log_infos))
+            self.queue.put((ExecResultMsg.CENTRAL_LOG, log_infos))
 
         # notify end result
         elapsed_time = (ending_date - starting_date).total_seconds()
@@ -246,7 +247,7 @@ class QueryExecute:
 
         return [clean_value(val) for val in record]
 
-    def _broadcast(self, msg_to_display: str, msg_type: str = "msg_output") -> None:
+    def _broadcast(self, msg_to_display: str, msg_type: ExecResultMsg = ExecResultMsg.UI_OUTPUT) -> None:
         self.queue.put((msg_type, msg_to_display))
         _STANDALONE_BROADCAST_LOGGER.info(msg_to_display)
 

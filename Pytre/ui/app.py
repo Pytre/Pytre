@@ -11,7 +11,7 @@ from typing import TypedDict
 from Pytre import old_files, sql_query, settings, users, servers, utils, logs_central
 from Pytre.app_context import AppContext, build_app_context
 from Pytre.user_prefs import UserPrefs, PrefsEnum
-from Pytre.sql_query import ExecutionRunner
+from Pytre.sql_query import ExecutionRunner, ExecResultMsg
 from Pytre.about import APP_NAME, APP_VERSION, APP_STATUS
 
 import Pytre.ui.ui_utils as ui_utils
@@ -661,31 +661,31 @@ class App(tk.Toplevel):
         try:
             while not self.exec_runner.queue_result.empty():
                 msg_type, data = self.exec_runner.queue_result.get_nowait()
-                if msg_type == "msg_print":
+                if msg_type == ExecResultMsg.PRINT:
                     log(data)
-                elif msg_type == "msg_output":
+                elif msg_type == ExecResultMsg.UI_OUTPUT:
                     log(data)
                     # si output pas vide, rajout retour à la ligne
                     if self.output_textbox.get("1.0", "end-1c"):
                         data = "\n" + data
                     self.output_msg(data, "end")
-                elif msg_type == "log":
+                elif msg_type == ExecResultMsg.LOG:
                     msg, level, sublogger = data
                     log(msg, level, sublogger)
-                elif msg_type == "start_timer":
+                elif msg_type == ExecResultMsg.START_TIMER:
                     self.start_time = datetime.now()
                     self.exec_timer(wait_in_sec=60)
-                elif msg_type == "stop_timer":
+                elif msg_type == ExecResultMsg.STOP_TIMER:
                     self.exec_timer(stop=True)
-                elif msg_type == "result":
+                elif msg_type == ExecResultMsg.RESULT:
                     self.rows_number, self.output_file = data
-                elif msg_type == "error":
+                elif msg_type == ExecResultMsg.ERROR:
                     msg = f"Erreur non gérée :\n{data}"
                     log(msg, level=logging.ERROR)
                     self.output_msg(msg, "end")
-                elif msg_type == "central_log" and (logs := self.get_central_logs()):
+                elif msg_type == ExecResultMsg.CENTRAL_LOG and (logs := self.get_central_logs()):
                     logs.trigger_sync(**data)
-                elif msg_type == "done":
+                elif msg_type == ExecResultMsg.DONE:
                     self.exec_timer(stop=True)
                     done = True
         except Exception as e:

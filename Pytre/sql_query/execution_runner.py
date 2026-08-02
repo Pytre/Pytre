@@ -6,6 +6,7 @@ from multiprocessing.synchronize import Event as ProcEvent
 from dataclasses import dataclass
 
 from Pytre.app_context import AppContext, build_app_context
+from Pytre.sql_query.execution_msg import ExecTaskMsg, ExecResultMsg
 from Pytre.sql_query.query import Query
 from Pytre.sql_query.log_utils import set_log_queue, log as _log
 
@@ -142,11 +143,11 @@ class ExecutionRunner:
 
         self.cannot_stop.clear()
         self.stop_requested.clear()
-        self.queue_task.put(("start", server_id, query_data))
+        self.queue_task.put((ExecTaskMsg.START, server_id, query_data))
 
     def stop_process(self):
         self.stop_requested.set()
-        self.queue_task.put(("stop", "", ""))
+        self.queue_task.put((ExecTaskMsg.STOP, "", ""))
 
 
 class ExecutionProcess:
@@ -176,9 +177,9 @@ class ExecutionProcess:
         try:
             while True:
                 msg_type, server_id, query_data = self.queue_task.get()
-                if msg_type == "stop":
+                if msg_type == ExecTaskMsg.STOP:
                     break
-                elif msg_type == "start":
+                elif msg_type == ExecTaskMsg.START:
                     self.run_task(server_id, query_data)
         except Exception as e:
             log(f"Execution process unexpected error : {e}", logging.ERROR)
@@ -187,7 +188,7 @@ class ExecutionProcess:
 
     def run_task(self, server_id: str, query_data: dict):
         try:
-            self.queue_result.put(("msg_print", "Query task starting"))
+            self.queue_result.put((ExecResultMsg.PRINT, "Query task starting"))
 
             query: Query = Query.deserialize(self.ctx, query_data)
             query.query_execute.queue = self.queue_result
@@ -197,13 +198,13 @@ class ExecutionProcess:
             result = query.execute(server_id=server_id, file_output=True)
             rows_number, output_file = result
             del query
-            self.queue_result.put(("result", (rows_number, output_file)))
+            self.queue_result.put((ExecResultMsg.RESULT, (rows_number, output_file)))
 
-            self.queue_result.put(("msg_print", "Query task ending"))
+            self.queue_result.put((ExecResultMsg.PRINT, "Query task ending"))
         except Exception as e:
-            self.queue_result.put(("error", str(e)))
+            self.queue_result.put((ExecResultMsg.ERROR, str(e)))
         finally:
-            self.queue_result.put(("done", None))
+            self.queue_result.put((ExecResultMsg.DONE, None))
 
 
 def run_execution_process(config: ProcessConfig):

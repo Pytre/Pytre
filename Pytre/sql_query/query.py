@@ -7,6 +7,7 @@ from Pytre.sql_query.parameters import SqlParam, SqlParameters
 from Pytre.sql_query.cmd_builder import CmdBuilder
 from Pytre.sql_query.query_execute import QueryExecute
 from Pytre.sql_query.execute_config import ExecuteConfig
+from Pytre.sql_query.execution_msg import ExecResultMsg
 from Pytre.sql_query.log_utils import _STANDALONE_BROADCAST_LOGGER
 
 
@@ -110,7 +111,7 @@ class Query:
         err_msg += str("=") * 50
         self._broadcast(err_msg)
 
-    def _broadcast(self, msg_to_broadcast: str, msg_type: str = "msg_output") -> None:
+    def _broadcast(self, msg_to_broadcast: str, msg_type: ExecResultMsg = ExecResultMsg.UI_OUTPUT) -> None:
         self.query_execute.queue.put((msg_type, msg_to_broadcast))
         _STANDALONE_BROADCAST_LOGGER.info(msg_to_broadcast)
 

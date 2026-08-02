@@ -14,6 +14,7 @@ from datetime import datetime
 from threading import Thread, Event
 from pathlib import Path
 
+from Pytre.logs_base import BaseLogs
 from Pytre.utils import log as _log, setup_standalone_logging
 
 
@@ -25,58 +26,32 @@ def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__)
     _log(msg, level=level, sublogger=sublogger)
 
 
-class CentralLogs:
-    def __init__(self, logs_folder: Path = Path.cwd() / "logs"):
+class CentralLogs(BaseLogs):
+    def __init__(self, logs_folder: Path | str = Path.cwd() / "logs"):
+        super().__init__(Path(logs_folder) / CENTRAL_DB)
+
         self.sync_thread: Thread | None = None
         self.logs_folder: Path = Path(logs_folder)
-        self.central_db: Path = self.logs_folder / CENTRAL_DB
 
-        self.user_db: Path | None = None
+        self.user_logs: Path | None = None
         self.user_id: str = ""
         self.user_name: str = ""
 
         self.temp_files: list[Path] = []
         self.stop_event: Event = Event()
 
-        self.central_version: int = -1
         self.latest_version: int = LATEST_VERSION
-        self.update_already_run: bool = False
 
     def __del__(self):
         self.stop_sync(5)
         self.cleanup_temp_files()
-
-    def check_db(self, create: bool = True) -> bool:
-        result: bool = False
-        if not self.central_db.exists():
-            if create:
-                result = self.create_db()
-        else:
-            self.central_version = self.get_central_version()
-            result = self.update_db()
-
-        self.update_already_run = True
-        return result
-
-    def get_central_version(self) -> int:
-        # fetch current user version
-        try:
-            with sqlite3.connect(self.central_db) as conn:
-                cursor = conn.cursor()
-                cursor.execute("PRAGMA user_version;")
-                user_version = cursor.fetchone()[0]
-                cursor.close()
-                return user_version
-        except Exception as e:
-            log(f"Couldn't retrieve user_info pragma for central db: {e}", logging.ERROR)
-            return -1
 
     # ------------------------------------------------------------------------------------------
     # Database management
     # ------------------------------------------------------------------------------------------
     def create_db(self) -> bool:
         try:
-            with sqlite3.connect(f"file:{self.central_db}?mode=rwc", uri=True) as conn:
+            with sqlite3.connect(f"file:{self.db_path}?mode=rwc", uri=True) as conn:
                 conn.execute(f"PRAGMA user_version = {self.latest_version};")
                 conn.execute(
                     """
@@ -86,7 +61,6 @@ class CentralLogs:
                             USER_NAME        TEXT,
                             QUERY            TEXT        NOT NULL,
                             START            TEXT        NOT NULL,
-                            END              TEXT,
                             DURATION_SECS    INTEGER,
                             NB_ROWS          INTEGER,
                             PARAMETERS       TEXT
@@ -98,37 +72,17 @@ class CentralLogs:
                 conn.execute("CREATE INDEX IDX_START ON QUERIES_EXEC (START DESC);")
 
                 conn.commit()
-                self.central_version = self.latest_version
+                self.version = self.latest_version
         except sqlite3.OperationalError as e:
             log(f"The central SQLite log database could not be created: {e}", logging.ERROR)
             return False
 
         return True
 
-    def update_db(self) -> bool:
-        if self.update_already_run:
-            return True
-        if not self.central_version > -1:
-            return False
-        if not self.central_version < self.latest_version:
-            return True
-
-        for version in range(self.latest_version):
-            if self.central_version >= version + 1:
-                continue
-
-            update_func = getattr(self, f"update_db_{version}_to_{version + 1}")
-            if not update_func():
-                log(f"Aborting central database update, migration to {version + 1} failed", logging.ERROR)
-                return False
-
-        log(f"Central database migration to version {self.latest_version} completed")
-        return True
-
     def update_db_0_to_1(self) -> bool:
         new_version: int = 1
         try:
-            with sqlite3.connect(f"file:{self.central_db}?mode=rw", uri=True) as conn:
+            with sqlite3.connect(f"file:{self.db_path}?mode=rw", uri=True) as conn:
                 conn.execute(f"PRAGMA user_version = {new_version};")
                 conn.execute("ALTER TABLE QUERIES_EXEC ADD COLUMN SERVER_ID TEXT;")
                 conn.execute("DROP INDEX IF EXISTS IDX_SERVER_ID;")
@@ -137,7 +91,7 @@ class CentralLogs:
                 log("Added SERVER_ID column to QUERIES_EXEC table")
 
                 log(f"Central database updated to version {new_version}")
-                self.central_version = new_version
+                self.version = new_version
                 return True
         except Exception as e:
             log(f"Unexpected error in schema update to version {new_version}: {e}", logging.ERROR)
@@ -146,12 +100,12 @@ class CentralLogs:
     def update_db_1_to_2(self) -> bool:
         new_version: int = 2
         try:
-            with sqlite3.connect(self.central_db) as conn:
+            with sqlite3.connect(self.db_path) as conn:
                 conn.execute(f"PRAGMA user_version = {new_version};")
                 conn.execute("ALTER TABLE QUERIES_EXEC DROP COLUMN END;")
                 conn.commit()
                 log(f"Central database updated to version {new_version}")
-                self.central_version = new_version
+                self.version = new_version
                 return True
         except Exception as e:
             log(f"Unexpected error in schema update to version {new_version}: {e}", logging.ERROR)
@@ -184,22 +138,22 @@ class CentralLogs:
     # ------------------------------------------------------------------------------------------
     # Thread management
     # ------------------------------------------------------------------------------------------
-    def trigger_sync(self, user_db: Path, user_id: str = "", user_name: str = ""):
-        if not self.central_db:
+    def trigger_sync(self, user_logs: Path, user_id: str = "", user_name: str = ""):
+        if not self.db_path:
             log("Error: Central log database not specified", logging.ERROR)
             return
 
         if not self.check_db():
-            log(f"Aborting sync, failed to check central database: {self.central_db}", logging.ERROR)
+            log(f"Aborting sync, failed to check central database: {self.db_path}", logging.ERROR)
             return
 
-        if not user_db or not Path(user_db).exists():
-            log(f"Error: User log database does not exist: {user_db}", logging.ERROR)
+        if not user_logs or not Path(user_logs).exists():
+            log(f"Error: User log database does not exist: {user_logs}", logging.ERROR)
             return
 
         if self.sync_thread is None or not self.sync_thread.is_alive():
             self.stop_event.clear()
-            self.user_db = Path(user_db)
+            self.user_logs = Path(user_logs)
             self.user_id = user_id
             self.user_name = user_name
 
@@ -357,7 +311,7 @@ class FileDriven(CentralLogs):
         if self.stop_event.is_set():
             return None
 
-        with sqlite3.connect(f"file:{self.user_db}?mode=ro", uri=True) as conn:
+        with sqlite3.connect(f"file:{self.user_logs}?mode=ro", uri=True) as conn:
             cursor: sqlite3.Cursor = conn.cursor()
             sql_cmd = self.sql_rows_get_unsynced()
             cursor.execute(sql_cmd, {"user_id": self.user_id, "user_name": self.user_name})
@@ -367,7 +321,7 @@ class FileDriven(CentralLogs):
         return unsynced
 
     def mark_rows_as_exported(self, rows_id: list[int]):
-        with sqlite3.connect(f"file:{self.user_db}?mode=rw", uri=True) as conn:
+        with sqlite3.connect(f"file:{self.user_logs}?mode=rw", uri=True) as conn:
             cursor: sqlite3.Cursor = conn.cursor()
 
             place_holders = ", ".join("?" * len(rows_id))
@@ -506,7 +460,7 @@ class FileDriven(CentralLogs):
             return False
 
         try:
-            with sqlite3.connect(f"file:{self.central_db}?mode=rw", uri=True, timeout=60) as conn:
+            with sqlite3.connect(f"file:{self.db_path}?mode=rw", uri=True, timeout=60) as conn:
                 conn.execute("PRAGMA busy_timeout=10000")
                 conn.execute("PRAGMA synchronous=NORMAL")
                 conn.execute("PRAGMA cache_size=-10000")

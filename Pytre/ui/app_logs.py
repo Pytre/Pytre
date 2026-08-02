@@ -17,7 +17,7 @@ TIME_FORMAT = "%H:%M:%S"
 
 
 class LogsWindow(tk.Toplevel):
-    def __init__(self, user_db: logs_user.UserDb, user_prefs: UserPrefs, parent=None, query_name=""):
+    def __init__(self, user_logs: logs_user.UserLogs, user_prefs: UserPrefs, parent=None, query_name=""):
         super().__init__()
         self.parent = parent
         if self.parent:
@@ -26,7 +26,7 @@ class LogsWindow(tk.Toplevel):
             assert isinstance(self.master, tk.Tk)
             self.master.withdraw()
 
-        self.user_db: logs_user.UserDb = user_db
+        self.user_logs: logs_user.UserLogs = user_logs
         self.user_prefs: UserPrefs = user_prefs
 
         self.query_name: str = query_name
@@ -246,7 +246,7 @@ class LogsWindow(tk.Toplevel):
         cols_to_update: dict = self.get_cols_to_update()
         rows_to_insert = []
         rows_to_insert = (
-            self.user_db.get_stats() if self.stats_mode else self.user_db.get_last_records(self.query_name)
+            self.user_logs.get_stats() if self.stats_mode else self.user_logs.get_last_records(self.query_name)
         )
 
         count: int = 0
@@ -325,7 +325,7 @@ class LogsWindow(tk.Toplevel):
         else:
             query = self.query_name
 
-        stats_lst = self.user_db.get_stats(query)
+        stats_lst = self.user_logs.get_stats(query)
         if stats_lst and len(stats_lst) == 1:
             stats: logs_user.LogStats = stats_lst[0]
             stats_txt = f"Nombre d'execution : {stats.nb_run}"
@@ -438,7 +438,7 @@ class LogsWindow(tk.Toplevel):
 
 
 if __name__ == "__main__":
-    user_db = logs_user.UserDb()
+    user_logs = logs_user.UserLogs()
     user_prefs = UserPrefs()
-    my_app = LogsWindow(user_db, user_prefs)
+    my_app = LogsWindow(user_logs, user_prefs)
     my_app.mainloop()

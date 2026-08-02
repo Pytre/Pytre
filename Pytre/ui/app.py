@@ -1126,9 +1126,9 @@ class App(tk.Toplevel):
     # ------------------------------------------------------------------------------------------
     def open_logs(self, all: bool = False):
         if not all and self.query is not None:
-            LogsWindow(self.ctx.user_db, self.ctx.user_prefs, self, self.query.name)
+            LogsWindow(self.ctx.user_logs, self.ctx.user_prefs, self, self.query.name)
         else:
-            LogsWindow(self.ctx.user_db, self.ctx.user_prefs, self)
+            LogsWindow(self.ctx.user_logs, self.ctx.user_prefs, self)
 
     def debug_query(self):
         if self.query is not None:

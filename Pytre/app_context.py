@@ -7,7 +7,7 @@ from Pytre.settings import Settings
 from Pytre.servers import Servers
 from Pytre.users import Users, CurrentUser
 from Pytre.user_prefs import UserPrefs
-from Pytre.logs_user import UserDb
+from Pytre.logs_user import UserLogs
 
 
 T = TypeVar("T")
@@ -15,7 +15,7 @@ T = TypeVar("T")
 
 class AppContext:
     def __init__(self):
-        attributes = ("kee", "settings", "servers", "users", "current_user", "user_prefs", "user_db")
+        attributes = ("kee", "settings", "servers", "users", "current_user", "user_prefs", "user_logs")
 
         self._locks: dict[str, Lock] = {}
 
@@ -60,8 +60,8 @@ class AppContext:
         return self._get_or_create("user_prefs", UserPrefs)
 
     @property
-    def user_db(self) -> UserDb:
-        return self._get_or_create("user_db", UserDb)
+    def user_logs(self) -> UserLogs:
+        return self._get_or_create("user_logs", UserLogs)
 
 
 def build_app_context() -> AppContext:

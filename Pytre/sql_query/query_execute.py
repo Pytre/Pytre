@@ -127,7 +127,7 @@ class QueryExecute:
         assert self.server is not None and self.config is not None
 
         # writing user log
-        user_log: logs_user.UserDb = self.ctx.user_db
+        user_log: logs_user.UserLogs = self.ctx.user_logs
         user_log.insert_exec(
             self.server.id,
             self.config.query_name,
@@ -141,7 +141,7 @@ class QueryExecute:
         # if on, launch central log
         if self.app_settings.logs_are_on:
             user: users.CurrentUser = self.ctx.current_user
-            log_infos: dict = {"user_db": user_log.user_db, "user_id": user.username, "user_name": user.title}
+            log_infos: dict = {"user_logs": user_log.db_path, "user_id": user.username, "user_name": user.title}
             self.queue.put((ExecResultMsg.CENTRAL_LOG, log_infos))
 
         # notify end result

@@ -5,6 +5,7 @@ from datetime import datetime
 from pathlib import Path
 
 from Pytre import user_prefs
+from Pytre.logs_base import BaseLogs
 from Pytre.utils import log as _log, setup_standalone_logging
 
 USER_DB: Path = user_prefs.CONFIG_FOLDER / "Pytre_Logs.db"
@@ -87,45 +88,19 @@ class LogStats:
         )
 
 
-class UserDb:
-    def __init__(self, user_db: Path = USER_DB, log_max: int = LOG_MAX):
-        self.user_db: Path = Path(user_db)
+class UserLogs(BaseLogs):
+    def __init__(self, user_db: Path | str = USER_DB, log_max: int = LOG_MAX):
+        super().__init__(Path(user_db))
+
         self.log_max = log_max
-        self.user_version: int = -1
         self.latest_version: int = LATEST_VERSION
-        self.update_already_run: bool = False
-
-    def check_db(self, create: bool = True) -> bool:
-        result: bool = False
-        if not self.user_db.exists():
-            if create:
-                result = self.create_db()
-        else:
-            self.user_version = self.get_user_version()
-            result = self.update_db()
-
-        self.update_already_run = True
-        return result
-
-    def get_user_version(self) -> int:
-        # fetch current user version
-        try:
-            with sqlite3.connect(self.user_db) as conn:
-                cursor = conn.cursor()
-                cursor.execute("PRAGMA user_version;")
-                user_version = cursor.fetchone()[0]
-                cursor.close()
-                return user_version
-        except Exception as e:
-            log(f"Couldn't retrieve user_info pragma: {e}", logging.ERROR)
-            return -1
 
     # ------------------------------------------------------------------------------------------
     # database creation and migration to newer versions
     # ------------------------------------------------------------------------------------------
     def create_db(self) -> bool:
         try:
-            with sqlite3.connect(self.user_db) as conn:
+            with sqlite3.connect(self.db_path) as conn:
                 conn.execute(f"PRAGMA user_version = {self.latest_version};")
                 conn.execute(
                     """
@@ -146,36 +121,16 @@ class UserDb:
                 conn.execute("CREATE INDEX IDX_EXPORTED ON QUERIES_EXEC (EXPORTED ASC);")
 
                 conn.commit()
-                self.user_version = self.latest_version
+                self.version = self.latest_version
                 return True
         except Exception as e:
             log(f"Unexpected error during user database creation: {e}", logging.ERROR)
             return False
 
-    def update_db(self) -> bool:
-        if self.update_already_run:
-            return True
-        if not self.user_version > -1:
-            return False
-        if not self.user_version < self.latest_version:
-            return True
-
-        for version in range(self.latest_version):
-            if self.user_version >= version + 1:
-                continue
-
-            update_func = getattr(self, f"update_db_{version}_to_{version + 1}")
-            if not update_func():
-                log(f"Aborting user database update, migration to {version + 1} failed", logging.ERROR)
-                return False
-
-        log(f"User database migration to version {self.latest_version} completed")
-        return True
-
     def update_db_0_to_1(self) -> bool:
         new_version: int = 1
         try:
-            with sqlite3.connect(self.user_db) as conn:
+            with sqlite3.connect(self.db_path) as conn:
                 conn.execute(f"PRAGMA user_version = {new_version};")
 
                 conn.execute("ALTER TABLE QUERIES_EXEC ADD COLUMN SERVER_ID TEXT;")
@@ -184,7 +139,7 @@ class UserDb:
 
                 conn.commit()
                 log(f"User database updated to version {new_version}")
-                self.user_version = new_version
+                self.version = new_version
                 return True
         except Exception as e:
             log(f"Unexpected error in schema update to version {new_version}: {e}", logging.ERROR)
@@ -193,12 +148,12 @@ class UserDb:
     def update_db_1_to_2(self) -> bool:
         new_version: int = 2
         try:
-            with sqlite3.connect(self.user_db) as conn:
+            with sqlite3.connect(self.db_path) as conn:
                 conn.execute(f"PRAGMA user_version = {new_version};")
                 conn.execute("ALTER TABLE QUERIES_EXEC DROP COLUMN END;")
                 conn.commit()
                 log(f"User database updated to version {new_version}")
-                self.user_version = new_version
+                self.version = new_version
                 return True
         except Exception as e:
             log(f"Unexpected error in schema update to version {new_version}: {e}", logging.ERROR)
@@ -225,7 +180,7 @@ class UserDb:
         log_file = str(file) if file else None  # si un objet Path est retourné il ne peut pas être insérer
 
         try:
-            with sqlite3.connect(f"file:{self.user_db}?mode=rw", uri=True) as conn:
+            with sqlite3.connect(f"file:{self.db_path}?mode=rw", uri=True) as conn:
                 # insertion infos
                 conn.execute(
                     """INSERT INTO QUERIES_EXEC (SERVER_ID, QUERY, START, DURATION_SECS, NB_ROWS, PARAMETERS, FILE)
@@ -251,7 +206,7 @@ class UserDb:
         if not self.check_db(False):
             return []
 
-        with sqlite3.connect(f"file:{self.user_db}?mode=ro", uri=True) as conn:
+        with sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True) as conn:
             cursor: sqlite3.Cursor = conn.cursor()
             cursor.execute(
                 """SELECT FILE FROM QUERIES_EXEC
@@ -268,7 +223,7 @@ class UserDb:
         if not self.check_db(False):
             return []
 
-        with sqlite3.connect(f"file:{self.user_db}?mode=ro", uri=True) as conn:
+        with sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True) as conn:
             conn.row_factory = sqlite3.Row
 
             cursor: sqlite3.Cursor = conn.cursor()
@@ -294,7 +249,7 @@ class UserDb:
         if not self.check_db(False):
             return []
 
-        with sqlite3.connect(f"file:{self.user_db}?mode=ro", uri=True) as conn:
+        with sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True) as conn:
             conn.row_factory = sqlite3.Row
 
             cursor: sqlite3.Cursor = conn.cursor()
@@ -342,4 +297,4 @@ class UserDb:
 
 if __name__ == "__main__":
     setup_standalone_logging()
-    mydb = UserDb()
+    mydb = UserLogs()

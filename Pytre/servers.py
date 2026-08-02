@@ -1,5 +1,6 @@
 import csv
 import io
+import logging
 from uuid import UUID
 from pathlib import Path
 from enum import Enum
@@ -10,8 +11,12 @@ from pykeepass.entry import Entry
 from pykeepass.group import Group
 
 from Pytre.kee import Kee
-from Pytre.utils import detect_encoding
+from Pytre.utils import detect_encoding, log as _log
 from Pytre.about import APP_NAME, APP_VERSION
+
+
+def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__) -> None:
+    _log(msg, level=level, sublogger=sublogger)
 
 
 class Servers:
@@ -65,6 +70,9 @@ class Servers:
         return self.groups
 
     def csv_import(self, filepath: Path | str, delimiter: str = ";", quotechar: str = '"') -> bool:
+        if self.kee_grp is None:
+            raise ValueError("No KeePass group selected, cannot import servers")
+
         if not (delimiter) or len(delimiter) != 1 or delimiter == quotechar:
             raise ValueError(f"Delimiter must be a single character and different from quote character ({quotechar})")
         if not (quotechar) or len(quotechar) != 1:
@@ -76,45 +84,55 @@ class Servers:
         if self.kee.db is None:
             raise RuntimeError("Database not opened, can't import csv")
 
-        cols_dict = {}
-        for i, val in enumerate(self.cols_std + self.cols_cust):
-            cols_dict[val] = i
+        # dictionnaire des serveurs déjà existants
+        entries_dict = {}
+        s_entry: Entry
+        for s_entry in self.kee_grp.entries:
+            entries_dict[(s_entry.title or "").upper()] = s_entry
 
+        # colonnes attendues dans le fichier à importer
+        cols_required = self.cols_std + self.cols_cust
+
+        # identifier le format d'encodage du fichier à importer
         encoding = detect_encoding(filepath)
         if not encoding:
             raise ValueError(f"Unable to detect encoding for: {filepath}")
 
+        # traitement du fichier à importer
         with open(filepath, mode="r", encoding=encoding) as csv_file:
             csv_reader = csv.DictReader(csv_file, delimiter=delimiter, quotechar=quotechar)
 
-            for num, csv_row in enumerate(csv_reader):
-                # contrôle si toutes les colonnes nécessaires sont présentes
-                if num == 0:
-                    missing_cols: list = []
-                    for col in self.cols_std + self.cols_cust:
-                        if col not in csv_row.keys():
-                            missing_cols.append(col)
-                    if missing_cols:
-                        raise KeyError(f"Colonnes manquantes : {', '.join(missing_cols)}")
+            # normalisation des fieldnames pour les colonnes standard
+            csv_reader.fieldnames = [header.strip().lower() for header in csv_reader.fieldnames or []]
 
-                # récup entry si déjà ou existant ou création d'une nouvelle
-                s_entry: Entry | None = None
-                if self.kee_grp:
-                    s_entry = next((s for s in self.kee_grp.entries if csv_row["id"].upper() == s.title.upper()), None)  # type: ignore
-                if s_entry is None:
+            # vérification de la présence des colonnes
+            missing_cols = [col for col in cols_required if col not in csv_reader.fieldnames]
+            if missing_cols:
+                raise ValueError(f"Missing columns in file to import : {', '.join(missing_cols)}")
+
+            for row_num, row in enumerate(csv_reader, start=2):
+                server_id = row["id"].strip()
+                if not server_id:
+                    log(f"Ligne {row_num} ignorée : aucun id renseigné", logging.WARNING)
+                    continue
+
+                # contrôle si serveur à modifier ou à créer
+                if server_id.upper() in entries_dict.keys():
+                    s_entry = entries_dict[server_id.upper()]
+                else:
                     s_entry = self.kee.db.add_entry(self.kee_grp, "", "", "")
 
                 # mise à jour des propriétés
-                s_entry.title = csv_row["id"]
-                s_entry.username = csv_row["user"]
-                s_entry.password = csv_row["password"]
-                s_entry.notes = csv_row["description"]
+                s_entry.title = row["id"]
+                s_entry.username = row["user"]
+                s_entry.password = row["password"]
+                s_entry.notes = row["description"]
 
                 for prop in self.cols_cust:
-                    s_entry.set_custom_property(prop, csv_row[prop])
+                    s_entry.set_custom_property(prop, row[prop])
 
                 # récup des groupes en utilisant csv.reader pour parser les cas de groupe entre guillemets
-                groups = csv_row["grp_authorized"].strip()
+                groups = row["grp_authorized"].strip()
                 if groups:
                     grp_reader = csv.reader([groups], delimiter=delimiter, quotechar=quotechar)
                     s_entry.tags = [grp.strip() for grp in next(grp_reader) if grp.strip()]

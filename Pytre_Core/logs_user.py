@@ -1,6 +1,7 @@
 import sqlite3
 import json
 import logging
+from contextlib import closing
 from datetime import datetime
 from pathlib import Path
 
@@ -100,7 +101,7 @@ class UserLogs(BaseLogs):
     # ------------------------------------------------------------------------------------------
     def create_db(self) -> bool:
         try:
-            with sqlite3.connect(self.db_path) as conn:
+            with closing(sqlite3.connect(self.db_path)) as conn:
                 conn.execute(f"PRAGMA user_version = {self.latest_version};")
                 conn.execute(
                     """
@@ -130,7 +131,7 @@ class UserLogs(BaseLogs):
     def update_db_0_to_1(self) -> bool:
         new_version: int = 1
         try:
-            with sqlite3.connect(self.db_path) as conn:
+            with closing(sqlite3.connect(self.db_path)) as conn:
                 conn.execute(f"PRAGMA user_version = {new_version};")
 
                 conn.execute("ALTER TABLE QUERIES_EXEC ADD COLUMN SERVER_ID TEXT;")
@@ -148,7 +149,7 @@ class UserLogs(BaseLogs):
     def update_db_1_to_2(self) -> bool:
         new_version: int = 2
         try:
-            with sqlite3.connect(self.db_path) as conn:
+            with closing(sqlite3.connect(self.db_path)) as conn:
                 conn.execute(f"PRAGMA user_version = {new_version};")
                 conn.execute("ALTER TABLE QUERIES_EXEC DROP COLUMN END;")
                 conn.commit()
@@ -180,7 +181,7 @@ class UserLogs(BaseLogs):
         log_file = str(file) if file else None  # si un objet Path est retourné il ne peut pas être insérer
 
         try:
-            with sqlite3.connect(f"file:{self.db_path}?mode=rw", uri=True) as conn:
+            with closing(sqlite3.connect(f"file:{self.db_path}?mode=rw", uri=True)) as conn:
                 # insertion infos
                 conn.execute(
                     """INSERT INTO QUERIES_EXEC (SERVER_ID, QUERY, START, DURATION_SECS, NB_ROWS, PARAMETERS, FILE)
@@ -206,8 +207,10 @@ class UserLogs(BaseLogs):
         if not self.check_db(False):
             return []
 
-        with sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True) as conn:
-            cursor: sqlite3.Cursor = conn.cursor()
+        with (
+            closing(sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True)) as conn,
+            closing(conn.cursor()) as cursor,
+        ):
             cursor.execute(
                 """SELECT FILE FROM QUERIES_EXEC
                 WHERE FILE IS NOT NULL AND FILE <> ""
@@ -223,25 +226,25 @@ class UserLogs(BaseLogs):
         if not self.check_db(False):
             return []
 
-        with sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True) as conn:
+        with closing(sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True)) as conn:
             conn.row_factory = sqlite3.Row
 
-            cursor: sqlite3.Cursor = conn.cursor()
-            cursor.execute(
-                """SELECT
-                        SERVER_ID,
-                        QUERY,
-                        COUNT(*) as NB_RUN,
-                        MIN(DURATION_SECS) as MIN_RUN, MAX(DURATION_SECS) as MAX_RUN,
-                        MAX(START) LAST_RUN
-                FROM QUERIES_EXEC
-                WHERE :query_name = "" OR QUERY = :query_name
-                GROUP BY SERVER_ID, QUERY
-                ORDER BY COUNT(*) DESC;""",
-                {"query_name": query_name},
-            )
-            dict_results = cursor.fetchall()
-            stats_lst = [self.row_to_stats(row) for row in dict_results]
+            with closing(conn.cursor()) as cursor:
+                cursor.execute(
+                    """SELECT
+                            SERVER_ID,
+                            QUERY,
+                            COUNT(*) as NB_RUN,
+                            MIN(DURATION_SECS) as MIN_RUN, MAX(DURATION_SECS) as MAX_RUN,
+                            MAX(START) LAST_RUN
+                    FROM QUERIES_EXEC
+                    WHERE :query_name = "" OR QUERY = :query_name
+                    GROUP BY SERVER_ID, QUERY
+                    ORDER BY COUNT(*) DESC;""",
+                    {"query_name": query_name},
+                )
+                dict_results = cursor.fetchall()
+                stats_lst = [self.row_to_stats(row) for row in dict_results]
 
         return stats_lst
 
@@ -249,18 +252,18 @@ class UserLogs(BaseLogs):
         if not self.check_db(False):
             return []
 
-        with sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True) as conn:
+        with closing(sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True)) as conn:
             conn.row_factory = sqlite3.Row
 
-            cursor: sqlite3.Cursor = conn.cursor()
-            cursor.execute(
-                """SELECT ROWID, * FROM QUERIES_EXEC
-                WHERE :query_name = "" OR QUERY = :query_name
-                ORDER BY START DESC LIMIT :nb_records;""",
-                {"query_name": query_name, "nb_records": nb_records},
-            )
-            dict_results = cursor.fetchall()
-            records_lst = [self.row_to_logrecord(row) for row in dict_results]
+            with closing(conn.cursor()) as cursor:
+                cursor.execute(
+                    """SELECT ROWID, * FROM QUERIES_EXEC
+                    WHERE :query_name = "" OR QUERY = :query_name
+                    ORDER BY START DESC LIMIT :nb_records;""",
+                    {"query_name": query_name, "nb_records": nb_records},
+                )
+                dict_results = cursor.fetchall()
+                records_lst = [self.row_to_logrecord(row) for row in dict_results]
 
         return records_lst
 

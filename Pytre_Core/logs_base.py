@@ -1,5 +1,6 @@
 import sqlite3
 import logging
+from contextlib import closing
 from pathlib import Path
 
 from Pytre_Core.utils import log as _log
@@ -35,11 +36,10 @@ class BaseLogs:
     def get_version(self) -> int:
         # fetch db user version
         try:
-            with sqlite3.connect(self.db_path) as conn:
-                cursor = conn.cursor()
+            # sqlite3 connection context manage don't close connection but commit or rollback automatically
+            with closing(sqlite3.connect(self.db_path)) as conn, closing(conn.cursor()) as cursor:
                 cursor.execute("PRAGMA user_version;")
                 version = cursor.fetchone()[0]
-                cursor.close()
                 return version
         except Exception as e:
             log(f"Couldn't retrieve user_version pragma for {self.db_path.name}: {e}", logging.ERROR)

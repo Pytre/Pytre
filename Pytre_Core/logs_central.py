@@ -7,6 +7,7 @@ import uuid
 import hashlib
 import json
 import random
+from contextlib import closing
 from dataclasses import dataclass
 from os import getpid, fsync
 from socket import gethostname
@@ -51,7 +52,7 @@ class CentralLogs(BaseLogs):
     # ------------------------------------------------------------------------------------------
     def create_db(self) -> bool:
         try:
-            with sqlite3.connect(f"file:{self.db_path}?mode=rwc", uri=True) as conn:
+            with closing(sqlite3.connect(f"file:{self.db_path}?mode=rwc", uri=True)) as conn:
                 conn.execute(f"PRAGMA user_version = {self.latest_version};")
                 conn.execute(
                     """
@@ -82,7 +83,7 @@ class CentralLogs(BaseLogs):
     def update_db_0_to_1(self) -> bool:
         new_version: int = 1
         try:
-            with sqlite3.connect(f"file:{self.db_path}?mode=rw", uri=True) as conn:
+            with closing(sqlite3.connect(f"file:{self.db_path}?mode=rw", uri=True)) as conn:
                 conn.execute(f"PRAGMA user_version = {new_version};")
                 conn.execute("ALTER TABLE QUERIES_EXEC ADD COLUMN SERVER_ID TEXT;")
                 conn.execute("DROP INDEX IF EXISTS IDX_SERVER_ID;")
@@ -100,7 +101,7 @@ class CentralLogs(BaseLogs):
     def update_db_1_to_2(self) -> bool:
         new_version: int = 2
         try:
-            with sqlite3.connect(self.db_path) as conn:
+            with closing(sqlite3.connect(self.db_path)) as conn:
                 conn.execute(f"PRAGMA user_version = {new_version};")
                 conn.execute("ALTER TABLE QUERIES_EXEC DROP COLUMN END;")
                 conn.commit()
@@ -311,25 +312,26 @@ class FileDriven(CentralLogs):
         if self.stop_event.is_set():
             return None
 
-        with sqlite3.connect(f"file:{self.user_logs}?mode=ro", uri=True) as conn:
-            cursor: sqlite3.Cursor = conn.cursor()
+        with (
+            closing(sqlite3.connect(f"file:{self.user_logs}?mode=ro", uri=True)) as conn,
+            closing(conn.cursor()) as cursor,
+        ):
             sql_cmd = self.sql_rows_get_unsynced()
             cursor.execute(sql_cmd, {"user_id": self.user_id, "user_name": self.user_name})
             unsynced = cursor.fetchall()
-            cursor.close()
 
         return unsynced
 
     def mark_rows_as_exported(self, rows_id: list[int]):
-        with sqlite3.connect(f"file:{self.user_logs}?mode=rw", uri=True) as conn:
-            cursor: sqlite3.Cursor = conn.cursor()
-
+        with (
+            closing(sqlite3.connect(f"file:{self.user_logs}?mode=rw", uri=True)) as conn,
+            closing(conn.cursor()) as cursor,
+        ):
             place_holders = ", ".join("?" * len(rows_id))
             sql_cmd = self.sql_mark_rows_as_exported(place_holders)
             cursor.execute(sql_cmd, rows_id)
 
             conn.commit()
-            cursor.close()
 
     # ------------------------------------------------------------------------------------------
     # Functions to update central database
@@ -460,19 +462,20 @@ class FileDriven(CentralLogs):
             return False
 
         try:
-            with sqlite3.connect(f"file:{self.db_path}?mode=rw", uri=True, timeout=60) as conn:
+            with (
+                closing(sqlite3.connect(f"file:{self.db_path}?mode=rw", uri=True, timeout=60)) as conn,
+                closing(conn.cursor()) as cursor,
+            ):
                 conn.execute("PRAGMA busy_timeout=10000")
                 conn.execute("PRAGMA synchronous=NORMAL")
                 conn.execute("PRAGMA cache_size=-10000")
 
-                cursor: sqlite3.Cursor = conn.cursor()
                 cursor.execute("BEGIN IMMEDIATE")
 
                 sql_cmd = self.sql_insert_into_central_db()
                 cursor.executemany(sql_cmd, rows_values)
                 conn.commit()
 
-                cursor.close()
                 return True
         except sqlite3.OperationalError as e:
             log(f"Operational error while writing to central database: {e}", logging.ERROR)

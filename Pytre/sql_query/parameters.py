@@ -18,7 +18,7 @@ DECLARE_EXTRACT_PATTERN = re.compile(r"^(DECLARE[^;]*;)", re.MULTILINE | re.DOTA
 
 
 class SqlParam:
-    def __init__(self, settings: settings.Settings, user: users.CurrentUser, sql_declare: str):
+    def __init__(self, settings: settings.Settings, user: users.User, sql_declare: str):
         self.sql_declare = sql_declare
 
         app_settings: settings.Settings = settings
@@ -27,7 +27,7 @@ class SqlParam:
             decimal_separator=app_settings.decimal_separator,
         )  # object to convert string to value or value to string
 
-        self.user: users.CurrentUser = user
+        self.user: users.User = user
 
         self.var_name: str = ""
         self.type_name: str = ""
@@ -268,7 +268,7 @@ class SqlParam:
 
 
 class SqlParameters:
-    def __init__(self, settings: settings.Settings, user: users.CurrentUser, file_content: str):
+    def __init__(self, settings: settings.Settings, user: users.User, file_content: str):
         self.settings = settings
         self.user = user
         self.params: dict[str, SqlParam] = self._parse_declare(file_content)

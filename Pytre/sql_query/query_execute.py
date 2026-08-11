@@ -9,7 +9,7 @@ import pymssql
 import psycopg2
 
 from Pytre import settings, users, servers, logs_user
-from Pytre.app_context import AppContext
+from Pytre.context import AppContext, UserContext
 from Pytre.sql_query.execute_config import ExecuteConfig
 from Pytre.sql_query.execution_msg import ExecResultMsg
 from Pytre.sql_query.converter import SqlTypeConverter
@@ -19,15 +19,16 @@ PRINT_DATE_FORMAT: str = "%d/%m/%Y à %H:%M:%S"  # pour le format de la date pou
 
 
 class QueryExecute:
-    def __init__(self, ctx: AppContext):
-        self.ctx: AppContext = ctx
+    def __init__(self, app_ctx: AppContext, user_ctx: UserContext):
+        self.app_ctx: AppContext = app_ctx
+        self.user_ctx: UserContext = user_ctx
 
         self.converter: SqlTypeConverter = SqlTypeConverter()
 
         self.config: ExecuteConfig | None = None
         self.server: servers.Server | None = None
 
-        self.app_settings: settings.Settings = ctx.settings
+        self.app_settings: settings.Settings = app_ctx.settings
         self.field_separator = self.app_settings.field_separator
         self.print_date_format = PRINT_DATE_FORMAT
 
@@ -54,7 +55,7 @@ class QueryExecute:
 
     def get_server(self, server_id) -> servers.Server | None:
         try:
-            self.server = self.ctx.servers.servers_dict[server_id]
+            self.server = self.app_ctx.servers.servers_dict[server_id]
         except KeyError:
             error_msg = f"Infos du serveur non trouvé, id : {server_id}"
             self._broadcast(self._time_log() + f" - {error_msg}")
@@ -127,7 +128,7 @@ class QueryExecute:
         assert self.server is not None and self.config is not None
 
         # writing user log
-        user_log: logs_user.UserLogs = self.ctx.user_logs
+        user_log: logs_user.UserLogs = self.user_ctx.user_logs
         user_log.insert_exec(
             self.server.id,
             self.config.query_name,
@@ -140,7 +141,7 @@ class QueryExecute:
 
         # if on, launch central log
         if self.app_settings.logs_are_on:
-            user: users.CurrentUser = self.ctx.current_user
+            user: users.User = self.user_ctx.current_user
             log_infos: dict = {"user_logs": user_log.db_path, "user_id": user.username, "user_name": user.title}
             self.queue.put((ExecResultMsg.CENTRAL_LOG, log_infos))
 

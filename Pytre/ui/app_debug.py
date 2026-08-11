@@ -128,13 +128,14 @@ class DebugWindow(tk.Toplevel):
 
 
 if __name__ == "__main__":
-    from Pytre.app_context import build_app_context
+    from Pytre.context import AppContext, UserContext
 
     filename = next((Path.cwd() / "Requetes SQL").glob("*.sql"), None)
     if filename is None:
         print("No query file to load !")
     else:
-        ctx = build_app_context()
-        my_query = sql_query.Query(ctx, filename)
+        app_ctx = AppContext()
+        user_ctx = UserContext(app_ctx.users)
+        my_query = sql_query.Query(app_ctx, user_ctx, filename)
         my_app = DebugWindow(my_query)
         my_app.mainloop()

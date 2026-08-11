@@ -2,7 +2,7 @@ import logging
 from pathlib import Path
 
 from Pytre import servers, users
-from Pytre.app_context import AppContext
+from Pytre.context import AppContext, UserContext
 from Pytre.sql_query.query import Query
 from Pytre.sql_query.log_utils import log as _log
 
@@ -11,7 +11,7 @@ def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__)
     _log(msg, level=level, sublogger=sublogger)
 
 
-def get_queries(ctx: AppContext, folder: Path) -> tuple[list[Query], list[str]]:
+def get_queries(app_ctx: AppContext, user_ctx: UserContext, folder: Path) -> tuple[list[Query], list[str]]:
     if not Path(folder).is_dir():
         raise ValueError(f"Erreur : le répertoire {Path(folder)} n'a pas été trouvé ou n'est pas accessible !")
 
@@ -21,7 +21,7 @@ def get_queries(ctx: AppContext, folder: Path) -> tuple[list[Query], list[str]]:
     files = list(Path(folder).glob("*.sql"))
     for file in files:
         try:
-            my_query = Query(ctx, Path(file))
+            my_query = Query(app_ctx, user_ctx, Path(file))
         except ValueError as e:
             error = f"Erreur chrgmt '{Path(file).name}' : ValueError, {e}"
             errors.append(error)
@@ -73,18 +73,18 @@ def filter_queries(servers: servers.Servers, queries: list[Query], server_id: st
     return filtered
 
 
-def orphan_queries(ctx: AppContext, folder: Path) -> list[Path]:
+def orphan_queries(app_ctx: AppContext, user_ctx: UserContext, folder: Path) -> list[Path]:
     if not Path(folder).is_dir():
         raise ValueError(f"Erreur : le répertoire {folder} n'a pas été trouvé ou n'est pas accessible !")
 
     orphan_files: list[Path] = []
 
-    all_ids = ctx.servers.servers_dict.keys()
+    all_ids = app_ctx.servers.servers_dict.keys()
 
     files = list(Path(folder).glob("*.sql"))
     for file in files:
         try:
-            query = Query(ctx, Path(file))
+            query = Query(app_ctx, user_ctx, Path(file))
             if not set(query.servers_id) & set(all_ids):
                 orphan_files.append(Path(file))
                 log(f"Aucun serveur existant pour : {Path(file).name}", logging.WARNING)

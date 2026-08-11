@@ -5,7 +5,7 @@ from typing import TypeVar
 from Pytre.kee import Kee
 from Pytre.settings import Settings
 from Pytre.servers import Servers
-from Pytre.users import Users, CurrentUser
+from Pytre.users import Users, User
 from Pytre.user_prefs import UserPrefs
 from Pytre.logs_user import UserLogs
 
@@ -13,10 +13,8 @@ from Pytre.logs_user import UserLogs
 T = TypeVar("T")
 
 
-class AppContext:
-    def __init__(self):
-        attributes = ("kee", "settings", "servers", "users", "current_user", "user_prefs", "user_logs")
-
+class LazyContext:
+    def __init__(self, attributes: tuple):
         self._locks: dict[str, Lock] = {}
 
         for attr in attributes:
@@ -35,6 +33,12 @@ class AppContext:
 
         return value
 
+
+class AppContext(LazyContext):
+    def __init__(self):
+        attributes = ("kee", "settings", "servers", "users")
+        super().__init__(attributes=attributes)
+
     @property
     def kee(self) -> Kee:
         return self._get_or_create("kee", Kee)
@@ -51,9 +55,18 @@ class AppContext:
     def users(self) -> Users:
         return self._get_or_create("users", lambda: Users(self.kee))
 
+
+class UserContext(LazyContext):
+    def __init__(self, users: Users, username: str = ""):
+        self._users: Users = users
+        self._username: str = username
+
+        attributes = ("current_user", "user_prefs", "user_logs")
+        super().__init__(attributes=attributes)
+
     @property
-    def current_user(self) -> CurrentUser:
-        return self._get_or_create("current_user", lambda: CurrentUser(self.users))
+    def current_user(self) -> User:
+        return self._get_or_create("current_user", lambda: User(self._users, username=self._username))
 
     @property
     def user_prefs(self) -> UserPrefs:
@@ -62,7 +75,3 @@ class AppContext:
     @property
     def user_logs(self) -> UserLogs:
         return self._get_or_create("user_logs", UserLogs)
-
-
-def build_app_context() -> AppContext:
-    return AppContext()

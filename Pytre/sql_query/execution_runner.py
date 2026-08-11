@@ -5,7 +5,7 @@ from multiprocessing import Process, Queue, Event as proc_get_event
 from multiprocessing.synchronize import Event as ProcEvent
 from dataclasses import dataclass
 
-from Pytre.app_context import AppContext, build_app_context
+from Pytre.context import AppContext, UserContext
 from Pytre.sql_query.execution_msg import ExecTaskMsg, ExecResultMsg
 from Pytre.sql_query.query import Query
 from Pytre.sql_query.log_utils import set_log_queue, log as _log
@@ -157,10 +157,11 @@ class ExecutionProcess:
         self.queue_result: Queue = config.queue_result
         self.stop_requested: ProcEvent = config.stop_requested
         self.cannot_stop: ProcEvent = config.cannot_stop
-        self.ctx: AppContext = build_app_context()
+        self.app_ctx: AppContext = AppContext()
+        self.user_ctx: UserContext = UserContext(self.app_ctx.users)
 
     def start(self):
-        if self.ctx.kee.is_ko:
+        if self.app_ctx.kee.is_ko:
             log("Execution process aborting : database access to settings is broken", logging.ERROR)
             try:
                 self.queue_result.put(False)
@@ -190,7 +191,7 @@ class ExecutionProcess:
         try:
             self.queue_result.put((ExecResultMsg.PRINT, "Query task starting"))
 
-            query: Query = Query.deserialize(self.ctx, query_data)
+            query: Query = Query.deserialize(self.app_ctx, self.user_ctx, query_data)
             query.query_execute.queue = self.queue_result
             query.query_execute.stop_requested = self.stop_requested
             query.query_execute.cannot_stop = self.cannot_stop

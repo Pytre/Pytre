@@ -520,16 +520,12 @@ class User:
         return True
 
 
-class CurrentUser(User):
-    pass
-
-
 if __name__ == "__main__":
     setup_standalone_logging()
 
     kee = Kee()
     users = Users(kee)
-    user = CurrentUser(users)
+    user = User(users)
 
     print(f"{'=' * 50}\nSettings / Utilisateur courant\n{'=' * 50}")
     for key, val in user.to_dict().items():

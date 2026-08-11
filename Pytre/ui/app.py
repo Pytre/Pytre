@@ -9,7 +9,7 @@ from pathlib import Path
 from datetime import datetime
 
 from Pytre import old_files, sql_query, settings, users, servers, utils, logs_central
-from Pytre.app_context import AppContext, build_app_context
+from Pytre.context import AppContext, UserContext
 from Pytre.user_prefs import UserPrefs, PrefsEnum
 from Pytre.sql_query import ExecutionRunner, ExecResultMsg
 from Pytre.about import APP_NAME, APP_VERSION, APP_STATUS
@@ -59,18 +59,19 @@ class App(tk.Toplevel):
 
         self.console_app: ConsoleWindow = ConsoleWindow(parent=self, hide=True)
 
-        self.ctx: AppContext = build_app_context()
+        self.app_ctx: AppContext = AppContext()
+        self.user_ctx: UserContext = UserContext(users=self.app_ctx.users)
 
-        self.user: users.CurrentUser = self.ctx.current_user
-        self.user_prefs: UserPrefs = self.ctx.user_prefs
-        self.app_settings: settings.Settings = self.ctx.settings
-        self.servers: servers.Servers = self.ctx.servers
+        self.user: users.User = self.user_ctx.current_user
+        self.user_prefs: UserPrefs = self.user_ctx.user_prefs
+        self.app_settings: settings.Settings = self.app_ctx.settings
+        self.servers: servers.Servers = self.app_ctx.servers
         self.server_id: str = ""
         self._central_logs: logs_central.CentralLogs | None = None
 
         self.queries_all: list[sql_query.Query] = []
         self.queries: list[sql_query.Query] = []
-        self.query: sql_query.Query | None = sql_query.Query(self.ctx)
+        self.query: sql_query.Query | None = sql_query.Query(self.app_ctx, self.user_ctx)
         self.params_widgets: dict[str, ParamWidgetGroup] = {}
         self.output_file: Path | None = None
 
@@ -747,7 +748,7 @@ class App(tk.Toplevel):
 
         # Enregistrement d'une copie
         if answer == "Enregistrer":
-            file_copy = save_as(self.ctx.user_prefs, self, self.output_file)
+            file_copy = save_as(self.user_ctx.user_prefs, self, self.output_file)
 
             if not file_copy:
                 return
@@ -815,7 +816,7 @@ class App(tk.Toplevel):
 
         self.lock_ui()
         self.ui_params_reset()
-        self.query = sql_query.Query(self.ctx)
+        self.query = sql_query.Query(self.app_ctx, self.user_ctx)
         self.output_msg("")
         self.queries_filter_text.set("")
 
@@ -824,7 +825,9 @@ class App(tk.Toplevel):
         def worker():
             queries_all, errors = [], []
             try:
-                queries_all, errors = sql_query.get_queries(self.ctx, self.app_settings.queries_folder)
+                queries_all, errors = sql_query.get_queries(
+                    self.app_ctx, self.user_ctx, self.app_settings.queries_folder
+                )
             except Exception as err:
                 queries_all, errors = [], [str(err)]
             finally:
@@ -966,7 +969,7 @@ class App(tk.Toplevel):
             utils.showfile(folder)
 
     def orphan_queries(self):
-        orphans = sql_query.orphan_queries(self.ctx, self.app_settings.queries_folder)
+        orphans = sql_query.orphan_queries(self.app_ctx, self.user_ctx, self.app_settings.queries_folder)
         if not orphans:
             self.output_msg("Aucune requête orpheline !")
         else:
@@ -1002,7 +1005,7 @@ class App(tk.Toplevel):
         servers_id = list(self.servers.servers_dict.keys())
         cb_current = self.servers_cb.current()
         self.server_id = servers_id[cb_current] if cb_current > -1 else ""
-        self.queries = sql_query.filter_queries(self.ctx.servers, self.queries_all, self.server_id, self.user)
+        self.queries = sql_query.filter_queries(self.app_ctx.servers, self.queries_all, self.server_id, self.user)
 
         self.queries_tree.tag_configure("hidden", foreground="gray")
         for item in self.queries:
@@ -1125,9 +1128,9 @@ class App(tk.Toplevel):
     # ------------------------------------------------------------------------------------------
     def open_logs(self, all: bool = False):
         if not all and self.query is not None:
-            LogsWindow(self.ctx.user_logs, self.ctx.user_prefs, self, self.query.name)
+            LogsWindow(self.user_ctx.user_logs, self.user_ctx.user_prefs, self, self.query.name)
         else:
-            LogsWindow(self.ctx.user_logs, self.ctx.user_prefs, self)
+            LogsWindow(self.user_ctx.user_logs, self.user_ctx.user_prefs, self)
 
     def debug_query(self):
         if self.query is not None:
@@ -1135,21 +1138,21 @@ class App(tk.Toplevel):
 
     def manage_users(self):
         if getattr(self, "user_window", None) is None or not self.user_window.winfo_exists():
-            self.user_window = UsersWindow(self.ctx.users, self)
+            self.user_window = UsersWindow(self.app_ctx.users, self)
         else:
             self.user_window.focus_set()
 
     def manage_servers(self):
-        ServersWindow(self.ctx.servers, self)
+        ServersWindow(self.app_ctx.servers, self)
 
     def manage_user_prefs(self):
-        UserPrefsWindow(self.ctx.user_prefs, self)
+        UserPrefsWindow(self.user_ctx.user_prefs, self)
 
     def manage_settings(self):
-        SettingsWindow(self.ctx.settings, self, self.app_settings.reload)
+        SettingsWindow(self.app_ctx.settings, self, self.app_settings.reload)
 
     def manage_password(self):
-        PasswordWindow(self.ctx.kee, self)
+        PasswordWindow(self.app_ctx.kee, self)
 
     def console(self):
         self.console_app.deiconify()

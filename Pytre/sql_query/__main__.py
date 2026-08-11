@@ -2,10 +2,11 @@ import logging
 from pathlib import Path
 
 from Pytre import utils
-from Pytre.app_context import build_app_context
+from Pytre.context import AppContext, UserContext
 from Pytre.sql_query.query import Query
 from Pytre.sql_query.loader import orphan_queries
 from Pytre.sql_query.log_utils import log as _log
+from Pytre.ui import app
 
 
 def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__) -> None:
@@ -15,18 +16,20 @@ def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__)
 if __name__ == "__main__":
     utils.setup_standalone_logging()
 
-    ctx = build_app_context()
-    APP_PATH = ctx.settings.app_path
+    app_ctx = AppContext()
+    user_ctx = UserContext(app_ctx.users)
+
+    APP_PATH = app_ctx.settings.app_path
 
     # queries, errors = get_queries(Path(app_settings.queries_folder))
 
-    sql_script = list(Path(ctx.settings.queries_folder).glob("*.sql"))[0]
-    sql_script = Path(ctx.settings.queries_folder) / "ZCOMP.sql"
+    sql_script = list(Path(app_ctx.settings.queries_folder).glob("*.sql"))[0]
+    sql_script = Path(app_ctx.settings.queries_folder) / "ZCOMP.sql"
 
-    my_query = Query(ctx, sql_script)
+    my_query = Query(app_ctx, user_ctx, sql_script)
     my_query.update_values()
     log(my_query.get_exec_config())
     log(my_query.get_cmd_for_debug())
     my_query.execute(file_output=True)
 
-    orphan_queries(ctx, ctx.settings.queries_folder)
+    orphan_queries(app_ctx, user_ctx, app_ctx.settings.queries_folder)

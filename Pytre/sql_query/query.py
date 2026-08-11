@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from Pytre.app_context import AppContext
+from Pytre.context import AppContext, UserContext
 from Pytre.servers import ServerConnectionError
 from Pytre.sql_query.file_parser import FileParser
 from Pytre.sql_query.parameters import SqlParam, SqlParameters
@@ -12,10 +12,11 @@ from Pytre.sql_query.log_utils import _STANDALONE_BROADCAST_LOGGER
 
 
 class Query:
-    def __init__(self, ctx: AppContext, filename: Path = Path(), encoding: str = "utf-8"):
+    def __init__(self, app_ctx: AppContext, user_ctx: UserContext, filename: Path = Path(), encoding: str = "utf-8"):
         parser = FileParser(filename, encoding)
 
-        self.ctx: AppContext = ctx
+        self.app_ctx: AppContext = app_ctx
+        self.user_ctx: UserContext = user_ctx
         self.filename: Path = filename
         self.file_content: str = parser.content
         self.infos: dict = parser.extract_header_infos()
@@ -25,11 +26,11 @@ class Query:
         self.hide: int = self._set_hide_level()
         self.description: str = self._set_description()
         self.grp_authorized: list[str] = self.infos.get("grp_authorized", [])
-        all_servers_id = list(ctx.servers.servers_dict.keys())
+        all_servers_id = list(app_ctx.servers.servers_dict.keys())
         self.servers_id: list[str] = self.infos.get("servers", all_servers_id)
 
-        self.parameters = SqlParameters(self.ctx.settings, self.ctx.current_user, self.file_content)
-        self.cmd_builder = CmdBuilder(self.ctx.settings, self.ctx.user_prefs, self.raw_cmd, self.parameters)
+        self.parameters = SqlParameters(self.app_ctx.settings, self.user_ctx.current_user, self.file_content)
+        self.cmd_builder = CmdBuilder(self.app_ctx.settings, self.user_ctx.user_prefs, self.raw_cmd, self.parameters)
 
         self._query_execute: QueryExecute | None = None
 
@@ -47,7 +48,7 @@ class Query:
     @property
     def query_execute(self) -> QueryExecute:
         if self._query_execute is None:
-            self._query_execute = QueryExecute(self.ctx)
+            self._query_execute = QueryExecute(self.app_ctx, self.user_ctx)
         return self._query_execute
 
     # ------------------------------------------------------------------------------------------
@@ -136,8 +137,8 @@ class Query:
         }
 
     @classmethod
-    def deserialize(cls, ctx: AppContext, data: dict) -> "Query":
-        query: Query = cls(ctx)
+    def deserialize(cls, app_ctx: AppContext, user_ctx: UserContext, data: dict) -> "Query":
+        query: Query = cls(app_ctx, user_ctx)
 
         query.filename = Path(data["filename"])
         query.file_content = data["file_content"]
@@ -149,8 +150,8 @@ class Query:
         query.grp_authorized = data["grp_authorized"]
         query.servers_id = data["servers_id"]
 
-        query.parameters = SqlParameters(ctx.settings, ctx.current_user, query.file_content)
-        query.cmd_builder = CmdBuilder(ctx.settings, ctx.user_prefs, query.raw_cmd, query.parameters)
+        query.parameters = SqlParameters(app_ctx.settings, user_ctx.current_user, query.file_content)
+        query.cmd_builder = CmdBuilder(app_ctx.settings, user_ctx.user_prefs, query.raw_cmd, query.parameters)
 
         display_params: dict[str, str] = data["display_params"]
         for key, val in display_params.items():

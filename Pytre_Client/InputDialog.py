@@ -1,0 +1,103 @@
+import tkinter as tk
+from tkinter import Event, ttk, font
+
+import Pytre_Client.ui_utils as ui_utils
+from Pytre_Client.app_theme import set_theme
+
+
+class InputDialog(tk.Toplevel):
+    @classmethod
+    def ask(cls, title, prompt: str, parent: tk.Tk | tk.Toplevel | None = None, is_pwd: bool = False) -> str | None:
+        dialog = InputDialog(title, prompt, parent=parent, is_pwd=is_pwd)
+        dialog.wait_window()
+        return dialog.answer
+
+    def __init__(self, title, prompt: str, parent: tk.Tk | tk.Toplevel | None = None, is_pwd: bool = False):
+        super().__init__()
+
+        self.parent: tk.Tk | tk.Toplevel | None = parent
+        if not self.parent:
+            assert isinstance(self.master, tk.Tk)
+            self.master.withdraw()
+        else:
+            self.focus_set()
+            ui_utils.ui_disable_parent(self, self.parent)
+            self.transient(self.parent)
+
+        self.is_pwd = is_pwd
+        self.answer = None
+
+        set_theme(self)
+        self._setup_ui(title, prompt)
+        self._setup_position(self.parent)
+        self._events_binds()
+
+        if not self.parent:
+            self.update_idletasks()  # get window on top
+            self.focus_force()  # force focus to the window
+
+    def _setup_ui(self, title: str, prompt: str):
+        minsize_width = max(250, font.Font().measure(title) + 125)
+        self.minsize(width=minsize_width, height=25)
+        self.resizable(False, False)
+        self.title(title)
+
+        self.rowconfigure(0, weight=1)
+        self.columnconfigure(0, weight=1)
+
+        self.input_frame = ttk.Frame(self, padding=1, borderwidth=2)
+        self.buttons_frame = ttk.Frame(self, padding=1, borderwidth=2)
+
+        self.input_frame.grid(row=0, column=0, padx=4, pady=1, sticky="nswe")
+        self.buttons_frame.grid(row=1, column=0, padx=4, pady=1, sticky="nswe")
+
+        self._setup_input(prompt)
+        self._setup_buttons()
+
+    def _setup_input(self, prompt):
+        self.input_frame.columnconfigure(1, weight=1)
+
+        minsize_width = self.minsize()[0]
+        label = ttk.Label(self.input_frame, text=prompt, wraplength=minsize_width)
+        self.tk_var_answer = tk.StringVar()
+        show = "*" if self.is_pwd else ""
+        self.entry = ttk.Entry(self.input_frame, textvariable=self.tk_var_answer, show=show)
+
+        label.grid(row=0, column=0, padx=2, pady=2, sticky="nswe")
+        self.entry.grid(row=1, column=0, columnspan=2, padx=2, pady=2, sticky="nswe")
+
+        self.entry.focus_set()
+
+    def _setup_position(self, parent: tk.Tk | tk.Toplevel | None):
+        ui_utils.ui_center(self, parent)
+
+    def _setup_buttons(self):
+        self.buttons_frame.columnconfigure(0, weight=1)
+
+        self.btn_ok = ttk.Button(self.buttons_frame, text="Ok", command=self.set_answer_and_close)
+        self.btn_cancel = ttk.Button(self.buttons_frame, text="Annuler", command=self.close)
+
+        self.btn_ok.grid(row=0, column=1, padx=2, pady=2, sticky="nse")
+        self.btn_cancel.grid(row=0, column=2, padx=2, pady=2, sticky="nse")
+
+    def _events_binds(self):
+        self.entry.bind("<Return>", lambda _: self.set_answer_and_close())
+        self.protocol("WM_DELETE_WINDOW", self.close)  # arrêter le programme quand fermeture de la fenêtre
+
+    def set_answer_and_close(self):
+        self.answer = self.tk_var_answer.get()
+        self.close()
+
+    def close(self, _: Event | None = None):
+        if self.parent:
+            ui_utils.ui_undisable_parent(self, self.parent)
+            self.parent.focus_set()
+            self.destroy()  # doit se faire après avoir rendu le focus
+        else:
+            self.destroy()
+            self.quit()
+
+
+if __name__ == "__main__":
+    answer = InputDialog.ask("Test input", "Entrer une valeur :")
+    print(answer)

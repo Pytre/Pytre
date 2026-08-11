@@ -1,0 +1,1173 @@
+import logging
+import tkinter as tk
+from threading import Thread
+from queue import Queue as ThreadQueue
+from tkinter import Event as tkEvent, ttk, messagebox, font
+
+from dataclasses import dataclass
+from pathlib import Path
+from datetime import datetime
+
+from Pytre_Core import old_files, sql_query, settings, users, servers, utils, logs_central
+from Pytre_Core.context import AppContext, UserContext
+from Pytre_Core.user_prefs import UserPrefs, PrefsEnum
+from Pytre_Core.sql_query import ExecutionRunner, ExecResultMsg
+from Pytre_Core.about import APP_NAME, APP_VERSION, APP_STATUS
+
+import Pytre_Client.ui_utils as ui_utils
+from Pytre_Client.ui_utils_thread import tk_call_when_ready
+from Pytre_Client.save_as import save_as
+from Pytre_Client.InputDialog import InputDialog
+from Pytre_Client.MsgDialog import MsgDialog
+from Pytre_Client.MsgOverlay import MsgOverlay
+from Pytre_Client.app_logs import LogsWindow
+from Pytre_Client.app_debug import DebugWindow
+from Pytre_Client.app_users import UsersWindow
+from Pytre_Client.app_servers import ServersWindow
+from Pytre_Client.app_settings import SettingsWindow, UserPrefsWindow
+from Pytre_Client.app_password import PasswordWindow
+from Pytre_Client.app_console import ConsoleWindow
+from Pytre_Client.app_about import AboutWindow
+from Pytre_Client.app_theme import set_theme, set_menus, theme_is_on
+
+
+def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__) -> None:
+    utils.log(msg, level=level, sublogger=sublogger)
+
+
+@dataclass(frozen=True)
+class ParamWidgetGroup:
+    label: ttk.Label
+    entry_var: tk.StringVar | None = None
+    entry: ttk.Widget | None = None
+    check: ttk.Label | None = None
+
+    def contains_widget(self, widget: tk.Misc) -> bool:
+        return widget in (self.label, self.entry, self.check)
+
+    def destroy_widgets(self) -> None:
+        for widget in (self.label, self.entry, self.check):
+            if widget:
+                widget.destroy()
+
+
+class App(tk.Toplevel):
+    def __init__(self):
+        super().__init__()
+        self.master.withdraw()  # type: ignore
+        self.withdraw()  # hide until initialization is complete to avoid visual artifacts
+
+        self.console_app: ConsoleWindow = ConsoleWindow(parent=self, hide=True)
+
+        self.app_ctx: AppContext = AppContext()
+        self.user_ctx: UserContext = UserContext(users=self.app_ctx.users)
+
+        self.user: users.User = self.user_ctx.current_user
+        self.user_prefs: UserPrefs = self.user_ctx.user_prefs
+        self.app_settings: settings.Settings = self.app_ctx.settings
+        self.servers: servers.Servers = self.app_ctx.servers
+        self.server_id: str = ""
+        self._central_logs: logs_central.CentralLogs | None = None
+
+        self.queries_all: list[sql_query.Query] = []
+        self.queries: list[sql_query.Query] = []
+        self.query: sql_query.Query | None = sql_query.Query(self.app_ctx, self.user_ctx)
+        self.params_widgets: dict[str, ParamWidgetGroup] = {}
+        self.output_file: Path | None = None
+
+        self.setup_app_identity()
+        self.check_database_access()
+        self.ensure_admin_exists()  # crée un admin si aucun n'existe
+
+        self.process_running: bool = False
+        self.exec_runner: ExecutionRunner = ExecutionRunner()
+        self.start_time: datetime | None = None
+        self._timer_after_id: str | None = None
+
+        self.date_format = sql_query.PRINT_DATE_FORMAT
+
+        self.setup_style()
+        self.setup_ui()
+        self.setup_events_binds()
+
+        self.deiconify()  # show the window after initialization is complete
+
+        self.check_min_version()  # quitte l'application si pas ok
+        self.check_user_access()  # quitte l'application si pas d'accès
+
+        self._queries_first_load: bool = True
+        self.refresh_queries(reload_servers=False)
+
+        self.cache_folder_cleanup()
+
+    def check_database_access(self, max_attempts=5):
+        kee = self.servers.kee
+        if not kee.is_ko:
+            return
+
+        remaining = max_attempts
+        title = "Mot de passe"
+        for _ in range(max_attempts):
+            pwd = InputDialog.ask(title, "Accès aux paramètres impossible !\nMot de passe :", is_pwd=True)
+
+            # si aucun mot de passe saisi, on quitte
+            if not pwd:
+                messagebox.showerror(title, "Aucun mot de passe saisie.\nFermeture de l'application.")
+                break
+            # si réussite ouverture de la base, on sort
+            if kee.pwd_try([pwd]):
+                messagebox.showinfo(title, "Accès restauré.\nL'application va fermer, merci de la réouvrir.")
+                break
+
+            # si échéc l'utilisateur peut réessayer jusqu'à épuisement des essais
+            remaining -= 1
+            msg_singular = "Mot de passe invalide !\n1 essai restant."
+            msg_plural = f"Mot de passe invalide !\n{remaining} essais restants."
+            if remaining > 0:
+                msg = msg_singular if remaining == 1 else msg_plural
+                messagebox.showerror(title=title, message=msg)
+            else:
+                messagebox.showerror(title, "Ouverture impossible des paramètres.\nFermeture de l'application.")
+
+        self.app_exit()
+        raise SystemExit
+
+    def ensure_admin_exists(self):
+        if not self.user.users.users_admin_exists():
+            msg = (
+                "Aucun administrateur n'existe !\n"
+                + "Vous allez être ajouté en tant qu'administrateur par défaut.\n"
+                + "Pensez à mettre à jour le mot de passe et les utilisateurs après."
+            )
+            messagebox.showinfo(title="Base créée", message=msg)
+            self.user.admin = True
+            self.user.save()
+
+    def check_user_access(self):
+        if not self.user.is_authorized:
+            messagebox.showerror(
+                "Erreur",
+                "Vous n'êtes pas dans liste des utilisateurs autorisées !"
+                + "\nDonnées d'identification :"
+                + f"\n- User : {self.user.username}",
+                parent=self,
+            )
+            self.app_exit()
+            raise SystemExit
+
+    def check_min_version(self):
+        queries_folder = Path(self.app_settings.queries_folder)
+        if not queries_folder.is_dir():
+            messagebox.showerror(
+                "Répertoire inexistant",
+                f"Répertoire des requêtes non trouvée :\n{queries_folder}",
+                parent=self,
+            )
+            if not self.user.admin:
+                self.app_exit()
+                raise SystemExit
+            return
+
+        # récupération version minimum exigée pour l'application et les settings
+        try:
+            min_app, min_settings, retrieve_failed = self.app_settings.get_min_version(queries_folder)
+        except ValueError as e:
+            messagebox.showerror("Erreur", f"Erreur récupération versions mini : {e}", parent=self)
+            if not self.user.admin:
+                self.app_exit()
+                raise SystemExit
+            return
+
+        # vérification version settings
+        if not self.app_settings.ctrl_version(self.app_settings.settings_version, min_settings):
+            messagebox.showerror(
+                "Version settings.db",
+                "Le fichier settings.db utilisé n'est pas à jour :"
+                f"\n  - Version utilisée : {self.app_settings.settings_version}"
+                f"\n  - Version mini : {min_settings}"
+                "\n\nMerci d'utiliser le fichier des settings à jour",
+                parent=self,
+            )
+            if not self.user.admin:
+                self.app_exit()
+                raise SystemExit
+
+        # vérification version application
+        if not self.app_settings.ctrl_version(APP_VERSION, min_app):
+            messagebox.showerror(
+                f"Version {APP_NAME}",
+                f"Votre version de {APP_NAME} n'est pas à jour :"
+                f"\n  - Version utilisée : {APP_VERSION}"
+                f"\n  - Version mini : {min_app}"
+                "\n\nMerci d'utiliser une version à jour",
+                parent=self,
+            )
+            if not self.user.admin:
+                self.app_exit()
+                raise SystemExit
+
+        # alerter si version mini requises mais non trouvées
+        if retrieve_failed:
+            messagebox.showerror(
+                "Erreur récupération versions mini",
+                "Problème lors de la récupération des infos de version mini requises :"
+                f"\n  - Version mini app : {min_app}"
+                f"\n  - Version mini paramètres : {min_settings}",
+                parent=self,
+            )
+
+    def cache_folder_cleanup(self):
+        cache_folder = self.user_prefs.get(PrefsEnum.cache_folder)
+        cache_number_of_days = self.app_settings.users_cache_expiration
+
+        files = old_files.list_old_files(cache_folder, age_in_days=cache_number_of_days)
+        if files:
+            old_files.delete_files(files)
+
+    # ------------------------------------------------------------------------------------------
+    # Définition de l'identité de l'appli et des styles / thème
+    # ------------------------------------------------------------------------------------------
+    def setup_app_identity(self):
+        app_version = APP_VERSION if not APP_STATUS else f"{APP_VERSION} ({APP_STATUS})"
+        self.title(f"{APP_NAME} - V.{app_version}")
+
+        icon_file = self.app_settings.app_path / "res" / "app.png"
+        icon_img = tk.PhotoImage(file=icon_file)
+        self.iconphoto(True, icon_img)
+        self.console_app.iconphoto(True, icon_img)  # setting icon for console is also needed
+
+    def setup_style(self):
+        set_theme(self)
+        default_font = font.nametofont("TkDefaultFont")
+        self.font_family = default_font.actual("family")
+        self.font_size = default_font.actual("size")
+
+        self.s_header = "Header.TLabelframe.Label"
+        ttk.Style(self).configure(self.s_header, font=(self.font_family, self.font_size, "bold"))
+
+    # ------------------------------------------------------------------------------------------
+    # Création de l'interface
+    # ------------------------------------------------------------------------------------------
+    def setup_ui(self):
+        self.minsize(width=1020, height=740)
+        self.resizable(True, True)
+
+        self.setup_ui_menu()
+        self.setup_ui_paned_window()
+        self.setup_ui_left_frame()
+        self.setup_ui_right_frame()
+
+        self.paned_window.add(self.left_frame, weight=1)
+        self.paned_window.add(self.right_frame, weight=2)
+
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(0, weight=1)
+
+        self.setup_ui_position()
+
+    def setup_ui_menu(self):
+        menubar = tk.Menu(self)
+        self.config(menu=menubar)
+
+        self.menu_query = tk.Menu(menubar, tearoff=False)
+        self.menu_query.add_command(label="Executer", state="disabled", command=self.execute_query)
+        self.menu_query.add_command(label="Recharger", command=lambda: self.refresh_queries(reload_servers=True))
+        self.menu_query.add_separator()
+        self.menu_query.add_command(label="Journal...", command=lambda: self.open_logs(True))
+        self.menu_query.add_command(label="Debug...", state="disabled", command=self.debug_query)
+        self.menu_query.add_separator()
+        self.menu_query.add_command(
+            label="Dossier cache...",
+            command=lambda: self.open_folder(self.user_prefs.get(PrefsEnum.cache_folder)),
+        )
+        self.menu_query.add_separator()
+        self.menu_query.add_command(label="Quitter", command=self.app_exit)
+        menubar.add_cascade(label="Requêtes", menu=self.menu_query)
+
+        menu_prefs = tk.Menu(menubar, tearoff=False)
+        menu_prefs.add_command(label="Préférences...", command=self.manage_user_prefs)
+        menubar.add_cascade(label="Préférences", menu=menu_prefs)
+
+        menu_admin = None
+        if self.user.admin:
+            menu_admin = tk.Menu(menubar, tearoff=False)
+            menu_admin.add_command(label="Utilisateurs...", command=self.manage_users)
+            menu_admin.add_command(label="Serveurs...", command=self.manage_servers)
+            menu_admin.add_separator()
+            menu_admin.add_command(label="Paramètres généraux...", command=self.manage_settings)
+            menu_admin.add_command(label="Paramètres, mot de passe...", command=self.manage_password)
+            menu_admin.add_separator()
+
+            self.menu_admin_queries = tk.Menu(menubar, tearoff=False)
+            self.menu_admin_queries.add_command(
+                label="Dossier...",
+                command=lambda: self.open_folder(self.app_settings.queries_folder),
+            )
+            self.menu_admin_queries.add_command(label="Liste orphelines", command=self.orphan_queries)
+
+            menubar.add_cascade(label="Administration", menu=menu_admin)
+            menu_admin.add_cascade(label="Requêtes", menu=self.menu_admin_queries)
+
+        menu_about = tk.Menu(menubar, tearoff=False)
+        menu_about.add_command(label="Ouvrir la console...", command=self.console)
+        menu_about.add_separator()
+        menu_about.add_command(label=f"À propos de {APP_NAME}...", command=self.about_info)
+        menubar.add_cascade(label="?", menu=menu_about)
+
+        if theme_is_on():
+            menus: list[tk.Menu] = [menubar, self.menu_query, menu_prefs, menu_about]
+            if self.user.admin and menu_admin is not None:
+                menus.extend([menu_admin, self.menu_admin_queries])
+            set_menus(menus)
+
+    def setup_ui_paned_window(self):
+        self.paned_window = ttk.PanedWindow(self, orient="horizontal")
+        self.paned_window.grid(row=0, column=0, padx=5, pady=5, sticky="nswe")
+
+    def setup_ui_left_frame(self):
+        self.left_frame = ttk.Frame(self.paned_window, padding=1, borderwidth=2)
+        self.left_frame.grid(row=0, column=0, padx=0, pady=0, sticky="nswe")
+
+        self.servers_label = ttk.Label(self.left_frame, text="Serveur :", justify=tk.LEFT)
+        self.servers_cb = ttk.Combobox(self.left_frame, width=20, state="readonly")
+
+        self.queries_filter_text = tk.StringVar()
+        self.queries_label_filter = ttk.Label(self.left_frame, text="Filtre :", justify=tk.LEFT)
+        self.queries_entry_filter = ttk.Entry(self.left_frame, textvariable=self.queries_filter_text, width=25)
+        self.queries_btn_refresh = ttk.Button(
+            self.left_frame, text="\U00002b6e", width=4, command=lambda: self.refresh_queries(reload_servers=True)
+        )
+
+        self.queries_tree = ttk.Treeview(self.left_frame, columns=(1, 2), show="headings", selectmode="browse")
+        self.queries_tree.heading(1, text="Code")
+        self.queries_tree.heading(2, text="Description")
+        self.queries_tree.column(1, width=100, stretch=False)
+        self.queries_tree.column(2, width=250, stretch=True)
+
+        self.queries_tree_scrollbar_y = ttk.Scrollbar(
+            self.left_frame, orient="vertical", command=self.queries_tree.yview
+        )
+        self.queries_tree["yscrollcommand"] = self.queries_tree_scrollbar_y.set
+
+        # placement des éléments dans la frame
+        self.servers_label.grid(row=0, column=0, padx=2, pady=2, sticky="nswe")
+        self.servers_cb.grid(row=0, column=1, padx=2, pady=2, sticky="nswe")
+        self.queries_label_filter.grid(row=0, column=2, padx=2, pady=2, sticky="nswe")
+        self.queries_entry_filter.grid(row=0, column=3, columnspan=3, padx=2, pady=2, sticky="nswe")
+        self.queries_btn_refresh.grid(row=0, column=6, columnspan=2, padx=2, pady=2, sticky="nswe")
+        self.queries_tree.grid(row=1, column=0, columnspan=8, padx=2, pady=2, sticky="nswe")
+        self.queries_tree_scrollbar_y.grid(row=1, column=7, sticky="nse")
+
+        # paramètrage poids lignes et colonnes
+        self.left_frame.rowconfigure(1, weight=1)
+        self.left_frame.columnconfigure(1, weight=1)
+        self.left_frame.columnconfigure(3, weight=5)
+
+    def setup_ui_right_frame(self):
+        self.right_frame = ttk.Frame(self.paned_window, padding=0, borderwidth=2)
+        self.right_frame.grid(row=0, column=1, padx=0, pady=0, sticky="nswe")
+        self.right_frame.rowconfigure(0, weight=1)
+        self.right_frame.columnconfigure(0, weight=1)
+
+        self.setup_ui_right_panned()
+
+        self.setup_ui_params()
+        self.setup_ui_output_and_btn()
+
+        self.right_panned.add(self.params_outer, weight=1)
+        self.right_panned.add(self.output_and_btn_frame, weight=0)
+
+    def setup_ui_right_panned(self):
+        self.right_panned = ttk.PanedWindow(self.right_frame, orient="vertical")
+        self.right_panned.grid(row=0, column=0, padx=0, pady=0, sticky="nswe")
+        self.right_panned.rowconfigure(0, weight=1)
+        self.right_panned.columnconfigure(0, weight=1)
+
+    def setup_ui_params(self):
+        self.params_outer = ttk.LabelFrame(self.right_panned, borderwidth=2)
+        self.params_label = ttk.Label(self.params_outer, text="Saisie des paramètres", style=self.s_header)
+        self.params_outer.config(labelwidget=self.params_label)
+
+        self.params_outer.rowconfigure(0, weight=1)
+        self.params_outer.columnconfigure(0, weight=1)
+
+        self.params_canvas = tk.Canvas(self.params_outer, highlightthickness=0)
+        self.params_canvas.rowconfigure(0, weight=1)
+        self.params_canvas.columnconfigure(0, weight=1)
+
+        self.params_scrollbar = ttk.Scrollbar(self.params_outer, orient="vertical", command=self.params_canvas.yview)
+        self.params_canvas["yscrollcommand"] = self.params_scrollbar.set
+
+        self.params_inner = ttk.Frame(self.params_canvas)
+
+        self.params_outer.grid(row=0, column=0, padx=0, pady=0, sticky="nswe")
+        self.params_canvas.grid(row=0, column=0, padx=0, pady=0, sticky="nswe")
+        self.params_scrollbar.grid(row=0, column=1, sticky="ns")
+        self._windows = self.params_canvas.create_window((0, 0), window=self.params_inner, anchor="nw")
+
+    def setup_ui_output_and_btn(self):
+        self.output_and_btn_frame = ttk.Frame(self.right_panned, borderwidth=0)
+        self.output_and_btn_frame.grid(row=1, column=0, padx=0, pady=0, sticky="nswe")
+
+        self.setup_ui_output()
+        self.setup_ui_btn()
+
+        self.output_and_btn_frame.rowconfigure(0, weight=1)
+        self.output_and_btn_frame.rowconfigure(1, weight=0)
+        self.output_and_btn_frame.columnconfigure(0, weight=1)
+
+    def setup_ui_output(self):
+        self.output_frame = ttk.LabelFrame(self.output_and_btn_frame, borderwidth=2)
+        self.output_label = ttk.Label(self.output_frame, text="Messages / Fenêtre d'execution", style=self.s_header)
+        self.output_frame.config(labelwidget=self.output_label)
+
+        self.output_frame.grid(row=0, column=0, padx=0, pady=0, sticky="nswe")
+
+        self.output_textbox = tk.Text(
+            self.output_frame,
+            width=75,
+            height=7,
+            wrap="word",
+            state="disabled",
+            font=("TkFixedFont", self.font_size),
+        )
+        self.output_textbox_scrollbar = ttk.Scrollbar(
+            self.output_frame,
+            orient="vertical",
+            command=self.output_textbox.yview,
+        )
+        self.output_textbox["yscrollcommand"] = self.output_textbox_scrollbar.set
+        self.output_textbox.see("1.0")
+
+        self.output_textbox.grid(row=0, column=0, padx=2, pady=0, sticky="nswe")
+        self.output_textbox_scrollbar.grid(row=0, column=1, sticky="nse")
+
+        # paramètrage des poids des lignes et colonnes
+        self.output_frame.rowconfigure(0, weight=1)
+        self.output_frame.columnconfigure(0, weight=1)
+        self.output_frame.columnconfigure(1, weight=0)
+
+    def setup_ui_btn(self):
+        self.btn_frame = ttk.Frame(self.output_and_btn_frame, borderwidth=2)
+        self.btn_frame.grid(row=1, column=0, padx=0, pady=0, sticky="nswe")
+
+        self.btn_log = ttk.Button(self.btn_frame, text="\U0001f56e", width=4, command=self.open_logs)
+        self.btn_execute = ttk.Button(self.btn_frame, text="Executer", state="disable", command=self.execute_query)
+        self.btn_debug = ttk.Button(self.btn_frame, text="Debug", state="disable", command=self.debug_query)
+
+        self.btn_log.grid(row=0, column=0, padx=2, pady=0, sticky="nswe")
+        self.btn_execute.grid(row=0, column=2, padx=2, pady=0, sticky="nswe")
+        self.btn_debug.grid(row=0, column=3, padx=2, pady=0, sticky="nswe")
+
+        # paramètrage des poids des lignes et colonnes
+        self.btn_frame.rowconfigure(0, weight=1)
+        for column in range(self.btn_frame.grid_size()[0]):
+            my_weight = 1 if column == 1 else 0
+            self.btn_frame.columnconfigure(column, weight=my_weight)
+
+    def setup_ui_position(self):
+        if not utils.get_system() == "Windows":
+            self.geometry("1100x750")
+
+        ui_utils.ui_center(self)
+
+    # ------------------------------------------------------------------------------------------
+    # Gestion de l'interface pour la frame de saisie des paramètres
+    # ------------------------------------------------------------------------------------------
+    def ui_params_reset(self):
+        for _, param_group in self.params_widgets.items():
+            param_group.destroy_widgets()
+
+        self.params_widgets = {}
+
+    def ui_params_update(self, params: dict[str, sql_query.SqlParam] | None = None):
+        self.ui_params_reset()
+
+        count_not_hidden = 0
+        if params is not None:
+            count_not_hidden = len([p for p in params if not params[p].is_hidden])
+
+        if params is None or count_not_hidden == 0:
+            self._ui_no_param_update()
+        else:
+            self._ui_with_params_update(params)
+
+    def _ui_with_params_update(self, params: dict[str, sql_query.SqlParam]):
+        for i, key in enumerate(params):
+            # ne pas afficher le paramètre si il doit être caché
+            # et que l'utilisateur n'est pas un super utilisateur
+            if params[key].is_hidden and not self.user.admin:
+                continue
+
+            label = ttk.Label(self.params_inner, text=params[key].description + " : ", justify=tk.LEFT)
+            if params[key].is_hidden:
+                label["text"] = "(*) " + params[key].description + " : "
+                label["foreground"] = "red"
+
+            entry_var = tk.StringVar(name=key, value=params[key].display_value)
+
+            entry: ttk.Widget
+            if params[key].ui_control == "check":
+                entry = ttk.Checkbutton(self.params_inner, variable=entry_var)
+                entry["onvalue"] = "on"
+                entry["offvalue"] = "off"
+                entry_var.trace_add("write", self.param_input_trace)
+
+            elif params[key].ui_control == "list":
+                widget_entry = ttk.Combobox(self.params_inner, textvariable=entry_var)
+                entry = widget_entry
+                entry["state"] = "readonly"
+                entry["values"] = tuple(params[key].authorized_values.values())
+                entry_var.trace_add("write", self.param_input_trace)
+                entry.bind("<FocusOut>", lambda _: widget_entry.selection_clear())
+
+            else:
+                entry = ttk.Entry(self.params_inner, textvariable=entry_var)
+                entry.bind("<FocusIn>", self.param_focus_event)
+                entry.bind("<FocusOut>", self.param_input_event)
+                entry.bind("<Return>", self.param_input_event)
+                entry.bind("<KP_Enter>", self.param_input_event)
+
+            check = ttk.Label(self.params_inner, text="", width=3, relief="groove", justify=tk.LEFT, background="red")
+
+            label.grid(row=i, column=0, padx=2, pady=2, sticky="nswe")
+            entry.grid(row=i, column=1, padx=2, pady=2, sticky="nswe")
+            check.grid(row=i, column=2, padx=2, pady=2, sticky="nswe")
+
+            self.params_widgets[key] = ParamWidgetGroup(label=label, entry_var=entry_var, entry=entry, check=check)
+
+        self.params_get_input()  # pour mise à jour aussi des widgets pour les checks
+
+        # paramètrage des poids des lignes et colonnes
+        for row in range(self.params_inner.grid_size()[1]):
+            self.params_inner.rowconfigure(row, weight=0)
+
+        self.params_inner.columnconfigure(0, weight=0)
+        self.params_inner.columnconfigure(1, weight=1)
+        self.params_inner.columnconfigure(2, weight=0)
+
+    def _ui_no_param_update(self):
+        label = ttk.Label(
+            self.params_inner,
+            text="Pas de paramètres à renseigner pour cette requête",
+            font=("TkDefaultFont", 0, "bold"),
+            wraplength=350,
+            justify=tk.CENTER,
+        )
+        label.grid(row=0, column=0, columnspan=2, sticky="ns")
+
+        self.params_widgets["no_param"] = ParamWidgetGroup(label=label)
+
+        self.params_inner.rowconfigure(0, weight=1)
+        self.params_inner.columnconfigure(0, weight=1)
+
+    # ------------------------------------------------------------------------------------------
+    # Définition des évènements générer par les traitements
+    # ------------------------------------------------------------------------------------------
+    def setup_events_binds(self):
+        self.servers_cb.bind("<<ComboboxSelected>>", lambda _: self.queries_filter())
+        self.servers_cb.bind("<FocusOut>", lambda _: self.servers_cb.selection_clear())
+        self.queries_entry_filter.bind("<KeyRelease>", lambda _: self.queries_filter(self.queries_filter_text.get()))
+        self.queries_tree.bind("<<TreeviewSelect>>", self.tree_selection_change)
+
+        self.params_canvas.bind("<Configure>", self.params_resize)
+        self.params_canvas.bind(
+            "<Enter>", lambda _: self.params_canvas.bind_all("<MouseWheel>", self.params_scrolling)
+        )
+        self.params_canvas.bind("<Leave>", lambda _: self.params_canvas.unbind_all("<MouseWheel>"))
+
+        self.bind("<Control-f>", lambda _: self.queries_filter_focus())
+        self.protocol("WM_DELETE_WINDOW", self.app_exit)  # arrêter le programme quand fermeture de la fenêtre
+
+    # ------------------------------------------------------------------------------------------
+    # Execution de requête
+    # ------------------------------------------------------------------------------------------
+    def exec_start(self):
+        def init_query_run(try_counter: int = 0):
+            # initaliser l'execution de la requête si le worker est disponible
+            try:
+                if self.query is None:
+                    raise RuntimeError("self.query can't be None")
+
+                if self.exec_runner.process_ready:
+                    self.exec_timer(stop=True)  # reset timer si démarré pour création worker
+                    serialized_query = self.query.serialize()
+                    self.exec_runner.input_task(self.server_id, serialized_query)
+                    self.exec_check_queue()
+                    return
+            except RuntimeError as e:
+                log(f"Erreur lors du lancement de la requête : {e}", logging.ERROR)
+
+            if not self.exec_runner.creating_process:
+                self.exec_runner.create_process()
+
+            # sinon attendre la création du worker
+            if try_counter == 0:
+                self.start_time = datetime.now()
+                self.output_msg("En attente de la création d'un nouveau sous processus...", "end")
+                self.exec_timer(wait_in_sec=15)
+
+            # demander l'arrêt si l'attente est anormalement longue (timeout creation worker à 90 secondes)
+            if try_counter == 95:
+                self.output_msg(
+                    "\nEchec ! Le sous processus ne semble pas disponible...\n" +
+                    "Lancement de la requête annulée !",
+                    "end",
+                )  # fmt: skip
+                self.exec_runner.stop_requested.set()
+
+            # procéder à l'arrêt si demandé
+            if self.exec_runner.stop_requested.is_set():
+                self.exec_force_stop(kill_worker=False)
+                return
+
+            self.after(1000, init_query_run, try_counter + 1)
+
+        # reset parameters
+        self.rows_number: int = 0
+        self.output_file = None
+        self.start_time = None
+        self.process_running = True
+
+        log("UI - Execution starting")
+        self.lock_ui(query_exec=True)
+        init_query_run()
+
+    def exec_timer(self, stop: bool = False, wait_in_sec: int = 0):
+        timer_tag = "timer_tag"
+        elapsed = (datetime.now() - self.start_time).total_seconds() if self.start_time else 0
+        timer_str = f" ({int(elapsed) // 60:02d}:{int(elapsed) % 60:02d})"
+
+        # clear previous timer display
+        if self.output_textbox.tag_ranges(timer_tag):
+            self.output_msg("", f"{timer_tag}.first", f"{timer_tag}.last")
+
+        # cancel previous scheduled timer to avoid multiple timers
+        if self._timer_after_id is not None:
+            self.after_cancel(self._timer_after_id)
+            self._timer_after_id = None
+
+        # stop timer if requested (no rescheduling)
+        if stop:
+            self.start_time = None
+            return
+
+        # display timer if wait time exceeded
+        if elapsed >= wait_in_sec:
+            self.output_msg(timer_str, "end-1c", "", timer_tag)
+
+        # schedule next timer update
+        self._timer_after_id = self.after(1000, self.exec_timer, stop, wait_in_sec)
+
+    def exec_check_queue(self):
+        done: bool = False
+        try:
+            while not self.exec_runner.queue_result.empty():
+                msg_type, data = self.exec_runner.queue_result.get_nowait()
+                if msg_type == ExecResultMsg.PRINT:
+                    log(data)
+                elif msg_type == ExecResultMsg.UI_OUTPUT:
+                    log(data)
+                    # si output pas vide, rajout retour à la ligne
+                    if self.output_textbox.get("1.0", "end-1c"):
+                        data = "\n" + data
+                    self.output_msg(data, "end")
+                elif msg_type == ExecResultMsg.LOG:
+                    msg, level, sublogger = data
+                    log(msg, level, sublogger)
+                elif msg_type == ExecResultMsg.START_TIMER:
+                    self.start_time = datetime.now()
+                    self.exec_timer(wait_in_sec=60)
+                elif msg_type == ExecResultMsg.STOP_TIMER:
+                    self.exec_timer(stop=True)
+                elif msg_type == ExecResultMsg.RESULT:
+                    self.rows_number, self.output_file = data
+                elif msg_type == ExecResultMsg.ERROR:
+                    msg = f"Erreur non gérée :\n{data}"
+                    log(msg, level=logging.ERROR)
+                    self.output_msg(msg, "end")
+                elif msg_type == ExecResultMsg.CENTRAL_LOG and (logs := self.get_central_logs()):
+                    logs.trigger_sync(**data)
+                elif msg_type == ExecResultMsg.DONE:
+                    self.exec_timer(stop=True)
+                    done = True
+        except Exception as e:
+            log(f"Error reading queue: {e}", logging.ERROR)
+            done = True
+
+        # si traitement fini ou erreur alors passer aux étapes de fin
+        if done:
+            self.exec_finish()
+            return
+
+        # si demande d'interruption et que l'execution n'est pas déjà finie
+        if self.exec_runner.stop_requested.is_set() and self.process_running:
+            self.exec_force_stop()
+            return
+
+        # auto relance toutes les x ms
+        self.after(100, self.exec_check_queue)
+
+    def exec_force_stop(self, kill_worker: bool = True):
+        if kill_worker:
+            self.exec_runner.kill_and_restart()
+        msg = datetime.now().strftime(self.date_format) + " - Requête interrompue"
+        if not self.output_textbox.index("end-1c").split(".")[1] == "0":  # si on est pas en début de ligne
+            msg = "\n" + msg
+        self.output_msg(msg, "end")
+        self.exec_finish()
+
+    def exec_finish(self):
+        self.exec_timer(stop=True)
+        self.unlock_ui(query_exec=True)
+        self.process_running = False
+        log("UI - Execution ending")
+
+        # si arrêt forcé
+        if self.exec_runner.task_killed:
+            messagebox.showwarning("Fin execution", "Execution interrompue !", parent=self)
+            return
+
+        # si aucune ligne extraite
+        if self.rows_number == 0 or self.output_file is None:
+            messagebox.showinfo("Fin execution", "Aucune donnée extraite !", parent=self)
+            return
+
+        # si des lignes ont été extraites proposer d'ouvrir ou enregistrer ailleurs le fichier
+        answer = MsgDialog.ask(
+            "Fin execution",
+            "Le fichier extrait a été enregisté.\nVoulez-vous l'ouvrir ou enregistrer une copie ailleurs ?",
+            buttons_txt=("Ouvrir", "Enregistrer", "Annuler"),
+            parent=self,
+        )
+
+        # Ouverture directe du fichier
+        if answer == "Ouvrir":
+            utils.startfile(self.output_file)
+            return
+
+        # Enregistrement d'une copie
+        if answer == "Enregistrer":
+            file_copy = save_as(self.user_ctx.user_prefs, self, self.output_file)
+
+            if not file_copy:
+                return
+            if not Path(file_copy).exists():
+                messagebox.showerror("Fichier enregistrer sous", "Erreur copie fichier !", parent=self)
+                return
+
+            answer = MsgDialog.ask(
+                "Fichier enregistrer sous",
+                "La copie du fichier extrait a bien été enregistée.\nVoulez-vous l'ouvrir ?",
+                buttons_txt=("Oui", "Non"),
+                parent=self,
+            )
+            if answer == "Oui":
+                utils.startfile(file_copy)
+
+    # ------------------------------------------------------------------------------------------
+    # Verrouillage / Déverrouillage de l'UI
+    # ------------------------------------------------------------------------------------------
+    def lock_ui(self, query_exec: bool = False):
+        if query_exec:
+            self.menu_query.entryconfig("Executer", label="Interrompre")
+            self.btn_execute["text"] = "Interrompre"
+
+        self.menu_query.entryconfig("Recharger", state="disable")
+
+        if self.user.admin:
+            self.menu_admin_queries.entryconfig("Liste orphelines", state="disable")
+
+        self.servers_cb["state"] = "disable"
+        self.queries_entry_filter["state"] = "disable"
+        self.queries_btn_refresh["state"] = "disable"
+        self.queries_tree["selectmode"] = "none"
+
+        for key in self.params_widgets:
+            widget_entry = self.params_widgets[key].entry
+            if widget_entry:
+                widget_entry["state"] = "disable"
+
+    def unlock_ui(self, query_exec: bool = False):
+        if query_exec:
+            self.menu_query.entryconfig("Interrompre", label="Executer")
+            self.btn_execute["text"] = "Executer"
+
+        self.menu_query.entryconfig("Recharger", state="normal")
+
+        if self.user.admin:
+            self.menu_admin_queries.entryconfig("Liste orphelines", state="normal")
+
+        self.servers_cb["state"] = "readonly"
+        self.queries_entry_filter["state"] = "enable"
+        self.queries_btn_refresh["state"] = "enable"
+        self.queries_tree["selectmode"] = "browse"
+
+        for key in self.params_widgets:
+            widget_entry = self.params_widgets[key].entry
+            if widget_entry:
+                widget_entry["state"] = "enable" if not isinstance(widget_entry, ttk.Combobox) else "readonly"
+
+    # ------------------------------------------------------------------------------------------
+    # Traitements
+    # ------------------------------------------------------------------------------------------
+    def refresh_queries(self, reload_servers: bool = False):
+        overlay = MsgOverlay.display(self, "Chargement des requêtes...", 1500)
+
+        self.lock_ui()
+        self.ui_params_reset()
+        self.query = sql_query.Query(self.app_ctx, self.user_ctx)
+        self.output_msg("")
+        self.queries_filter_text.set("")
+
+        self.refresh_servers(reload_servers)
+
+        def worker():
+            queries_all, errors = [], []
+            try:
+                queries_all, errors = sql_query.get_queries(
+                    self.app_ctx, self.user_ctx, self.app_settings.queries_folder
+                )
+            except Exception as err:
+                queries_all, errors = [], [str(err)]
+            finally:
+                # retour dans le thread principal pour mettre à jour l'UI et finaliser
+                result_queue.put((queries_all, errors))
+
+        def refresh_end(queries_all, errors):
+            self.queries_all = queries_all
+            self.queries_filter()
+            self.tree_autosize()
+
+            if self._queries_first_load:
+                default_msg = f"Bonjour {self.user.title.split(' ')[0]} !" if self.user.title else "Bonjour !"
+                custom_msg = self.user.msg_login
+                self.output_msg(str(custom_msg or default_msg) + "\n", "1.0", "1.0")
+
+            if errors:
+                self.output_msg("\n".join(errors))
+
+            overlay.hide(callback=self.unlock_ui)
+            if not self._queries_first_load:
+                messagebox.showinfo("Rechargement", "Ok requêtes rechargées", parent=self)
+            else:
+                self._queries_first_load = False
+
+        result_queue = ThreadQueue()
+        Thread(target=worker, daemon=True).start()
+        tk_call_when_ready(self, result_queue, refresh_end)
+
+    def refresh_servers(self, reload_servers: bool = False):
+        grp_authorized = self.user.grp_authorized if not self.user.admin else None
+        servers_dict: dict = self.servers.get_all_servers(reload_servers, grp_authorized)
+        servers_name = [v.description or k for k, v in servers_dict.items()]
+        servers_id = list(servers_dict.keys())
+
+        self.servers_cb["values"] = tuple(servers_name)
+        if servers_dict:
+            if self.servers_cb.current() == -1:
+                self.server_id = self.user_prefs.get(PrefsEnum.last_server)
+
+            pos = servers_id.index(self.server_id) if self.server_id in servers_id else 0
+            self.server_id = servers_id[pos]
+            self.servers_cb.set(servers_name[pos])
+
+        if len(self.servers.servers_dict) <= 1:
+            # if one server or less hide servers selection
+            self.servers_label.grid_remove()
+            self.servers_cb.grid_remove()
+            self.left_frame.columnconfigure(1, weight=0)
+        elif not self.servers_cb.grid_remove():
+            # display servers selection if hidden and more than one server
+            self.servers_label.grid()
+            self.servers_cb.grid()
+            self.left_frame.columnconfigure(1, weight=1)
+
+    def execute_query(self):
+        if self.query is None:
+            messagebox.showwarning("Warning", "Aucune requête de sélectionnée !", parent=self)
+            return False
+
+        # si une requête est en cours d'execution alors la stopper
+        if self.exec_runner.process and self.process_running:
+            self.exec_runner.stop_requested.set()
+            return False
+
+        self.output_msg("")
+        if self.params_get_input():
+            self.exec_start()
+        else:
+            self.output_msg("Impossible d'executer, tant que des paramètres ne sont pas valides :\n", "1.0", "1.0")
+
+    def params_get_input(self):
+        if self.query is None:
+            return True
+
+        for key in self.params_widgets:
+            w_entry_var = self.params_widgets[key].entry_var
+            w_check = self.params_widgets[key].check
+
+            if w_entry_var is not None and w_check is not None:
+                self.query.parameters.params[key].display_value = w_entry_var.get()
+                try:
+                    self.query.update_values(key)
+                    if self.query.parameters.params[key].ctrl_pattern_is_ok:
+                        w_check["background"] = "green"
+                    else:
+                        w_check["background"] = "darkorange"
+                        ctrl_pattern = self.query.parameters.params[key].ctrl_pattern
+                        msg = f"{w_entry_var.get()} ne correspond pas au format attendu : {ctrl_pattern}"
+                        self.output_msg(msg)
+                except ValueError as err:
+                    w_check["background"] = "red"
+                    msg = "    - " + self.query.parameters.params[key].description + " : " + str(err) + "\n"
+                    self.output_msg(msg, "end")
+
+        return self.query.values_ok()
+
+    def get_central_logs(self) -> logs_central.CentralLogs | None:
+        if self._central_logs:
+            return self._central_logs
+        elif self.app_settings.logs_are_on:
+            LogsClass = logs_central.get_default_class()
+            logs_folder = self.app_settings.logs_folder
+            self._central_logs = LogsClass(logs_folder)
+
+            return self._central_logs
+
+        return None
+
+    def app_exit(self, event: tkEvent | None = None):
+        if logs := self.get_central_logs():
+            logs.stop_sync()
+
+        self.user_prefs.set(PrefsEnum.last_server, self.server_id)
+
+        self.console_app.app_exit()
+
+        self.destroy()
+        self.quit()
+
+    def output_msg(self, txt_message: str, start_pos: str = "1.0", end_pos: str = "end", tag: str = ""):
+        try:  # erreur à l'initialisation quand le ctrl n'existe pas encore
+            self.output_textbox["state"] = "normal"
+
+            if not tag:
+                self.output_textbox.replace(start_pos, end_pos, str(txt_message))
+            else:
+                self.output_textbox.insert(start_pos, txt_message, tag)
+
+            self.output_textbox.see(tk.END)
+            self.output_textbox["state"] = "disabled"
+        except AttributeError:
+            pass
+
+    def open_folder(self, folder: str | Path):
+        if folder == self.user_prefs.get(PrefsEnum.cache_folder) and self.output_file:
+            utils.showfile(self.output_file)
+        else:
+            utils.showfile(folder)
+
+    def orphan_queries(self):
+        orphans = sql_query.orphan_queries(self.app_ctx, self.user_ctx, self.app_settings.queries_folder)
+        if not orphans:
+            self.output_msg("Aucune requête orpheline !")
+        else:
+            self.output_msg("Liste des requêtes orphelines :\n")
+            for orphan in orphans:
+                self.output_msg(f"{orphan.name}\n", "end")
+
+    # ------------------------------------------------------------------------------------------
+    # Mise à jour de l'interface et des variables d'instances quand évènement
+    # ------------------------------------------------------------------------------------------
+    def queries_filter_focus(self):
+        self.queries_disable_filter = True
+        self.queries_entry_filter.focus()
+
+    def queries_filter(self, text_filter: str = "", msg_filter: str = ""):
+        try:
+            if self.queries_disable_filter and text_filter == self.queries_previous_filter:
+                return
+        except AttributeError:
+            self.queries_disable_filter: bool
+            self.queries_previous_filter: str
+
+        self.queries_disable_filter = False
+        self.queries_previous_filter = text_filter
+
+        for item in self.queries_tree.get_children():
+            self.queries_tree.delete(item)
+
+        self.ui_params_reset()
+        self.query = None
+        self.output_msg(msg_filter)
+
+        servers_id = list(self.servers.servers_dict.keys())
+        cb_current = self.servers_cb.current()
+        self.server_id = servers_id[cb_current] if cb_current > -1 else ""
+        self.queries = sql_query.filter_queries(self.app_ctx.servers, self.queries_all, self.server_id, self.user)
+
+        self.queries_tree.tag_configure("hidden", foreground="gray")
+        for item in self.queries:
+            if (
+                text_filter == ""
+                or item.name.lower().find(text_filter.lower()) != -1
+                or item.description.lower().find(text_filter.lower()) != -1
+            ):
+                color = "none" if item.description[0:3] != "(*)" else "hidden"
+                self.queries_tree.insert("", tk.END, values=(item.name, item.description), iid=id(item), tags=color)
+
+    def tree_autosize(self):
+        cols_to_autosize = (0,)  # uniquement première colonne
+        ui_utils.tree_autosize(self.queries_tree, columns=cols_to_autosize)
+
+    def tree_selection_change(self, _: tkEvent):
+        selected_iid = self.queries_tree.focus()
+        selected_values = self.queries_tree.item(selected_iid, "values")
+
+        self.output_msg("")
+
+        if selected_values == "":
+            self.menu_query.entryconfig("Executer", state="disable")
+            self.menu_query.entryconfig("Debug...", state="disable")
+            self.btn_execute["state"] = "disable"
+            self.btn_debug["state"] = "disable"
+            self.params_label["text"] = "Saisie des paramètres"
+        else:
+            self.menu_query.entryconfig("Executer", state="normal")
+            self.menu_query.entryconfig("Debug...", state="normal")
+            self.btn_execute["state"] = "enable"
+            self.btn_debug["state"] = "enable"
+            self.params_label["text"] = "Saisie des paramètres pour " + selected_values[0]
+            for query in self.queries:
+                if selected_iid == str(id(query)):
+                    self.query = query
+                    self.ui_params_update(self.query.parameters.params)
+                    break
+
+        self.params_canvas.yview_moveto(0)
+        self.params_resize()
+
+    def param_focus_event(self, event: tkEvent):
+        widget = event.widget
+
+        if isinstance(widget, ttk.Entry) and not isinstance(widget, ttk.Combobox):
+            widget.icursor("end")
+            widget.select_range("0", "end")
+
+    def param_input_event(self, event: tkEvent):
+        widget = event.widget
+
+        if event.type == tk.EventType.FocusOut:
+            widget.selection_clear()
+
+        key = ""
+        for param_key, param_group in self.params_widgets.items():
+            if param_group.contains_widget(widget):
+                key = param_key
+                break
+
+        self._param_input(key)
+
+        if event.keysym == "Return":
+            self.param_focus_event(event)
+
+    def param_input_trace(self, name, *_):
+        self._param_input(name)
+
+    def _param_input(self, key: str):
+        if self.query is None:
+            return
+
+        entry_w = self.params_widgets[key].entry
+        entry_var = self.params_widgets[key].entry_var
+        check_w = self.params_widgets[key].check
+
+        if entry_var:
+            self.query.parameters.params[key].display_value = entry_var.get()
+
+        try:
+            self.query.update_values(key)
+            color = "green"
+            correct_display = ""
+
+            # verif si affichage correcte, sinon MAJ (cas des saisies dates notamment)
+            if isinstance(entry_w, ttk.Entry) and not isinstance(entry_w, ttk.Combobox):
+                correct_display = self.query.parameters.params[key].display_value
+                if entry_var and entry_var.get() != correct_display:
+                    entry_var.set(correct_display)
+
+            # si valeur ne correspond pas au pattern de ctrl alors couleur orange
+            if not self.query.parameters.params[key].ctrl_pattern_is_ok:
+                color = "darkorange"
+                ctrl_pattern = self.query.parameters.params[key].ctrl_pattern
+                msg = f"{correct_display} ne correspond pas au format attendu : {ctrl_pattern}"
+                self.output_msg(msg)
+
+        except ValueError as e:
+            color = "red"
+            self.output_msg(str(e))
+
+        if check_w:
+            check_w["background"] = color
+
+    def params_resize(self, _: tkEvent | None = None):
+        self.update_idletasks()
+
+        size_width = max(self.params_canvas.winfo_width(), self.params_inner.winfo_reqwidth())
+        size_height = max(self.params_canvas.winfo_height(), self.params_inner.winfo_reqheight())
+        self.params_canvas.itemconfig(self._windows, width=size_width, height=size_height)
+
+        self.params_canvas.configure(scrollregion=self.params_canvas.bbox("all"))
+
+    def params_scrolling(self, event: tkEvent):
+        self.params_canvas.yview_scroll(int(-1 * event.delta / 120), "units")
+
+    # ------------------------------------------------------------------------------------------
+    # Sous-fenêtres
+    # ------------------------------------------------------------------------------------------
+    def open_logs(self, all: bool = False):
+        if not all and self.query is not None:
+            LogsWindow(self.user_ctx.user_logs, self.user_ctx.user_prefs, self, self.query.name)
+        else:
+            LogsWindow(self.user_ctx.user_logs, self.user_ctx.user_prefs, self)
+
+    def debug_query(self):
+        if self.query is not None:
+            DebugWindow(self.query, self)
+
+    def manage_users(self):
+        if getattr(self, "user_window", None) is None or not self.user_window.winfo_exists():
+            self.user_window = UsersWindow(self.app_ctx.users, self)
+        else:
+            self.user_window.focus_set()
+
+    def manage_servers(self):
+        ServersWindow(self.app_ctx.servers, self)
+
+    def manage_user_prefs(self):
+        UserPrefsWindow(self.user_ctx.user_prefs, self)
+
+    def manage_settings(self):
+        SettingsWindow(self.app_ctx.settings, self, self.app_settings.reload)
+
+    def manage_password(self):
+        PasswordWindow(self.app_ctx.kee, self)
+
+    def console(self):
+        self.console_app.deiconify()
+
+    def about_info(self):
+        AboutWindow(self)
+
+
+def app_start():
+    try:
+        my_app = App()
+        my_app.mainloop()
+    except SystemExit:
+        pass
+
+
+if __name__ == "__main__":
+    app_start()

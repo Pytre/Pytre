@@ -25,7 +25,7 @@ class Servers:
         self.kee_grp: Group | None = None
         self.kee_users_grp: Group | None = None
 
-        self.servers_dict: dict[str, Server] = {}
+        self.servers_dict: dict[str, Server] = {}  # authorized servers only
         self.groups: set[str] = set()
 
         self.cols_std = ["id", "description", "user", "password", "grp_authorized"]
@@ -48,11 +48,12 @@ class Servers:
         if self.kee_grp is None:
             return {}
 
-        self.servers_dict: dict[str, Server] = {}
+        servers_dict: dict[str, Server] = {}
         for entry in self.kee_grp.entries:
             server = Server(entry=entry, servers=self)
-            if grp_filter is None or not server.grp_authorized or set(server.grp_authorized) & set(grp_filter):
-                self.servers_dict[str(entry.title)] = server
+            servers_dict[str(entry.title)] = server
+
+        self.servers_dict = filter_servers(servers_dict, grp_filter)
 
         return self.servers_dict
 
@@ -408,6 +409,19 @@ class Server:
         self.servers.kee.save_db()
 
         return True
+
+
+def filter_servers(servers: dict[str, Server], grp_filter: list[str] | None) -> dict[str, Server]:
+    if grp_filter is None:
+        return servers
+
+    filtered_servers: dict[str, Server] = {}
+
+    for id, server in servers.items():
+        if grp_filter is None or not server.grp_authorized or set(server.grp_authorized) & set(grp_filter):
+            filtered_servers[str(server.id)] = server
+
+    return filtered_servers
 
 
 if __name__ == "__main__":

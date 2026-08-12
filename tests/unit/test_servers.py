@@ -11,7 +11,7 @@ import csv
 from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
 
-from Pytre_Core.servers import Servers
+from Pytre_Core.servers import Servers, filter_servers
 
 
 # ================================================================================
@@ -492,9 +492,100 @@ def test_get_all_servers_with_group_filter(mock_kee):
 
     result = servers.get_all_servers(grp_filter=["admin"])
 
-    # Should only include SERVER1 (has admin tag)
-    assert len(result) >= 1
-    assert "SERVER1" in result
+    # Should only include SERVER1 (has admin tag), SERVER2 must be excluded
+    assert set(result.keys()) == {"SERVER1"}
+
+
+@pytest.mark.unit
+def test_get_all_servers_caches_filtered_result_on_attribute(mock_kee):
+    """The servers_dict attribute must reflect the filtered view after a filtered
+    call - Pytre_Client relies on this (single user per process, e.g. app.py's
+    "hide server selector if len(servers.servers_dict) <= 1" check), not just on
+    the return value of get_all_servers()."""
+    entry1 = Mock(uuid="uuid-1", title="SERVER1", username="u1", password="p1", notes="", tags=["admin"])
+    entry1.custom_properties = []
+    entry2 = Mock(uuid="uuid-2", title="SERVER2", username="u2", password="p2", notes="", tags=["users"])
+    entry2.custom_properties = []
+    mock_kee.grp_servers.entries = [entry1, entry2]
+
+    servers = Servers(mock_kee)
+    servers.get_all_servers(grp_filter=["admin"])
+
+    assert set(servers.servers_dict.keys()) == {"SERVER1"}
+
+
+@pytest.mark.unit
+def test_get_all_servers_without_filter_keeps_full_list_on_attribute(mock_kee):
+    """A later unfiltered refresh must restore servers_dict to the complete list -
+    this is what Pytre_Server relies on to keep its shared instance always unfiltered."""
+    entry1 = Mock(uuid="uuid-1", title="SERVER1", username="u1", password="p1", notes="", tags=["admin"])
+    entry1.custom_properties = []
+    entry2 = Mock(uuid="uuid-2", title="SERVER2", username="u2", password="p2", notes="", tags=["users"])
+    entry2.custom_properties = []
+    mock_kee.grp_servers.entries = [entry1, entry2]
+
+    servers = Servers(mock_kee)
+    servers.get_all_servers(grp_filter=["admin"])
+    servers.get_all_servers()  # no filter - must restore the full list
+
+    assert set(servers.servers_dict.keys()) == {"SERVER1", "SERVER2"}
+
+
+# ================================================================================
+# Filter Servers Functionality (standalone, pure function)
+# ================================================================================
+
+
+@pytest.mark.unit
+def test_filter_servers_returns_same_dict_when_filter_is_none():
+    server1 = Mock(id="SRV1", grp_authorized=["admin"])
+    servers_dict = {"SRV1": server1}
+
+    result = filter_servers(servers_dict, None)
+
+    assert result is servers_dict
+
+
+@pytest.mark.unit
+def test_filter_servers_includes_server_with_no_restriction():
+    server1 = Mock(id="SRV1", grp_authorized=[])
+    servers_dict = {"SRV1": server1}
+
+    result = filter_servers(servers_dict, ["admin"])
+
+    assert "SRV1" in result
+
+
+@pytest.mark.unit
+def test_filter_servers_includes_server_with_matching_group():
+    server1 = Mock(id="SRV1", grp_authorized=["admin", "users"])
+    servers_dict = {"SRV1": server1}
+
+    result = filter_servers(servers_dict, ["admin"])
+
+    assert "SRV1" in result
+
+
+@pytest.mark.unit
+def test_filter_servers_excludes_server_without_matching_group():
+    server1 = Mock(id="SRV1", grp_authorized=["restricted"])
+    servers_dict = {"SRV1": server1}
+
+    result = filter_servers(servers_dict, ["admin"])
+
+    assert result == {}
+
+
+@pytest.mark.unit
+def test_filter_servers_handles_mixed_set():
+    allowed = Mock(id="SRV1", grp_authorized=["admin"])
+    unrestricted = Mock(id="SRV2", grp_authorized=[])
+    denied = Mock(id="SRV3", grp_authorized=["restricted"])
+    servers_dict = {"SRV1": allowed, "SRV2": unrestricted, "SRV3": denied}
+
+    result = filter_servers(servers_dict, ["admin"])
+
+    assert set(result.keys()) == {"SRV1", "SRV2"}
 
 
 # ================================================================================

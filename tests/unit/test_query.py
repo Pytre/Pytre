@@ -96,7 +96,7 @@ WHERE id = @param1
 @pytest.mark.unit
 def test_query_initialization(mock_app_ctx, mock_user_ctx, sample_sql_file):
     """Query should initialize from SQL file"""
-    query = Query(mock_app_ctx, mock_user_ctx, sample_sql_file, encoding="utf-8")
+    query = Query(mock_app_ctx, mock_user_ctx, sample_sql_file)
 
     assert query.filename == sample_sql_file
     assert query.name == "TEST_QUERY"
@@ -115,7 +115,7 @@ Hide : 2
 SELECT * FROM table"""
     sql_file.write_text(content, encoding="utf-8")
 
-    query = Query(mock_app_ctx, mock_user_ctx, sql_file, encoding="utf-8")
+    query = Query(mock_app_ctx, mock_user_ctx, sql_file)
 
     assert query.hide == 2
     assert "(**)" in query.description  # Stars in description
@@ -124,7 +124,7 @@ SELECT * FROM table"""
 @pytest.mark.unit
 def test_query_serialize_deserialize(mock_app_ctx, mock_user_ctx, sample_sql_file):
     """Query should serialize and deserialize correctly"""
-    query1 = Query(mock_app_ctx, mock_user_ctx, sample_sql_file, encoding="utf-8")
+    query1 = Query(mock_app_ctx, mock_user_ctx, sample_sql_file)
 
     # Serialize
     data = query1.serialize()
@@ -158,7 +158,7 @@ SELECT @param as value
 """
     sql_file.write_text(content)
 
-    query = Query(mock_app_ctx, mock_user_ctx, filename=sql_file, encoding="utf-8")
+    query = Query(mock_app_ctx, mock_user_ctx, source=sql_file)
 
     assert query.filename == sql_file
     assert query.name == "TEST_QUERY"

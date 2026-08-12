@@ -12,12 +12,14 @@ from Pytre_Core.sql_query.log_utils import _STANDALONE_BROADCAST_LOGGER
 
 
 class Query:
-    def __init__(self, app_ctx: AppContext, user_ctx: UserContext, filename: Path = Path(), encoding: str = "utf-8"):
-        parser = FileParser(filename, encoding)
+    def __init__(self, app_ctx: AppContext, user_ctx: UserContext, source: Path | FileParser = Path()):
+        """source can be a Path (it will be read and parsed)
+        or an already-built FileParser (reused as-is without disk read)"""
+        parser = source if isinstance(source, FileParser) else FileParser(source)
 
         self.app_ctx: AppContext = app_ctx
         self.user_ctx: UserContext = user_ctx
-        self.filename: Path = filename
+        self.filename: Path = parser.filename
         self.file_content: str = parser.content
         self.infos: dict = parser.extract_header_infos()
         self.raw_cmd: str = parser.extract_raw_command()

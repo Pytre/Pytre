@@ -3,6 +3,7 @@ from pathlib import Path
 
 from Pytre_Core import servers, users
 from Pytre_Core.context import AppContext, UserContext
+from Pytre_Core.sql_query.file_parser import FileParser
 from Pytre_Core.sql_query.query import Query
 from Pytre_Core.sql_query.log_utils import log as _log
 
@@ -11,17 +12,17 @@ def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__)
     _log(msg, level=level, sublogger=sublogger)
 
 
-def get_queries(app_ctx: AppContext, user_ctx: UserContext, folder: Path) -> tuple[list[Query], list[str]]:
+def load_files(folder: Path) -> tuple[list[FileParser], list[str]]:
     if not Path(folder).is_dir():
         raise ValueError(f"Erreur : le répertoire {Path(folder)} n'a pas été trouvé ou n'est pas accessible !")
 
-    queries: list[Query] = []
+    parsers: list[FileParser] = []
     errors: list[str] = []
 
     files = list(Path(folder).glob("*.sql"))
     for file in files:
         try:
-            my_query = Query(app_ctx, user_ctx, Path(file))
+            parser = FileParser(Path(file))
         except ValueError as e:
             error = f"Erreur chrgmt '{Path(file).name}' : ValueError, {e}"
             errors.append(error)
@@ -33,11 +34,42 @@ def get_queries(app_ctx: AppContext, user_ctx: UserContext, folder: Path) -> tup
             log(error, level=logging.WARNING)
             continue  # si erreur, ne pas bloquer et ignorer la requête
 
+        parsers.append(parser)
+
+    return parsers, errors
+
+
+def build_queries(
+    app_ctx: AppContext, user_ctx: UserContext, parsers: list[FileParser]
+) -> tuple[list[Query], list[str]]:
+    queries: list[Query] = []
+    errors: list[str] = []
+
+    for parser in parsers:
+        try:
+            my_query = Query(app_ctx, user_ctx, parser)
+        except ValueError as e:
+            error = f"Erreur création Query pour '{parser.filename.name}' : ValueError, {e}"
+            errors.append(error)
+            log(error, level=logging.WARNING)
+            continue
+        except Exception as e:
+            error = f"Erreur création Query pour '{parser.filename.name}' : {e.__class__.__name__}, {e}"
+            errors.append(error)
+            log(error, level=logging.WARNING)
+            continue  # si erreur, ne pas bloquer et ignorer la requête
+
         queries.append(my_query)
 
     queries.sort(key=lambda k: k.name)
 
     return queries, errors
+
+
+def get_queries(app_ctx: AppContext, user_ctx: UserContext, folder: Path) -> tuple[list[Query], list[str]]:
+    parsers, load_errors = load_files(folder)
+    queries, build_errors = build_queries(app_ctx, user_ctx, parsers)
+    return queries, load_errors + build_errors
 
 
 def filter_queries(servers: servers.Servers, queries: list[Query], server_id: str, user: users.User) -> list[Query]:

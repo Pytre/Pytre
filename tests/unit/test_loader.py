@@ -6,7 +6,7 @@ import pytest
 from pathlib import Path
 from unittest.mock import Mock
 
-from Pytre_Core.sql_query.loader import get_queries, filter_queries, orphan_queries
+from Pytre_Core.sql_query.loader import get_queries, filter_queries, orphan_queries, load_files, build_queries
 
 
 # ================================================================================
@@ -223,3 +223,91 @@ def test_get_queries_collects_unexpected_errors(mock_app_ctx, mock_user_ctx, tmp
     assert queries == []
     assert len(errors) == 1
     assert "weird.sql" in errors[0]
+
+
+# ================================================================================
+# load_files / build_queries Tests
+# ================================================================================
+
+
+@pytest.mark.unit
+def test_load_files_raises_for_nonexistent_folder():
+    with pytest.raises(ValueError, match="n'a pas été trouvé"):
+        load_files(Path("/nonexistent/folder"))
+
+
+@pytest.mark.unit
+def test_load_files_collects_parsers(tmp_path):
+    (tmp_path / "a.sql").write_text("/*\ncode: AQUERY\n*/\nSELECT 1")
+    (tmp_path / "b.sql").write_text("/*\ncode: BQUERY\n*/\nSELECT 2")
+
+    parsers, errors = load_files(tmp_path)
+
+    assert errors == []
+    assert {p.filename.name for p in parsers} == {"a.sql", "b.sql"}
+
+
+@pytest.mark.unit
+def test_load_files_collects_errors_without_blocking(tmp_path):
+    (tmp_path / "good.sql").write_text("/*\ncode: GOOD\n*/\nSELECT 1")
+    weird = tmp_path / "weird.sql"
+    weird.mkdir()  # a directory named *.sql - FileParser fails to read it
+
+    parsers, errors = load_files(tmp_path)
+
+    assert len(parsers) == 1
+    assert parsers[0].filename.name == "good.sql"
+    assert len(errors) == 1
+    assert "weird.sql" in errors[0]
+
+
+@pytest.mark.unit
+def test_build_queries_collects_and_sorts(mock_app_ctx, mock_user_ctx, tmp_path):
+    for name, code in [("b", "BQUERY"), ("a", "AQUERY")]:
+        (tmp_path / f"{name}.sql").write_text(f"/*\ncode: {code}\n*/\nSELECT 1")
+    parsers, _ = load_files(tmp_path)
+
+    queries, errors = build_queries(mock_app_ctx, mock_user_ctx, parsers)
+
+    assert errors == []
+    assert [q.name for q in queries] == ["AQUERY", "BQUERY"]
+
+
+@pytest.mark.unit
+def test_build_queries_collects_errors_without_blocking(mock_app_ctx, mock_user_ctx, tmp_path):
+    (tmp_path / "good.sql").write_text("/*\ncode: GOOD\n*/\nSELECT 1")
+    (tmp_path / "bad.sql").write_text("/*\ncode: BAD\n*/\nDECLARE\n@!X as int = 1  -- Desc|ENTRY\n;\nSELECT 1")
+    parsers, _ = load_files(tmp_path)
+
+    queries, errors = build_queries(mock_app_ctx, mock_user_ctx, parsers)
+
+    assert len(queries) == 1
+    assert queries[0].name == "GOOD"
+    assert len(errors) == 1
+    assert "bad.sql" in errors[0]
+
+
+@pytest.mark.unit
+def test_build_queries_computes_fresh_values_per_user_ctx(mock_app_ctx, tmp_path):
+    """Reusing the same cached FileParser list across different user_ctx must not leak
+    parameter state between them - the whole point of splitting load_files (cacheable,
+    disk I/O only) from build_queries (per-request, per-user construction)."""
+    (tmp_path / "q.sql").write_text(
+        "/*\ncode: Q\n*/\nDECLARE\n@USER as nvarchar(20) = '' -- Desc|USER_INFO(x3_id)\n;\nSELECT @USER"
+    )
+    parsers, load_errors = load_files(tmp_path)
+    assert load_errors == []
+
+    user_a = Mock(attribs_cust={"x3_id": "USER_A"})
+    user_a.users.attribs_std = []
+    user_ctx_a = Mock(current_user=user_a, user_prefs=Mock())
+
+    user_b = Mock(attribs_cust={"x3_id": "USER_B"})
+    user_b.users.attribs_std = []
+    user_ctx_b = Mock(current_user=user_b, user_prefs=Mock())
+
+    queries_a, _ = build_queries(mock_app_ctx, user_ctx_a, parsers)
+    queries_b, _ = build_queries(mock_app_ctx, user_ctx_b, parsers)
+
+    assert queries_a[0].parameters.params["@USER"].display_value == "USER_A"
+    assert queries_b[0].parameters.params["@USER"].display_value == "USER_B"

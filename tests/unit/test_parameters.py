@@ -619,3 +619,45 @@ def test_sql_parameters_update_values(mock_settings, mock_user):
 
     # Should succeed
     assert result is True
+
+
+@pytest.mark.unit
+def test_sql_parameters_set_display_values_updates_and_validates(mock_settings, mock_user):
+    """SqlParameters.set_display_values should set display values and update computed values"""
+    sql_content = """DECLARE
+@param1 as int = 100,
+@param2 as nvarchar(50) = 'test'
+;"""
+
+    params = SqlParameters(mock_settings, mock_user, sql_content)
+    params.set_display_values({"@param1": "200", "@param2": "changed"})
+
+    assert params.params["@param1"].value_cmd == 200
+    assert params.params["@param2"].value_cmd == "changed"
+    assert params.validate() is True
+
+
+@pytest.mark.unit
+def test_sql_parameters_set_display_values_raises_keyerror_for_unknown_param(mock_settings, mock_user):
+    """SqlParameters.set_display_values should raise KeyError for a param that does not exist"""
+    sql_content = """DECLARE
+@param1 as int = 100
+;"""
+
+    params = SqlParameters(mock_settings, mock_user, sql_content)
+
+    with pytest.raises(KeyError):
+        params.set_display_values({"@unknown": "1"})
+
+
+@pytest.mark.unit
+def test_sql_parameters_set_display_values_raises_valueerror_for_invalid_value(mock_settings, mock_user):
+    """SqlParameters.set_display_values should raise ValueError for an invalid mandatory value"""
+    sql_content = """DECLARE
+@param1 as nvarchar(50) = 'test'
+;"""
+
+    params = SqlParameters(mock_settings, mock_user, sql_content)
+
+    with pytest.raises(ValueError, match="obligatoire"):
+        params.set_display_values({"@param1": ""})

@@ -277,6 +277,62 @@ SELECT @param
 
 
 @pytest.mark.unit
+def test_query_set_display_values_updates_and_validates(mock_app_ctx, mock_user_ctx, tmp_path):
+    """Query.set_display_values should set display values and update computed values"""
+    sql_file = tmp_path / "test.sql"
+    content = """DECLARE
+@param as int = 10  -- Parameter
+;
+
+SELECT @param
+"""
+    sql_file.write_text(content)
+
+    query = Query(mock_app_ctx, mock_user_ctx, sql_file)
+    query.set_display_values({"@param": "20"})
+
+    assert query.parameters.params["@param"].display_value == "20"
+    assert query.parameters.params["@param"].value_cmd == 20
+    assert query.values_ok() is True
+
+
+@pytest.mark.unit
+def test_query_set_display_values_raises_keyerror_for_unknown_param(mock_app_ctx, mock_user_ctx, tmp_path):
+    """Query.set_display_values should raise KeyError for a param that does not exist"""
+    sql_file = tmp_path / "test.sql"
+    content = """DECLARE
+@param as int = 10  -- Parameter
+;
+
+SELECT @param
+"""
+    sql_file.write_text(content)
+
+    query = Query(mock_app_ctx, mock_user_ctx, sql_file)
+
+    with pytest.raises(KeyError):
+        query.set_display_values({"@unknown": "1"})
+
+
+@pytest.mark.unit
+def test_query_set_display_values_raises_valueerror_for_invalid_value(mock_app_ctx, mock_user_ctx, tmp_path):
+    """Query.set_display_values should raise ValueError for an invalid mandatory value"""
+    sql_file = tmp_path / "test.sql"
+    content = """DECLARE
+@param as nvarchar(50) = 'test'  -- Mandatory parameter
+;
+
+SELECT @param
+"""
+    sql_file.write_text(content)
+
+    query = Query(mock_app_ctx, mock_user_ctx, sql_file)
+
+    with pytest.raises(ValueError, match="obligatoire"):
+        query.set_display_values({"@param": ""})
+
+
+@pytest.mark.unit
 def test_query_values_ok(mock_app_ctx, mock_user_ctx, tmp_path):
     """Query should validate parameter values"""
     sql_file = tmp_path / "test.sql"

@@ -285,6 +285,16 @@ class SqlParameters:
 
         return params_dict
 
+    def set_display_values(self, values: dict[str, str]) -> None:
+        """
+        Set display values from a dict with param_id as key and validate them.
+        Raise KeyError if key does not exists and ValueError if value is not valid.
+        """
+        for key, val in values.items():
+            self.params[key].display_value = val
+
+        self.update_values()
+
     def update_values(self, key: str | None = None) -> bool:
         """
         If key is none then update all key

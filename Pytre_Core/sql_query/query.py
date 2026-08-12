@@ -59,6 +59,13 @@ class Query:
     def reset_values(self):
         self.parameters.reset_values()
 
+    def set_display_values(self, values: dict[str, str]) -> None:
+        """
+        Set display values from a dict with param_id as key and validate them.
+        Raise KeyError if key does not exists and ValueError if value is not valid.
+        """
+        self.parameters.set_display_values(values)
+
     def update_values(self, key: str | None = None) -> bool:
         """
         If key is none then update all key
@@ -156,9 +163,6 @@ class Query:
         query.cmd_builder = CmdBuilder(app_ctx.settings, user_ctx.user_prefs, query.raw_cmd, query.parameters)
 
         display_params: dict[str, str] = data["display_params"]
-        for key, val in display_params.items():
-            query.parameters.params[key].display_value = val
-
-        query.update_values()
+        query.set_display_values(display_params)
 
         return query

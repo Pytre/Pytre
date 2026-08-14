@@ -6,6 +6,7 @@ Full integration tests skipped due to multiprocessing complexity.
 """
 
 import pytest
+from typing import cast
 from unittest.mock import Mock, patch, MagicMock
 from multiprocessing import Queue, Event as proc_get_event
 from queue import Empty as QueueIsEmpty
@@ -51,7 +52,7 @@ def test_process_config_frozen():
 
     # Should not be able to modify
     with pytest.raises(Exception):  # FrozenInstanceError or AttributeError
-        config.queue_task = Queue()
+        config.queue_task = Queue()  # type: ignore
 
 
 # ================================================================================
@@ -71,16 +72,17 @@ def _wait_until(predicate, timeout=2.0, interval=0.01):
     assert predicate(), "condition never became true within timeout"
 
 
-@pytest.fixture
-def fake_process_factory():
+class _FakeProcessFactory:
     """
     Build a Process replacement whose start() immediately signals readiness on
     queue_result, simulating a child process that initializes instantly - avoids
     spawning a real OS process and the real 90s init timeout.
     """
-    created_mocks = []
 
-    def factory(target=None, args=(), daemon=None):
+    def __init__(self):
+        self.created: list[Mock] = []
+
+    def __call__(self, target=None, args: tuple = (), daemon=None):
         config = args[0]
         mock_proc = Mock()
         mock_proc.is_alive = Mock(return_value=True)
@@ -89,11 +91,13 @@ def fake_process_factory():
             config.queue_result.put(True)
 
         mock_proc.start = fake_start
-        created_mocks.append(mock_proc)
+        self.created.append(mock_proc)
         return mock_proc
 
-    factory.created = created_mocks
-    return factory
+
+@pytest.fixture
+def fake_process_factory():
+    return _FakeProcessFactory()
 
 
 @pytest.mark.unit
@@ -116,7 +120,7 @@ def test_execution_runner_initialization(fake_process_factory):
 def test_execution_runner_stays_not_ready_if_child_signals_failure():
     """create_process should leave process_ready False if the child reports init failure"""
 
-    def factory(target=None, args=(), daemon=None):
+    def factory(target=None, args: tuple = (), daemon=None):
         config = args[0]
         mock_proc = Mock()
         mock_proc.is_alive = Mock(return_value=True)
@@ -152,7 +156,7 @@ def test_execution_runner_kill_and_restart(fake_process_factory):
         runner = ExecutionRunner()
         _wait_until(lambda: runner.process_ready is True)
 
-        old_process = runner.process
+        old_process = cast(Mock, runner.process)
         old_process.join = Mock()  # avoid blocking on a mock's default join
         # simulate the process actually dying once terminate() is called
         old_process.terminate = Mock(side_effect=lambda: old_process.is_alive.configure_mock(return_value=False))
@@ -186,7 +190,7 @@ def test_execution_runner_kill_and_restart_falls_back_to_kill(fake_process_facto
         runner = ExecutionRunner()
         _wait_until(lambda: runner.process_ready is True)
 
-        old_process = runner.process
+        old_process = cast(Mock, runner.process)
         old_process.join = Mock()
         # terminate() has no effect; only kill() actually stops the process
         old_process.kill = Mock(side_effect=lambda: old_process.is_alive.configure_mock(return_value=False))
@@ -248,7 +252,8 @@ def test_input_task_recreates_process_if_dead(fake_process_factory):
         runner = ExecutionRunner()
         _wait_until(lambda: runner.process_ready is True)
 
-        runner.process.is_alive = Mock(return_value=False)
+        process = cast(Mock, runner.process)
+        process.is_alive = Mock(return_value=False)
 
         with pytest.raises(RuntimeError, match="not alive, recreating"):
             runner.input_task("SRV1", {})

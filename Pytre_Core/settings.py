@@ -80,7 +80,7 @@ class Settings:
             if not info:
                 continue
 
-            value: str | int | bool | Path = info.username if info.username is not None else ""
+            value = info.username if info.username is not None else ""
 
             if kee_title == "FIELD_SEPARATOR" and (not value or len(value) != 1):
                 log(f"Invalid field separator '{value}', using default ';'", logging.WARNING)
@@ -131,9 +131,10 @@ class Settings:
     def save(self) -> bool:
         self.open_db()
 
+        assert self.kee.db is not None
         for kee_title, attr_name in self._params.items():
-            info: Entry = self.kee.db.find_entries(title=kee_title, group=self.kee_grp, first=True)  # type: ignore
-            if not info:
+            info = self.kee.db.find_entries(title=kee_title, group=self.kee_grp, first=True)
+            if not isinstance(info, Entry):
                 info = self.kee.db.add_entry(self.kee_grp, kee_title, username="", password="")
 
             value = getattr(self, attr_name)

@@ -3,7 +3,8 @@ from collections.abc import Callable
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
 
-from Pytre_Core import settings, users
+from Pytre_Core.settings import Settings
+from Pytre_Core.users import User
 from Pytre_Core.sql_query.converter import SqlTypeConverter
 
 # Patterns for parsing SQL parameters when SqlParam is initializated
@@ -18,16 +19,16 @@ DECLARE_EXTRACT_PATTERN = re.compile(r"^(DECLARE[^;]*;)", re.MULTILINE | re.DOTA
 
 
 class SqlParam:
-    def __init__(self, settings: settings.Settings, user: users.User, sql_declare: str):
+    def __init__(self, settings: Settings, user: User, sql_declare: str):
         self.sql_declare = sql_declare
 
-        app_settings: settings.Settings = settings
+        app_settings: Settings = settings
         self.converter = SqlTypeConverter(
             date_display=app_settings.date_format,
             decimal_separator=app_settings.decimal_separator,
         )  # object to convert string to value or value to string
 
-        self.user: users.User = user
+        self.user: User = user
 
         self.var_name: str = ""
         self.type_name: str = ""
@@ -268,7 +269,7 @@ class SqlParam:
 
 
 class SqlParameters:
-    def __init__(self, settings: settings.Settings, user: users.User, file_content: str):
+    def __init__(self, settings: Settings, user: User, file_content: str):
         self.settings = settings
         self.user = user
         self.params: dict[str, SqlParam] = self._parse_declare(file_content)

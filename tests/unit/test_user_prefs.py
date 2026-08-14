@@ -95,7 +95,7 @@ def test_set_invalid_key_raises_typeerror():
     prefs = UserPrefs()
 
     with pytest.raises(TypeError, match="n'est pas un PrefsEnum valide"):
-        prefs.set("not_an_enum", "value", save=False)
+        prefs.set("not_an_enum", "value", save=False)  # type: ignore
 
 
 @pytest.mark.unit
@@ -104,7 +104,7 @@ def test_get_invalid_key_raises_typeerror():
     prefs = UserPrefs()
 
     with pytest.raises(TypeError, match="n'est pas un PrefsEnum valide"):
-        prefs.get("not_an_enum")
+        prefs.get("not_an_enum")  # type: ignore
 
 
 # ================================================================================

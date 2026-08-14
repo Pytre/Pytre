@@ -3,6 +3,7 @@ Tests for Pytre/sql_query/query_execute.py
 """
 
 import pytest
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
 
@@ -115,7 +116,7 @@ def test_load_infos_raises_if_extract_file_exists(exec_app_ctx, exec_user_ctx, b
     qe = QueryExecute(exec_app_ctx, exec_user_ctx)
     existing = tmp_path / "existing.csv"
     existing.write_text("data")
-    config = ExecuteConfig(**{**base_config.__dict__, "extract_file": existing})
+    config = replace(base_config, extract_file=existing)
 
     with pytest.raises(FileExistsError):
         qe.load_infos(config)
@@ -124,7 +125,7 @@ def test_load_infos_raises_if_extract_file_exists(exec_app_ctx, exec_user_ctx, b
 @pytest.mark.unit
 def test_load_infos_returns_false_if_server_not_found(exec_app_ctx, exec_user_ctx, base_config):
     qe = QueryExecute(exec_app_ctx, exec_user_ctx)
-    config = ExecuteConfig(**{**base_config.__dict__, "server_id": "UNKNOWN"})
+    config = replace(base_config, server_id="UNKNOWN")
 
     assert qe.load_infos(config) is False
 
@@ -132,7 +133,7 @@ def test_load_infos_returns_false_if_server_not_found(exec_app_ctx, exec_user_ct
 @pytest.mark.unit
 def test_load_infos_returns_false_if_no_command(exec_app_ctx, exec_user_ctx, base_config):
     qe = QueryExecute(exec_app_ctx, exec_user_ctx)
-    config = ExecuteConfig(**{**base_config.__dict__, "cmd_template": ""})
+    config = replace(base_config, cmd_template="")
 
     assert qe.load_infos(config) is False
 
@@ -149,7 +150,7 @@ def test_load_infos_succeeds(exec_app_ctx, exec_user_ctx, base_config):
 @pytest.mark.unit
 def test_execute_returns_error_if_load_infos_fails(exec_app_ctx, exec_user_ctx, base_config):
     qe = QueryExecute(exec_app_ctx, exec_user_ctx)
-    bad_config = ExecuteConfig(**{**base_config.__dict__, "server_id": "UNKNOWN"})
+    bad_config = replace(base_config, server_id="UNKNOWN")
 
     result = qe.execute(bad_config)
 
@@ -196,6 +197,7 @@ def test_execute_returns_list_when_no_extract_file(exec_app_ctx, exec_user_ctx, 
     rows_count, output = qe.execute(base_config)
 
     assert rows_count == 2
+    assert isinstance(output, list)
     assert output[0] == ["col1", "col2"]
     assert len(output) == 3  # header + 2 rows
 
@@ -206,7 +208,7 @@ def test_execute_writes_to_file_and_logs(exec_app_ctx, exec_user_ctx, base_confi
     mock_cursor.__iter__ = Mock(return_value=iter([("a", 1)]))
 
     extract_file = tmp_path / "out.csv"
-    config = ExecuteConfig(**{**base_config.__dict__, "extract_file": extract_file})
+    config = replace(base_config, extract_file=extract_file)
 
     rows_count, output_path = qe.execute(config)
 
@@ -222,7 +224,7 @@ def test_execute_removes_file_on_permission_error(exec_app_ctx, exec_user_ctx, b
     mock_cursor.__iter__ = Mock(return_value=iter([("a", 1)]))
 
     extract_file = tmp_path / "out.csv"
-    config = ExecuteConfig(**{**base_config.__dict__, "extract_file": extract_file})
+    config = replace(base_config, extract_file=extract_file)
 
     with patch.object(qe, "_extract_to_file", side_effect=PermissionError()):
         result = qe.execute(config)
@@ -235,7 +237,7 @@ def test_execute_removes_file_on_permission_error(exec_app_ctx, exec_user_ctx, b
 def test_execute_handles_file_not_found_error(exec_app_ctx, exec_user_ctx, base_config, tmp_path):
     qe = QueryExecute(exec_app_ctx, exec_user_ctx)
     extract_file = tmp_path / "sub" / "out.csv"
-    config = ExecuteConfig(**{**base_config.__dict__, "extract_file": extract_file})
+    config = replace(base_config, extract_file=extract_file)
 
     with patch.object(qe, "_extract_to_file", side_effect=FileNotFoundError("[Errno 2] No such file or directory")):
         result = qe.execute(config)
@@ -250,7 +252,7 @@ def test_execute_end_writes_user_log_and_central_log_if_enabled(exec_app_ctx, ex
 
     qe = QueryExecute(exec_app_ctx, exec_user_ctx)
     qe.load_infos(base_config)
-    qe.queue = queue_module.Queue()  # avoid multiprocessing.Queue's async pickling for this in-process check
+    qe.queue = queue_module.Queue()  # type: ignore  # avoid multiprocessing.Queue's async pickling for this in-process check
     exec_app_ctx.settings.logs_are_on = True
 
     start = datetime(2026, 1, 1, 10, 0, 0)
@@ -272,7 +274,7 @@ def test_execute_end_skips_central_log_if_disabled(exec_app_ctx, exec_user_ctx, 
 
     qe = QueryExecute(exec_app_ctx, exec_user_ctx)
     qe.load_infos(base_config)
-    qe.queue = queue_module.Queue()
+    qe.queue = queue_module.Queue()  # type: ignore
     exec_app_ctx.settings.logs_are_on = False
 
     qe._execute_end(datetime(2026, 1, 1), datetime(2026, 1, 1, 0, 0, 1), 1)
@@ -310,7 +312,7 @@ def test_extract_to_file_falls_back_on_invalid_encoding(exec_app_ctx, exec_user_
     qe = QueryExecute(exec_app_ctx, exec_user_ctx)
     qe.server = exec_app_ctx.servers.servers_dict["SRV1"]
     extract_file = tmp_path / "out.csv"
-    qe.config = ExecuteConfig(**{**base_config.__dict__, "extract_file": extract_file})
+    qe.config = replace(base_config, extract_file=extract_file)
     mock_cursor.__iter__ = Mock(return_value=iter([("a", 1)]))
 
     rows_count, path = qe._extract_to_file(mock_cursor, "not-a-real-encoding")
@@ -324,7 +326,7 @@ def test_extract_to_file_removes_empty_file(exec_app_ctx, exec_user_ctx, base_co
     qe = QueryExecute(exec_app_ctx, exec_user_ctx)
     qe.server = exec_app_ctx.servers.servers_dict["SRV1"]
     extract_file = tmp_path / "out.csv"
-    qe.config = ExecuteConfig(**{**base_config.__dict__, "extract_file": extract_file})
+    qe.config = replace(base_config, extract_file=extract_file)
     mock_cursor.__iter__ = Mock(return_value=iter([]))
 
     rows_count, path = qe._extract_to_file(mock_cursor, "utf-8-sig")
@@ -338,7 +340,7 @@ def test_extract_to_file_stops_if_requested(exec_app_ctx, exec_user_ctx, base_co
     qe = QueryExecute(exec_app_ctx, exec_user_ctx)
     qe.server = exec_app_ctx.servers.servers_dict["SRV1"]
     extract_file = tmp_path / "out.csv"
-    qe.config = ExecuteConfig(**{**base_config.__dict__, "extract_file": extract_file})
+    qe.config = replace(base_config, extract_file=extract_file)
     mock_cursor.__iter__ = Mock(return_value=iter([("a", 1), ("b", 2)]))
     qe.stop_requested.set()
 

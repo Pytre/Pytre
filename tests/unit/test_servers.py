@@ -11,7 +11,7 @@ import csv
 from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
 
-from Pytre_Core.servers import Servers, filter_servers
+from Pytre_Core.servers import Server, Servers, filter_servers
 
 
 # ================================================================================
@@ -539,7 +539,7 @@ def test_get_all_servers_without_filter_keeps_full_list_on_attribute(mock_kee):
 @pytest.mark.unit
 def test_filter_servers_returns_same_dict_when_filter_is_none():
     server1 = Mock(id="SRV1", grp_authorized=["admin"])
-    servers_dict = {"SRV1": server1}
+    servers_dict: dict[str, Server] = {"SRV1": server1}
 
     result = filter_servers(servers_dict, None)
 
@@ -549,7 +549,7 @@ def test_filter_servers_returns_same_dict_when_filter_is_none():
 @pytest.mark.unit
 def test_filter_servers_includes_server_with_no_restriction():
     server1 = Mock(id="SRV1", grp_authorized=[])
-    servers_dict = {"SRV1": server1}
+    servers_dict: dict[str, Server] = {"SRV1": server1}
 
     result = filter_servers(servers_dict, ["admin"])
 
@@ -559,7 +559,7 @@ def test_filter_servers_includes_server_with_no_restriction():
 @pytest.mark.unit
 def test_filter_servers_includes_server_with_matching_group():
     server1 = Mock(id="SRV1", grp_authorized=["admin", "users"])
-    servers_dict = {"SRV1": server1}
+    servers_dict: dict[str, Server] = {"SRV1": server1}
 
     result = filter_servers(servers_dict, ["admin"])
 
@@ -569,7 +569,7 @@ def test_filter_servers_includes_server_with_matching_group():
 @pytest.mark.unit
 def test_filter_servers_excludes_server_without_matching_group():
     server1 = Mock(id="SRV1", grp_authorized=["restricted"])
-    servers_dict = {"SRV1": server1}
+    servers_dict: dict[str, Server] = {"SRV1": server1}
 
     result = filter_servers(servers_dict, ["admin"])
 
@@ -581,7 +581,7 @@ def test_filter_servers_handles_mixed_set():
     allowed = Mock(id="SRV1", grp_authorized=["admin"])
     unrestricted = Mock(id="SRV2", grp_authorized=[])
     denied = Mock(id="SRV3", grp_authorized=["restricted"])
-    servers_dict = {"SRV1": allowed, "SRV2": unrestricted, "SRV3": denied}
+    servers_dict: dict[str, Server] = {"SRV1": allowed, "SRV2": unrestricted, "SRV3": denied}
 
     result = filter_servers(servers_dict, ["admin"])
 
@@ -1071,7 +1071,7 @@ def test_server_save_rejects_non_numeric_timeout(mock_kee):
     servers = Servers(mock_kee)
     server = Server(servers)
     server.id = "NEW_SERVER"
-    server.timeout = "not_a_number"
+    server.timeout = "not_a_number"  # type: ignore
 
     with pytest.raises(ValueError, match="timeout doit être un nombre"):
         server.save()
@@ -1085,7 +1085,7 @@ def test_server_save_rejects_non_numeric_login_timeout(mock_kee):
     servers = Servers(mock_kee)
     server = Server(servers)
     server.id = "NEW_SERVER"
-    server.login_timeout = "not_a_number"
+    server.login_timeout = "not_a_number"  # type: ignore
 
     with pytest.raises(ValueError, match="login_timeout doit être un nombre"):
         server.save()

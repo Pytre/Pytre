@@ -91,7 +91,7 @@ def test_validate_path_rejects_empty_string():
 def test_validate_path_rejects_none():
     """None filename should raise ValueError"""
     with pytest.raises(ValueError, match="cannot be empty"):
-        validate_path(None)
+        validate_path(None)  # type: ignore
 
 
 @pytest.mark.security

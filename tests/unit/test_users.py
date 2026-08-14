@@ -1217,7 +1217,7 @@ def test_user_load_from_entry_returns_false_for_falsy_entry(mock_kee):
     users = Users(mock_kee)
     user = User(users, detect_user=False)
 
-    assert user._load_from_entry(None) is False
+    assert user._load_from_entry(None) is False  # type: ignore
     assert user.exists is False
 
 

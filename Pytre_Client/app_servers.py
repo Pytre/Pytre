@@ -1,4 +1,5 @@
 import tkinter as tk
+from dataclasses import dataclass
 from tkinter import ttk, Event, filedialog, messagebox
 from collections.abc import Iterator
 
@@ -11,6 +12,13 @@ import Pytre_Client.ui_utils as ui_utils
 from Pytre_Client.app_theme import set_theme, set_menus, ThemeColors, theme_is_on
 from Pytre_Client.InputDialog import InputDialog
 from Pytre_Client.ui_utils_csv import CsvTaskConfig, csv_process_async
+
+
+@dataclass(frozen=True)
+class WidgetGroup:
+    w_label: ttk.Label
+    w_entry: ttk.Widget
+    var: tk.StringVar
 
 
 class ServersWindow(tk.Toplevel):
@@ -129,7 +137,7 @@ class ServersWindow(tk.Toplevel):
         self.type_box.grid(row=0, column=1, columnspan=2, padx=2, pady=2, sticky="nswe")
 
     def _setup_entries(self):
-        self.entries = {}
+        self.entries: dict[str, WidgetGroup] = {}
         num_row = 1
         for key in self.servers.cols_std + self.servers.cols_cust:
             if key in ("uuid", "type", "grp_authorized"):
@@ -139,7 +147,7 @@ class ServersWindow(tk.Toplevel):
             my_tk_var = tk.StringVar()
             my_entry = ttk.Entry(self.entries_frame, textvariable=my_tk_var)
 
-            self.entries[key] = {"w_label": my_label, "w_entry": my_entry, "var": my_tk_var}
+            self.entries[key] = WidgetGroup(w_label=my_label, w_entry=my_entry, var=my_tk_var)
 
             my_label.grid(row=num_row, column=0, padx=2, pady=2, sticky="nswe")
 
@@ -265,9 +273,9 @@ class ServersWindow(tk.Toplevel):
 
         self.type_box.set(ServerType[self.server.type].value)
 
-        for key in self.entries.keys():
+        for key, w_group in self.entries.items():
             val = getattr(self.server, key)
-            self.entries[key]["var"].set(val)
+            w_group.var.set(val)
 
         self.groups_set()
 
@@ -380,7 +388,7 @@ class ServersWindow(tk.Toplevel):
         if self.server is None:
             raise RuntimeError("No server selected !")
 
-        server_id = self.entries["id"]["var"].get()
+        server_id = self.entries["id"].var.get()
 
         # vérifications avant enregistrement
         if not server_id:
@@ -396,7 +404,7 @@ class ServersWindow(tk.Toplevel):
         self.server.type = ServerType(self.type_box.get()).name
 
         for key in self.entries.keys():
-            val = self.entries[key]["var"].get()
+            val = self.entries[key].var.get()
             setattr(self.server, key, val)
 
         self.server.grp_authorized = [self.listbox.get(line) for line in self.listbox.curselection()]

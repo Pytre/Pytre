@@ -1,8 +1,9 @@
 import logging
 from pathlib import Path
 
-from Pytre_Core import servers, users
 from Pytre_Core.context import AppContext, UserContext
+from Pytre_Core.servers import Servers, Server
+from Pytre_Core.users import User
 from Pytre_Core.sql_query.file_parser import FileParser
 from Pytre_Core.sql_query.query import Query
 from Pytre_Core.sql_query.log_utils import log as _log
@@ -72,12 +73,12 @@ def get_queries(app_ctx: AppContext, user_ctx: UserContext, folder: Path) -> tup
     return queries, load_errors + build_errors
 
 
-def filter_queries(servers: servers.Servers, queries: list[Query], server_id: str, user: users.User) -> list[Query]:
+def filter_queries(servers: Servers, queries: list[Query], server_id: str, user: User) -> list[Query]:
     filtered: list[Query] = []
 
     # check if user is authorized for server
-    all_servers: servers.Servers = servers
-    server: servers.Server | None = all_servers.servers_dict.get(server_id, None)
+    all_servers: Servers = servers
+    server: Server | None = all_servers.servers_dict.get(server_id, None)
     if server is None:
         return []
     if not user.admin:

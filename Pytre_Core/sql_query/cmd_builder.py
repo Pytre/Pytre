@@ -2,7 +2,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-from Pytre_Core import settings
+from Pytre_Core.settings import Settings
 from Pytre_Core.user_prefs import UserPrefs, PrefsEnum
 from Pytre_Core.sql_query.parameters import SqlParam, SqlParameters
 from Pytre_Core.sql_query.execute_config import ExecuteConfig
@@ -11,8 +11,8 @@ REPLACE_PARAM_PATTERN = re.compile(r"(?<![\d\w#_\$@])(@[\d\w#_\$@]+)")  # for cm
 
 
 class CmdBuilder:
-    def __init__(self, settings: settings.Settings, user_prefs: UserPrefs, raw_cmd: str, parameters: SqlParameters):
-        self.settings: settings.Settings = settings
+    def __init__(self, settings: Settings, user_prefs: UserPrefs, raw_cmd: str, parameters: SqlParameters):
+        self.settings: Settings = settings
         self.user_prefs: UserPrefs = user_prefs
         self.raw_cmd: str = raw_cmd
         self.parameters: SqlParameters = parameters

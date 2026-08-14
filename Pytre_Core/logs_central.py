@@ -390,8 +390,6 @@ class FileDriven(CentralLogs):
 
         log(f"Starting processing {len(files_to_process)} file(s)")
 
-        rows_values: list = []
-        processed_files: list[Path] = []
         rows_values, processed_files = self.files_extract_infos(list(files_to_process))
 
         if rows_values:
@@ -454,7 +452,7 @@ class FileDriven(CentralLogs):
         for file in processed_files:
             file.rename(active_folder / file.name)
 
-    def insert_into_central_db(self, rows_values: list[tuple]) -> bool:
+    def insert_into_central_db(self, rows_values: list[str]) -> bool:
         if self.stop_event.is_set():
             return False
 

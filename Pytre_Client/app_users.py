@@ -1,6 +1,7 @@
 import logging
 import tkinter as tk
-from tkinter import ttk, Event, font, messagebox, filedialog
+from dataclasses import dataclass
+from tkinter import StringVar, ttk, Event, font, messagebox, filedialog
 from threading import Thread
 from queue import Queue
 from collections.abc import Iterator
@@ -20,6 +21,14 @@ from Pytre_Client.ui_utils_csv import CsvTaskConfig, csv_process_async
 
 def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__) -> None:
     utils.log(msg, level=level, sublogger=sublogger)
+
+
+@dataclass(frozen=True)
+class WidgetGroup:
+    caption: str
+    w_label: ttk.Label
+    w_entry: ttk.Widget
+    var: tk.Variable
 
 
 class UsersWindow(tk.Toplevel):
@@ -411,9 +420,7 @@ class UsersWindow(tk.Toplevel):
         else:
             msg = f"Confirmation de la suppression de {len(items)} utilisateurs"
 
-        if "ok" != messagebox.Message(
-            title="Suppression", message=msg, parent=self, icon=messagebox.WARNING, type=messagebox.OKCANCEL
-        ):
+        if not messagebox.askokcancel(title="Suppression", message=msg, parent=self, icon=messagebox.WARNING):
             return False
 
         return True
@@ -553,18 +560,19 @@ class UserDialog(tk.Toplevel):
     def _setup_entries(self):
         self.entries_frame.columnconfigure(1, weight=1)
 
-        self.entries = {
-            "username": {"text": "Id"},
-            "title": {"text": "Libellé"},
-            "admin": {"text": "Admin"},
-            "msg_login": {"text": "Login Message"},
+        entries_caption: dict[str, str] = {
+            "username": "Id",
+            "title": "Libellé",
+            "admin": "Admin",
+            "msg_login": "Login Message",
         }
+        self.entries: dict[str, WidgetGroup] = {}
         for attr in self.users.attribs_cust:
-            self.entries[attr] = {"text": attr}
+            entries_caption[attr] = attr
 
         num_row = 0
-        for key, item in self.entries.items():
-            my_label = ttk.Label(self.entries_frame, text=item["text"] + " : ")
+        for key, caption in entries_caption.items():
+            my_label = ttk.Label(self.entries_frame, text=caption + " : ")
 
             if key == "admin":
                 my_tk_var = tk.BooleanVar()
@@ -573,8 +581,7 @@ class UserDialog(tk.Toplevel):
                 my_tk_var = tk.StringVar()
                 my_entry = ttk.Entry(self.entries_frame, textvariable=my_tk_var)
 
-            new_key = {"w_label": my_label, "w_entry": my_entry, "var": my_tk_var}
-            item.update(new_key)
+            self.entries[key] = WidgetGroup(caption=caption, w_label=my_label, w_entry=my_entry, var=my_tk_var)
 
             my_label.grid(row=num_row, column=0, padx=2, pady=2, sticky="nswe")
             my_entry.grid(row=num_row, column=1, padx=2, pady=2, sticky="nswe")
@@ -620,14 +627,13 @@ class UserDialog(tk.Toplevel):
         if self.user is None:
             raise RuntimeError("No user selected !")
 
-        for key, item in self.entries.items():
+        for key, w_group in self.entries.items():
             if key in self.users.attribs_cust:
                 val = self.user.attribs_cust.get(key, "")
             else:
                 val = getattr(self.user, key, "")
 
-            assert isinstance(item["var"], tk.Variable)
-            item["var"].set(val)
+            w_group.var.set(val)
 
     def groups_set(self):
         for group in sorted(self.parent.groups):
@@ -651,9 +657,8 @@ class UserDialog(tk.Toplevel):
         overlay = MsgOverlay.display(self, "Enregistrement en cours...", 0)
 
         # mise à jour des infos de l'utilisateur
-        for key, item in self.entries.items():
-            assert isinstance(item["var"], tk.Variable)
-            val = item["var"].get()
+        for key, w_group in self.entries.items():
+            val = w_group.var.get()
             if key in self.users.attribs_cust:
                 user.attribs_cust[key] = val
             else:

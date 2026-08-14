@@ -5,6 +5,9 @@ datas = [('Pytre_Core/res', 'res')]
 binaries = []
 hiddenimports = ['pymssql', 'uuid']
 
+tmp_ret = collect_all('keyring')
+binaries += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+
 tmp_ret = collect_all('pymssql')
 binaries += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
@@ -18,7 +21,7 @@ binaries += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 block_cipher = None
 
 a = Analysis(['Pytre_Client/__main__.py'],
-             pathex=['Pytre_Client', 'Pytre_Core'],
+             pathex=['.'],
              binaries=binaries,
              datas=datas,
              hiddenimports=hiddenimports,
@@ -48,12 +51,3 @@ exe = EXE(pyz,
           runtime_tmpdir=None,
           console=False,
           icon='Pytre_Core/res/app.ico')
-
-coll = COLLECT(exe,
-               a.binaries,
-               a.zipfiles,
-               a.datas, 
-               strip=False,
-               upx=True,
-               upx_exclude=[],
-               name='pytre_build')

@@ -2,7 +2,7 @@
 Tests for Pytre/user_prefs.py
 
 REGRESSION TESTS:
-- Issue 2.1: Input validation in user preferences (folder paths)
+- Input validation in user preferences (folder paths)
 """
 
 import pytest
@@ -33,14 +33,14 @@ def isolated_paths(tmp_path, monkeypatch):
 
 
 # ================================================================================
-# REGRESSION TESTS - Issue 2.1: Input Validation
+# REGRESSION TESTS - Input Validation
 # ================================================================================
 
 
 @pytest.mark.regression
 def test_set_save_as_folder_validates_path(tmp_path):
     """
-    Regression test for Issue 2.1 - save_as_folder must be valid directory
+    Regression test: save_as_folder must be valid directory
 
     If path doesn't exist or isn't a directory, should fallback to home.
     """
@@ -319,6 +319,7 @@ def test_set_only_saves_if_changed(tmp_path, monkeypatch):
 
     # Wait a tiny bit
     import time
+
     time.sleep(0.01)
 
     # Set same value again
@@ -437,3 +438,5 @@ def test_legacy_cache_folder_equal_to_config_folder_triggers_migration(isolated_
     assert not old_export.exists(), "the CSV should have been moved out of CONFIG_FOLDER"
     assert (cache_folder / "old_export.csv").exists(), "the CSV should now live in the cache folder"
     assert prefs.get(PrefsEnum.cache_folder) == cache_folder
+
+

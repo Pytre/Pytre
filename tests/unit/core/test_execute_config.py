@@ -6,4 +6,4 @@ QueryExecute's tests (see test_query_execute.py), which construct and mutate it
 extensively. No dedicated standalone tests existed for it in the original test suite.
 """
 
-from Pytre_Core.sql_query.execute_config import ExecuteConfig  # noqa: F401
+from Pytre_Core.sql_query.execute_config import LocalExecuteCfg  # noqa: F401

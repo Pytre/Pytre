@@ -2,8 +2,8 @@
 Tests for Pytre/servers.py
 
 REGRESSION TESTS:
-- Issue 2.1: CSV import validation (delimiter, quotechar, file existence)
-- Issue 4.1: Optimized list search with generators (csv_import line 96)
+- CSV import validation (delimiter, quotechar, file existence)
+- Optimized list search with generators (csv_import line 96)
 """
 
 import pytest
@@ -47,14 +47,14 @@ TEST_PG;Test PostgreSQL;postgres;password;users;PostgreSQL;utf8;testdb;localhost
 
 
 # ================================================================================
-# REGRESSION TESTS - Issue 2.1: CSV Import Validation
+# REGRESSION TESTS - CSV Import Validation
 # ================================================================================
 
 
 @pytest.mark.regression
 def test_csv_import_validates_delimiter(mock_kee):
     """
-    Regression test for Issue 2.1 - delimiter must be valid
+    Regression test: delimiter must be valid
 
     Delimiter must be single character and different from quotechar.
     """
@@ -102,14 +102,14 @@ def test_csv_import_validates_required_columns(tmp_path, mock_kee):
 
 
 # ================================================================================
-# REGRESSION TESTS - Issue 4.1: Optimized Search
+# REGRESSION TESTS - Optimized Search
 # ================================================================================
 
 
 @pytest.mark.regression
 def test_csv_import_uses_generator_for_search(tmp_path, mock_kee):
     """
-    Regression test for Issue 4.1 - use generator with next()
+    Regression test: use generator with next()
 
     The search for existing entry uses next() with generator
     expression for early termination (line 96).
@@ -911,75 +911,6 @@ def test_find_entry_by_uuid_returns_none_if_not_found(mock_kee):
 
 
 # ================================================================================
-# Server.get_connection / _conn_mssql / _conn_postgre
-# ================================================================================
-
-
-@pytest.mark.unit
-def test_get_connection_mssql_calls_pymssql_connect():
-    """get_connection should build an mssql connection for type 'mssql'"""
-    from Pytre_Core.servers import Server, ServerType
-
-    server = Server(Mock())
-    server.type = ServerType.mssql.name
-    server.server = "SRV"
-    server.host = "localhost"
-    server.user = "sa"
-    server.password = "pwd"
-    server.database = "db"
-
-    fake_conn = Mock()
-    with patch("Pytre_Core.servers.pymssql.connect", return_value=fake_conn) as mock_connect:
-        result = server.get_connection()
-
-    assert result is fake_conn
-    assert mock_connect.call_args.kwargs["user"] == "sa"
-    assert mock_connect.call_args.kwargs["database"] == "db"
-    assert mock_connect.call_args.kwargs["read_only"] is True
-
-
-@pytest.mark.unit
-def test_get_connection_postgre_calls_psycopg2_connect():
-    """get_connection should build a postgres connection for type 'postgre'"""
-    from Pytre_Core.servers import Server, ServerType
-
-    server = Server(Mock())
-    server.type = ServerType.postgre.name
-    server.server = "SRV"
-    server.host = "localhost"
-    server.user = "postgres"
-    server.password = "pwd"
-    server.database = "db"
-    server.timeout = 30
-
-    fake_cursor = Mock()
-    fake_conn = Mock()
-    fake_conn.cursor = Mock(return_value=fake_cursor)
-
-    with patch("Pytre_Core.servers.psycopg2.connect", return_value=fake_conn) as mock_connect:
-        result = server.get_connection()
-
-    assert result is fake_conn
-    assert mock_connect.call_args.kwargs["user"] == "postgres"
-    assert mock_connect.call_args.kwargs["dbname"] == "db"
-    # statement_timeout is set in milliseconds
-    fake_cursor.execute.assert_any_call("SET statement_timeout = %s", (30000,))
-    fake_cursor.close.assert_called_once()
-
-
-@pytest.mark.unit
-def test_get_connection_unknown_type_raises_error():
-    """get_connection should raise ValueError for an unknown server type"""
-    from Pytre_Core.servers import Server
-
-    server = Server(Mock())
-    server.type = "unknown_type"
-
-    with pytest.raises(ValueError, match="Unknown server type"):
-        server.get_connection()
-
-
-# ================================================================================
 # Server.reload / save / delete
 # ================================================================================
 
@@ -1319,56 +1250,3 @@ def test_load_from_entry_defaults_charset_for_postgre(mock_kee):
     assert server.charset == "UTF8"
 
 
-# ================================================================================
-# Connection error handling
-# ================================================================================
-
-
-@pytest.mark.unit
-def test_conn_mssql_raises_server_connection_error():
-    """_conn_mssql should convert pymssql.OperationalError into ServerConnectionError"""
-    from Pytre_Core.servers import Server, ServerType, ServerConnectionError
-    import pymssql
-
-    server = Server(Mock())
-    server.type = ServerType.mssql.name
-
-    with patch(
-        "Pytre_Core.servers.pymssql.connect",
-        side_effect=pymssql._pymssql.OperationalError((1, b"connection failed")),
-    ):
-        with pytest.raises(ServerConnectionError, match="connection failed"):
-            server.get_connection()
-
-
-@pytest.mark.unit
-def test_conn_postgre_raises_server_connection_error():
-    """_conn_postgre should convert psycopg2.OperationalError into ServerConnectionError"""
-    from Pytre_Core.servers import Server, ServerType, ServerConnectionError
-    import psycopg2
-
-    server = Server(Mock())
-    server.type = ServerType.postgre.name
-
-    with patch("Pytre_Core.servers.psycopg2.connect", side_effect=psycopg2.OperationalError("boom")):
-        with pytest.raises(ServerConnectionError, match="boom"):
-            server.get_connection()
-
-
-@pytest.mark.unit
-def test_conn_postgre_converts_unicode_decode_error():
-    """_conn_postgre should convert UnicodeDecodeError into a ServerConnectionError"""
-    from Pytre_Core.servers import Server, ServerType, ServerConnectionError
-
-    server = Server(Mock())
-    server.type = ServerType.postgre.name
-
-    unicode_err = UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
-    fake_cursor = Mock()
-    fake_cursor.execute = Mock(side_effect=unicode_err)
-    fake_conn = Mock()
-    fake_conn.cursor = Mock(return_value=fake_cursor)
-
-    with patch("Pytre_Core.servers.psycopg2.connect", return_value=fake_conn):
-        with pytest.raises(ServerConnectionError):
-            server.get_connection()

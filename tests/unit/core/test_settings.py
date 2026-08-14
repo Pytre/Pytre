@@ -2,8 +2,8 @@
 Tests for Pytre/settings.py
 
 REGRESSION TESTS:
-- Issue 2.1: Input validation for field_separator, decimal_separator, paths
-- Issue 3.2: Kee initialized in __init__ (not at class level)
+- Input validation for field_separator, decimal_separator, paths
+- Kee initialized in __init__ (not at class level)
 """
 
 import pytest
@@ -42,14 +42,14 @@ def mock_kee_entry():
 
 
 # ================================================================================
-# REGRESSION TESTS - Issue 3.2: Dependency Injection
+# REGRESSION TESTS - Dependency Injection
 # ================================================================================
 
 
 @pytest.mark.regression
 def test_kee_injected_via_constructor(mock_kee):
     """
-    Regression test for Issue 3.2 - Kee is injected via the constructor
+    Regression test: Kee is injected via the constructor
 
     Settings no longer constructs its own Kee (removed with the singleton
     pattern) - the caller (AppContext) builds and passes it in.
@@ -60,14 +60,14 @@ def test_kee_injected_via_constructor(mock_kee):
 
 
 # ================================================================================
-# REGRESSION TESTS - Issue 2.1: Input Validation
+# REGRESSION TESTS - Input Validation
 # ================================================================================
 
 
 @pytest.mark.regression
 def test_field_separator_validates_length(mock_kee):
     """
-    Regression test for Issue 2.1 - field_separator must be single char
+    Regression test: field_separator must be single char
 
     If invalid, should use default ';'
     """
@@ -97,7 +97,7 @@ def test_field_separator_empty_uses_default(mock_kee):
 @pytest.mark.regression
 def test_decimal_separator_validates_length(mock_kee):
     """
-    Regression test for Issue 2.1 - decimal_separator must be single char
+    Regression test: decimal_separator must be single char
     """
 
     def mock_find_entries(title, group, first):
@@ -121,7 +121,7 @@ def test_decimal_separator_validates_length(mock_kee):
 @pytest.mark.regression
 def test_decimal_separator_cannot_equal_field_separator(mock_kee):
     """
-    Regression test for Issue 2.1 - separators must be different
+    Regression test: separators must be different
     """
 
     def mock_find_entries(title, group, first):
@@ -146,7 +146,7 @@ def test_decimal_separator_cannot_equal_field_separator(mock_kee):
 @pytest.mark.regression
 def test_queries_folder_validates_exists(mock_kee, tmp_path):
     """
-    Regression test for Issue 2.1 - queries_folder must exist
+    Regression test: queries_folder must exist
 
     If path doesn't exist, should use default.
     """
@@ -235,6 +235,75 @@ def test_extract_encoding_invalid_uses_default(mock_kee):
 
 
 # ================================================================================
+# Folder Validation
+# ================================================================================
+
+
+@pytest.mark.unit
+def test_validate_folder_valid(mock_kee, tmp_path):
+    """Should accept an existing directory"""
+    settings = Settings(mock_kee)
+
+    assert settings._validate_folder(tmp_path) is True
+
+
+@pytest.mark.unit
+def test_validate_folder_invalid_raises_error(mock_kee, tmp_path):
+    """Should reject a path that doesn't exist"""
+    settings = Settings(mock_kee)
+    nonexistent = tmp_path / "nonexistent"
+
+    with pytest.raises(ValueError, match="Folder doesn't exist"):
+        settings._validate_folder(nonexistent)
+
+
+@pytest.mark.unit
+def test_save_queries_folder_invalid_raises_error(mock_kee, tmp_path):
+    """save() should raise if queries_folder doesn't exist, regardless of logs_are_on"""
+    mock_entry = Mock()
+    mock_entry.username = ""
+    mock_kee.db.find_entries = Mock(return_value=mock_entry)
+
+    settings = Settings(mock_kee)
+    settings.queries_folder = tmp_path / "nonexistent"
+
+    with pytest.raises(ValueError, match="Folder doesn't exist"):
+        settings.save()
+
+
+@pytest.mark.unit
+def test_save_logs_folder_invalid_raises_error_when_logs_are_on(mock_kee, tmp_path):
+    """save() should raise if logs_folder doesn't exist while logs_are_on is True"""
+    mock_entry = Mock()
+    mock_entry.username = ""
+    mock_kee.db.find_entries = Mock(return_value=mock_entry)
+
+    settings = Settings(mock_kee)
+    settings.queries_folder = tmp_path  # valid - isolates the assertion to logs_folder
+    settings.logs_are_on = True
+    settings.logs_folder = tmp_path / "nonexistent"
+
+    with pytest.raises(ValueError, match="Folder doesn't exist"):
+        settings.save()
+
+
+@pytest.mark.unit
+def test_save_logs_folder_invalid_does_not_raise_when_logs_are_off(mock_kee, tmp_path):
+    """An invalid logs_folder must not block saving while logs are disabled - it has no runtime
+    effect in that case."""
+    mock_entry = Mock()
+    mock_entry.username = ""
+    mock_kee.db.find_entries = Mock(return_value=mock_entry)
+
+    settings = Settings(mock_kee)
+    settings.queries_folder = tmp_path  # valid
+    settings.logs_are_on = False
+    settings.logs_folder = tmp_path / "nonexistent"
+
+    assert settings.save() is True
+
+
+# ================================================================================
 # Load/Save Functionality
 # ================================================================================
 
@@ -266,7 +335,7 @@ def test_load_reads_from_keepass(mock_kee):
 
 
 @pytest.mark.unit
-def test_save_writes_to_keepass(mock_kee):
+def test_save_writes_to_keepass(mock_kee, tmp_path):
     """save() should write settings to KeePass database"""
     # Mock find_entries to return existing entries
     mock_entry = Mock()
@@ -277,6 +346,7 @@ def test_save_writes_to_keepass(mock_kee):
 
     # Change a value
     settings.field_separator = "|"
+    settings.queries_folder = tmp_path  # must exist - save() now validates it regardless of what changed
 
     # Save
     result = settings.save()
@@ -287,7 +357,7 @@ def test_save_writes_to_keepass(mock_kee):
 
 
 @pytest.mark.unit
-def test_save_creates_missing_entries(mock_kee):
+def test_save_creates_missing_entries(mock_kee, tmp_path):
     """save() should create entries that don't exist"""
     # Mock find_entries to return None (entry doesn't exist)
     mock_kee.db.find_entries = Mock(return_value=None)
@@ -299,12 +369,52 @@ def test_save_creates_missing_entries(mock_kee):
 
     settings = Settings(mock_kee)
     settings.field_separator = ";"
+    settings.queries_folder = tmp_path  # must exist - save() now validates it regardless of what changed
 
     # Save
     settings.save()
 
     # Verify add_entry was called
     assert mock_kee.db.add_entry.called
+
+
+# ================================================================================
+# JWT Secret
+# ================================================================================
+
+
+@pytest.mark.unit
+def test_jwt_secret_generated_when_missing(mock_kee):
+    """load() should generate a jwt_secret when none exists in KeePass yet"""
+    settings = Settings(mock_kee)
+
+    assert settings.jwt_secret
+    assert len(settings.jwt_secret) >= 32
+
+
+@pytest.mark.unit
+def test_jwt_secret_generation_is_persisted(mock_kee):
+    """A freshly generated jwt_secret must be saved immediately, not just kept in memory -
+    otherwise a new one would be generated (and all existing tokens invalidated) on every
+    server restart."""
+    settings = Settings(mock_kee)
+
+    assert mock_kee.save_db.called
+
+
+@pytest.mark.unit
+def test_jwt_secret_not_regenerated_when_present(mock_kee):
+    def mock_find_entries(title, group, first):
+        entry = Mock()
+        entry.username = "existing-secret-value" if title == "JWT_SECRET" else ""
+        return entry
+
+    mock_kee.db.find_entries = mock_find_entries
+
+    settings = Settings(mock_kee)
+
+    assert settings.jwt_secret == "existing-secret-value"
+    assert not mock_kee.save_db.called
 
 
 # ================================================================================

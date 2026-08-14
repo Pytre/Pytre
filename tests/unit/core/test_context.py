@@ -6,7 +6,7 @@ Kee, Settings, Servers and Users on first access, guarded by a per-attribute
 lock for thread safety.
 
 UserContext is the per-user composition root: it lazily builds and caches
-User (current user), UserPrefs and UserLogs the same way. Unlike AppContext
+User (current user), UserPrefs, UserLogs and Remotes the same way. Unlike AppContext
 it takes a Users instance directly rather than a whole context, since that's
 the only thing it actually depends on to build the current user.
 """
@@ -65,6 +65,24 @@ def test_kee_is_built_lazily_and_cached(mock_app_dependencies):
 
     mock_app_dependencies["Kee"].assert_called_once()
     assert kee1 is kee2
+
+
+@pytest.mark.unit
+def test_kee_receives_master_key(mock_app_dependencies):
+    ctx = AppContext(master_key="custom-master-key")
+
+    ctx.kee
+
+    mock_app_dependencies["Kee"].assert_called_once_with(password="custom-master-key")
+
+
+@pytest.mark.unit
+def test_kee_defaults_to_empty_master_key(mock_app_dependencies):
+    ctx = AppContext()
+
+    ctx.kee
+
+    mock_app_dependencies["Kee"].assert_called_once_with(password="")
 
 
 @pytest.mark.unit
@@ -159,15 +177,18 @@ def mock_user_dependencies():
         patch("Pytre_Core.context.User") as MockUser,
         patch("Pytre_Core.context.UserPrefs") as MockUserPrefs,
         patch("Pytre_Core.context.UserLogs") as MockUserLogs,
+        patch("Pytre_Core.context.Remotes") as MockRemotes,
     ):
         MockUser.return_value = Mock(name="current_user_instance")
         MockUserPrefs.return_value = Mock(name="user_prefs_instance")
         MockUserLogs.return_value = Mock(name="user_logs_instance")
+        MockRemotes.return_value = Mock(name="remotes_instance")
 
         yield {
             "User": MockUser,
             "UserPrefs": MockUserPrefs,
             "UserLogs": MockUserLogs,
+            "Remotes": MockRemotes,
         }
 
 
@@ -235,6 +256,28 @@ def test_user_logs_is_built_lazily_and_cached(mock_user_dependencies, mock_users
 
     mock_user_dependencies["UserLogs"].assert_called_once_with()
     assert db1 is db2
+
+
+@pytest.mark.unit
+def test_remotes_is_built_without_arguments(mock_user_dependencies, mock_users):
+    """Remotes no longer depends on UserPrefs - it manages its own dedicated storage file."""
+    ctx = UserContext(mock_users)
+
+    remotes = ctx.remotes
+
+    mock_user_dependencies["Remotes"].assert_called_once_with()
+    assert remotes is mock_user_dependencies["Remotes"].return_value
+
+
+@pytest.mark.unit
+def test_remotes_is_built_lazily_and_cached(mock_user_dependencies, mock_users):
+    ctx = UserContext(mock_users)
+
+    remotes1 = ctx.remotes
+    remotes2 = ctx.remotes
+
+    mock_user_dependencies["Remotes"].assert_called_once()
+    assert remotes1 is remotes2
 
 
 @pytest.mark.unit

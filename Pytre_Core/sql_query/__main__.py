@@ -4,6 +4,7 @@ from pathlib import Path
 from Pytre_Core import utils
 from Pytre_Core.context import AppContext, UserContext
 from Pytre_Core.sql_query.query import Query
+from Pytre_Core.sql_query.query_execute import QueryExecute
 from Pytre_Core.sql_query.loader import orphan_queries
 from Pytre_Core.sql_query.log_utils import log as _log
 
@@ -29,6 +30,8 @@ if __name__ == "__main__":
     my_query.update_values()
     log(my_query.get_exec_config())
     log(my_query.get_cmd_for_debug())
-    my_query.execute(file_output=True)
+
+    query_execute = QueryExecute(app_ctx, user_ctx, query=my_query)
+    query_execute.execute(file_output=True)
 
     orphan_queries(app_ctx, user_ctx, app_ctx.settings.queries_folder)

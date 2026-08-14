@@ -9,6 +9,7 @@ from Pytre_Core.context import AppContext, UserContext
 from Pytre_Core.sql_query.execution_msg import ExecTaskMsg, ExecResultMsg
 from Pytre_Core.sql_query.query import Query
 from Pytre_Core.sql_query.log_utils import set_log_queue, log as _log
+from Pytre_Core.sql_query.query_execute import QueryExecute
 
 
 def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__) -> None:
@@ -192,11 +193,13 @@ class ExecutionProcess:
             self.queue_result.put((ExecResultMsg.PRINT, "Query task starting"))
 
             query: Query = Query.deserialize(self.app_ctx, self.user_ctx, query_data)
-            query.query_execute.queue = self.queue_result
-            query.query_execute.stop_requested = self.stop_requested
-            query.query_execute.cannot_stop = self.cannot_stop
 
-            result = query.execute(server_id=server_id, file_output=True)
+            query_execute: QueryExecute = QueryExecute(self.app_ctx, self.user_ctx, query=query)
+            query_execute.queue = self.queue_result
+            query_execute.stop_requested = self.stop_requested
+            query_execute.cannot_stop = self.cannot_stop
+
+            result = query_execute.execute(server_id=server_id, file_output=True)
             rows_number, output_file = result
             del query
             self.queue_result.put((ExecResultMsg.RESULT, (rows_number, output_file)))

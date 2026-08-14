@@ -2,7 +2,7 @@
 Tests for Pytre/credentials.py
 
 REGRESSION TESTS:
-- Issue 1.2: Binary file mode for encryption/decryption (CRITICAL SECURITY FIX)
+- Binary file mode for encryption/decryption (CRITICAL SECURITY FIX)
 """
 
 import pytest
@@ -21,7 +21,7 @@ from Pytre_Core.credentials import (
 
 
 # ================================================================================
-# REGRESSION TESTS - Issue 1.2: Binary File Mode
+# REGRESSION TESTS - Binary File Mode
 # ================================================================================
 
 
@@ -29,7 +29,7 @@ from Pytre_Core.credentials import (
 @pytest.mark.regression
 def test_decrypt_reads_binary_mode(tmp_path, test_encryption_key):
     """
-    Regression test for Issue 1.2 - must use 'rb' not 'r'
+    Regression test: must use 'rb' not 'r'
 
     CRITICAL: decrypt_from_file() must open file in binary mode.
     Previous bug: opened in text mode, causing TypeError when decrypt() received string.
@@ -52,7 +52,7 @@ def test_decrypt_reads_binary_mode(tmp_path, test_encryption_key):
 @pytest.mark.regression
 def test_retrieve_key_reads_binary_mode(tmp_path):
     """
-    Regression test for Issue 1.2 - retrieve_key must use 'rb'
+    Regression test: retrieve_key must use 'rb'
 
     CRITICAL: Key file must be read as bytes, not string.
     """

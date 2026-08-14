@@ -2,7 +2,7 @@
 Tests for Pytre/utils.py
 
 REGRESSION TESTS:
-- Issue 1.3: Path validation to prevent subprocess injection (CRITICAL SECURITY FIX)
+- Path validation to prevent subprocess injection (CRITICAL SECURITY FIX)
 """
 
 import pytest
@@ -14,7 +14,7 @@ from Pytre_Core.utils import validate_path, startfile, showfile
 
 
 # ================================================================================
-# REGRESSION TESTS - Issue 1.3: Path Validation Security
+# REGRESSION TESTS - Path Validation Security
 # ================================================================================
 
 
@@ -22,7 +22,7 @@ from Pytre_Core.utils import validate_path, startfile, showfile
 @pytest.mark.regression
 def test_validate_path_rejects_nonexistent(tmp_path):
     """
-    Regression test for Issue 1.3 - validate before subprocess
+    Regression test: validate before subprocess
 
     CRITICAL: Must reject non-existent paths to prevent injection attacks.
     """
@@ -36,7 +36,7 @@ def test_validate_path_rejects_nonexistent(tmp_path):
 @pytest.mark.regression
 def test_validate_path_resolves_symlinks(tmp_path):
     """
-    Regression test for Issue 1.3 - must resolve symlinks
+    Regression test: must resolve symlinks
 
     CRITICAL: Must resolve symlinks to prevent path traversal attacks.
     """
@@ -62,7 +62,7 @@ def test_validate_path_resolves_symlinks(tmp_path):
 @pytest.mark.regression
 def test_validate_path_checks_permissions(tmp_path):
     """
-    Regression test for Issue 1.3 - must verify read permissions
+    Regression test: must verify read permissions
 
     CRITICAL: Must check file is readable before passing to subprocess.
     """

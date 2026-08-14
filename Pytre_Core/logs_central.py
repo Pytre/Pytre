@@ -1,26 +1,34 @@
 from __future__ import annotations
 
+
+import hashlib
+import json
 import logging
+import random
 import sqlite3
 import time
 import uuid
-import hashlib
-import json
-import random
+from collections.abc import Iterable
 from contextlib import closing
-from dataclasses import dataclass
-from os import getpid, fsync
-from socket import gethostname
+from dataclasses import dataclass, field, asdict
 from datetime import datetime
-from threading import Thread, Event
+from os import getpid, fsync
 from pathlib import Path
+from queue import Queue, Empty
+from socket import gethostname
+from threading import Thread, Event
+
 
 from Pytre_Core.logs_base import BaseLogs
 from Pytre_Core.utils import log as _log, setup_standalone_logging
 
 
-CENTRAL_DB: Path | str = "Pytre_Central_Logs.db"
+CENTRAL_DB: Path | str = "Pytre_Central_Logs.db"  # default filename for central logs database
+SERVER_DB: str = "Pytre_Server_Logs.db"  # default filename for server logs database
+SERVER_PENDING_FILE: str = "Pytre_Server_Logs.json"  # default filename for pending logs to add to server database
+
 LATEST_VERSION: int = 2  # latest version model of central database
+ENCODING: str = "utf-8"
 
 
 def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__) -> None:
@@ -28,24 +36,15 @@ def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__)
 
 
 class CentralLogs(BaseLogs):
-    def __init__(self, logs_folder: Path | str = Path.cwd() / "logs"):
-        super().__init__(Path(logs_folder) / CENTRAL_DB)
-
+    def __init__(self, logs_folder: Path | str = Path.cwd() / "logs", logs_filename: str = CENTRAL_DB):
+        super().__init__(Path(logs_folder) / logs_filename)
         self.sync_thread: Thread | None = None
         self.logs_folder: Path = Path(logs_folder)
-
-        self.user_logs: Path | None = None
-        self.user_id: str = ""
-        self.user_name: str = ""
-
-        self.temp_files: list[Path] = []
         self.stop_event: Event = Event()
-
         self.latest_version: int = LATEST_VERSION
 
     def __del__(self):
-        self.stop_sync(5)
-        self.cleanup_temp_files()
+        self.stop(5)
 
     # ------------------------------------------------------------------------------------------
     # Database management
@@ -113,24 +112,42 @@ class CentralLogs(BaseLogs):
             return False
 
     # ------------------------------------------------------------------------------------------
-    # Database select and insert sql commands
+    # Database modifications
     # ------------------------------------------------------------------------------------------
-    def sql_rows_get_unsynced(self) -> str:
-        return f"""
-            SELECT 
-                ROWID, SERVER_ID,
-                :user_id AS USER_ID, :user_name AS USER_NAME, 
-                QUERY, START, DURATION_SECS, NB_ROWS, PARAMETERS 
-            FROM
-                QUERIES_EXEC 
-            WHERE
-                EXPORTED = 0
-        """
+    def insert_into_central_db(self, rows_values: Iterable) -> bool:
+        if self.stop_event.is_set():
+            return False
 
-    def sql_mark_rows_as_exported(self, place_holders) -> str:
-        return f"UPDATE QUERIES_EXEC SET EXPORTED = 1 WHERE ROWID IN ({place_holders})"
+        if not self.update_db():
+            return False
 
-    def sql_insert_into_central_db(self) -> str:
+        try:
+            with (
+                closing(sqlite3.connect(f"file:{self.db_path}?mode=rw", uri=True, timeout=60)) as conn,
+                closing(conn.cursor()) as cursor,
+            ):
+                conn.execute("PRAGMA busy_timeout=10000")
+                conn.execute("PRAGMA synchronous=NORMAL")
+                conn.execute("PRAGMA cache_size=-10000")
+
+                cursor.execute("BEGIN IMMEDIATE")
+
+                sql_cmd = self._insert_into_central_db_sql()
+                cursor.executemany(sql_cmd, rows_values)
+                conn.commit()
+
+                return True
+        except sqlite3.OperationalError as e:
+            log(f"Operational error while writing to central database: {e}", logging.ERROR)
+            return False
+        except sqlite3.DatabaseError as e:
+            log(f"Database error while accessing central database: {e}", logging.ERROR)
+            return False
+        except Exception as e:
+            log(f"Unexpected error while syncing to central database: {e}", logging.ERROR)
+            return False
+
+    def _insert_into_central_db_sql(self) -> str:
         return """
             INSERT INTO QUERIES_EXEC (SERVER_ID, USER_ID, USER_NAME, QUERY, START, DURATION_SECS, NB_ROWS, PARAMETERS)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -139,6 +156,57 @@ class CentralLogs(BaseLogs):
     # ------------------------------------------------------------------------------------------
     # Thread management
     # ------------------------------------------------------------------------------------------
+    def stop(self, timeout=5) -> bool:
+        stopped: bool = True
+
+        self.stop_event.set()
+        if self.sync_thread and self.sync_thread.is_alive():
+            self.sync_thread.join(timeout)
+            stopped = not self.sync_thread.is_alive()
+
+        if stopped:
+            self._on_stopped()
+
+        return stopped
+
+    # ------------------------------------------------------------------------------------------
+    # Methods to implement in child class
+    # ------------------------------------------------------------------------------------------
+    def thread_start(self) -> None:
+        msg = "Function to start thread for central log database isn't implemented !"
+        log(msg, logging.ERROR)
+        raise NotImplementedError(msg)
+
+    def _on_stopped(self) -> None:
+        """Hook for subclass-specific cleanup. Called by stop() only if the thread is no longer running.
+        Cleaning up is not safe while thread might run concurrently on the same objects."""
+        pass
+
+
+class ClientDriven(CentralLogs):
+    """Central log writer used by Pytre_Client.
+    Reads unsynced rows from a user SQLite file and syncs them into a shared central database.
+    Uses file-based locking with a rotating export-folder queue as several instances may write concurrently."""
+
+    def __init__(self, logs_folder: Path = Path.cwd() / "logs", logs_filename: str = CENTRAL_DB):
+        super().__init__(logs_folder, logs_filename=logs_filename)
+
+        self.user_id: str = ""
+        self.user_name: str = ""
+        self.user_logs: Path | None = None
+
+        self.queue_ctrl_file: Path = self.logs_folder / "Pytre_Queue.json"
+        self.export_folders: list[Path] = [self.logs_folder / "Pytre_Queue_1", self.logs_folder / "Pytre_Queue_2"]
+        self.failed_folder: Path = self.logs_folder / "Pytre_Failed"
+        self.temp_files: list[Path] = []
+
+        self.sync_unlocked_file: Path = self.logs_folder / "Pytre_Unlocked.json"
+        self.sync_locked_file: Path = self.logs_folder / "Pytre_Locked.json"
+        self.sync_lock_timeout: int = 120  # seconds since last heartbeat
+
+        self.sync_heartbeat: int = 90  # seconds after which heartbeat will be updated
+        self.stop_heartbeat: Event = Event()
+
     def trigger_sync(self, user_logs: Path, user_id: str = "", user_name: str = ""):
         if not self.db_path:
             log("Error: Central log database not specified", logging.ERROR)
@@ -154,49 +222,14 @@ class CentralLogs(BaseLogs):
 
         if self.sync_thread is None or not self.sync_thread.is_alive():
             self.stop_event.clear()
-            self.user_logs = Path(user_logs)
             self.user_id = user_id
             self.user_name = user_name
+            self.user_logs = Path(user_logs)
 
-            self.sync_thread = Thread(target=self.sync_thread_start, daemon=True)
+            self.sync_thread = Thread(target=self.thread_start, daemon=True)
             self.sync_thread.start()
 
-    def stop_sync(self, timeout=5) -> bool:
-        self.stop_event.set()
-        if self.sync_thread and self.sync_thread.is_alive():
-            self.sync_thread.join(timeout)
-            return not self.sync_thread.is_alive()
-
-        self.cleanup_temp_files()
-
-        return True
-
-    # ------------------------------------------------------------------------------------------
-    # Methods to implement in child class
-    # ------------------------------------------------------------------------------------------
-    def sync_thread_start(self):
-        pass
-
-    def cleanup_temp_files(self):
-        pass
-
-
-class FileDriven(CentralLogs):
-    def __init__(self, logs_folder: Path = Path.cwd() / "logs"):
-        super().__init__(logs_folder)
-
-        self.queue_ctrl_file: Path = self.logs_folder / "Pytre_Queue.json"
-        self.export_folders: list[Path] = [self.logs_folder / "Pytre_Queue_1", self.logs_folder / "Pytre_Queue_2"]
-        self.failed_folder: Path = self.logs_folder / "Pytre_Failed"
-
-        self.sync_unlocked_file: Path = self.logs_folder / "Pytre_Unlocked.json"
-        self.sync_locked_file: Path = self.logs_folder / "Pytre_Locked.json"
-        self.sync_lock_timeout: int = 120  # seconds since last heartbeat
-
-        self.sync_heartbeat: int = 90  # seconds after which heartbeat will be updated
-        self.stop_heartbeat: Event = Event()
-
-    def sync_thread_start(self):
+    def thread_start(self):
         log("Thread logs sync starting")
 
         if not self.create_dirs(self.export_folders):
@@ -273,8 +306,29 @@ class FileDriven(CentralLogs):
         if not self.process_files(files):
             raise RuntimeError("Problem occurred while processing exported files")
 
+    def _on_stopped(self) -> None:
+        self.cleanup_temp_files()
+
     # ------------------------------------------------------------------------------------------
-    # Functions to export data to sync into files
+    # user_db : sql commands
+    # ------------------------------------------------------------------------------------------
+    def _get_unsynced_rows_sql(self) -> str:
+        return f"""
+            SELECT 
+                ROWID, SERVER_ID,
+                :user_id AS USER_ID, :user_name AS USER_NAME, 
+                QUERY, START, DURATION_SECS, NB_ROWS, PARAMETERS 
+            FROM
+                QUERIES_EXEC 
+            WHERE
+                EXPORTED = 0
+        """
+
+    def _mark_rows_as_exported_sql(self, place_holders) -> str:
+        return f"UPDATE QUERIES_EXEC SET EXPORTED = 1 WHERE ROWID IN ({place_holders})"
+
+    # ------------------------------------------------------------------------------------------
+    # Functions to export data from user db into files and to mark as synced
     # ------------------------------------------------------------------------------------------
     def export_unsynced_data(self) -> bool:
         if self.stop_event.is_set():
@@ -286,7 +340,7 @@ class FileDriven(CentralLogs):
             return False
 
         try:
-            unsynced = self.rows_get_unsynced()
+            unsynced = self.get_unsynced_rows()
             if not unsynced:
                 return True
 
@@ -308,7 +362,7 @@ class FileDriven(CentralLogs):
             log(f"Error during data export: {e}", logging.ERROR)
             return False
 
-    def rows_get_unsynced(self) -> list[tuple] | None:
+    def get_unsynced_rows(self) -> list[tuple] | None:
         if self.stop_event.is_set():
             return None
 
@@ -316,7 +370,7 @@ class FileDriven(CentralLogs):
             closing(sqlite3.connect(f"file:{self.user_logs}?mode=ro", uri=True)) as conn,
             closing(conn.cursor()) as cursor,
         ):
-            sql_cmd = self.sql_rows_get_unsynced()
+            sql_cmd = self._get_unsynced_rows_sql()
             cursor.execute(sql_cmd, {"user_id": self.user_id, "user_name": self.user_name})
             unsynced = cursor.fetchall()
 
@@ -328,7 +382,7 @@ class FileDriven(CentralLogs):
             closing(conn.cursor()) as cursor,
         ):
             place_holders = ", ".join("?" * len(rows_id))
-            sql_cmd = self.sql_mark_rows_as_exported(place_holders)
+            sql_cmd = self._mark_rows_as_exported_sql(place_holders)
             cursor.execute(sql_cmd, rows_id)
 
             conn.commit()
@@ -405,7 +459,7 @@ class FileDriven(CentralLogs):
 
         return True
 
-    def files_extract_infos(self, exported_files: list[Path] | list[str]) -> tuple[list[str], list[Path]]:
+    def files_extract_infos(self, exported_files: list[Path] | list[str]) -> tuple[list, list[Path]]:
         rows_values: list = []
         processed_files: list[Path] = []
         failed_files: list[Path] = []
@@ -451,39 +505,6 @@ class FileDriven(CentralLogs):
 
         for file in processed_files:
             file.rename(active_folder / file.name)
-
-    def insert_into_central_db(self, rows_values: list[str]) -> bool:
-        if self.stop_event.is_set():
-            return False
-
-        if not self.update_db():
-            return False
-
-        try:
-            with (
-                closing(sqlite3.connect(f"file:{self.db_path}?mode=rw", uri=True, timeout=60)) as conn,
-                closing(conn.cursor()) as cursor,
-            ):
-                conn.execute("PRAGMA busy_timeout=10000")
-                conn.execute("PRAGMA synchronous=NORMAL")
-                conn.execute("PRAGMA cache_size=-10000")
-
-                cursor.execute("BEGIN IMMEDIATE")
-
-                sql_cmd = self.sql_insert_into_central_db()
-                cursor.executemany(sql_cmd, rows_values)
-                conn.commit()
-
-                return True
-        except sqlite3.OperationalError as e:
-            log(f"Operational error while writing to central database: {e}", logging.ERROR)
-            return False
-        except sqlite3.DatabaseError as e:
-            log(f"Database error while accessing central database: {e}", logging.ERROR)
-            return False
-        except Exception as e:
-            log(f"Unexpected error while syncing to central database: {e}", logging.ERROR)
-            return False
 
     # ------------------------------------------------------------------------------------------
     # Functions for locking based on file renaming
@@ -624,7 +645,7 @@ class FileDriven(CentralLogs):
     # ------------------------------------------------------------------------------------------
     # Files and folders management
     # ------------------------------------------------------------------------------------------
-    def write_atomic(self, target_path: Path, content: str | dict) -> bool:
+    def write_atomic(self, target_path: Path, content: str | dict, encoding: str = ENCODING) -> bool:
         temp_file = Path(target_path).with_name(f"{target_path.name}.{uuid.uuid4()}.tmp")
         self.temp_files.append(temp_file)
         try:
@@ -632,9 +653,9 @@ class FileDriven(CentralLogs):
             with open(temp_file, "wb") as f:
                 if isinstance(content, dict):
                     json_string: str = json.dumps(content, indent=4)
-                    f.write(json_string.encode("utf-8"))
+                    f.write(json_string.encode(encoding))
                 else:
-                    f.write(content.encode("utf-8"))
+                    f.write(content.encode(encoding))
 
                 # Ensure data is flushed to disk
                 f.flush()
@@ -730,15 +751,215 @@ class FileDriven(CentralLogs):
             return 0, self.export_folders[0]
 
 
-def get_default_class():
-    return FileDriven
+@dataclass(frozen=True)
+class ExecutionLogEntry:
+    """A single completed query execution, ready to be logged to the central database."""
+
+    server_id: str
+    user_id: str
+    user_name: str
+    query_id: str
+    start: datetime
+    duration_secs: int = 0
+    nb_rows: int = 0
+    parameters: dict[str, str] = field(default_factory=dict)
+
+    def as_row(self) -> tuple:
+        """Row tuple matching CentralLogs._insert_into_central_db_sql()'s column order."""
+        params_json = json.dumps(self.parameters, indent=4, ensure_ascii=False) if self.parameters else None
+        return (
+            self.server_id,
+            self.user_id,
+            self.user_name,
+            self.query_id,
+            self.start.isoformat(),
+            self.duration_secs,
+            self.nb_rows,
+            params_json,
+        )
+
+    def to_dict(self) -> dict:
+        """JSON-safe representation, for the pending-file fallback."""
+        data = asdict(self)
+        data["start"] = self.start.isoformat()
+        return data
+
+    @classmethod
+    def from_dict(cls, data: dict) -> ExecutionLogEntry:
+        data = dict(data)
+        data["start"] = datetime.fromisoformat(data["start"])
+        return cls(**data)
+
+
+class ServerDriven(CentralLogs):
+    """Central log writer used by Pytre_Server.
+    Receives execution records directly through a dedicated background thread using an in-memory queue.
+    Only one process writes to its own central database, so no cross-process locking is needed"""
+
+    def __init__(self, logs_folder: Path | str = Path.cwd() / "logs", logs_filename: str = SERVER_DB):
+        super().__init__(logs_folder, logs_filename=logs_filename)
+
+        self.queue: Queue[ExecutionLogEntry] = Queue()
+        self.queue_poll_timeout: float = 1  # secs, loop wakes up and how soon a partial batch gets flushed on idle
+        self.batch_size: int = 25  # how many entries are stored before being written when queue piles up entries
+
+        self.force_file: bool = False  # to force write to pending file if there is a problem with the database
+        self.pending_file: Path = self.logs_folder / SERVER_PENDING_FILE  # file to use when failing to write to db
+        self.failures_nb: int = 0
+        self.max_failures: int = 5  # consecutive failures before spilling to the pending file
+        self.retry_interval_secs: int = 300  # how often the thread retries the pending file while running
+
+    def log_execution(self, entry: ExecutionLogEntry) -> None:
+        """Queue an execution record for writing. Non-blocking, safe to call from async code -
+        starts the writer thread lazily on first use if it isn't already running."""
+        self.queue.put_nowait(entry)
+
+        if self.sync_thread is None or not self.sync_thread.is_alive():
+            self.stop_event.clear()
+            self.sync_thread = Thread(target=self.thread_start, daemon=True)
+            self.sync_thread.start()
+
+    def check_db(self, create: bool = True) -> bool:
+        """Supersedes parent method to default to pending file if database couldn't be created or updated"""
+        result = super().check_db(create)
+
+        if not result:
+            self.force_file = True
+            if not self.db_path.exists():
+                log("Failed to create central logs database, logs will be written on a pending file", logging.WARNING)
+            else:
+                log("Failed to update central logs database, logs will be written on a pending file", logging.ERROR)
+
+        return result
+
+    def thread_start(self) -> None:
+        log("Log writer thread starting")
+        self.logs_folder.mkdir(parents=True, exist_ok=True)
+        self.check_db()  # failing not fatal : logs will be written on the pending file
+        self._retry_pending_file()
+
+        entries: list[ExecutionLogEntry] = []
+        last_retry = time.time()
+        while not self.stop_event.is_set():
+            try:
+                entry = self.queue.get(timeout=self.queue_poll_timeout)
+                entries.append(entry)
+            except Empty:
+                if time.time() - last_retry >= self.retry_interval_secs:
+                    self._retry_pending_file()
+                    last_retry = time.time()
+
+                if entries and self._write_entries(entries):
+                    entries = []
+
+                continue
+
+            if len(entries) >= self.batch_size and self._write_entries(entries):
+                entries = []
+
+        self._write_pending_file(extras=entries)
+        log("Server-side central log writer thread stopping")
+
+    def _write_entries(self, entries: list[ExecutionLogEntry]) -> bool:
+        """Try to write entries to the database.
+        If `max_failures` consecutives failures are reached writes to the pending file instead."""
+
+        if not self.force_file:
+            rows = [entry.as_row() for entry in entries]
+            if self.insert_into_central_db(rows):
+                self.failures_nb = 0
+                return True
+
+            self.failures_nb += 1
+            log(f"Failed to write execution log ({self.failures_nb} consecutive failure(s))", logging.DEBUG)
+
+        if self.failures_nb >= self.max_failures or self.force_file:
+            if not self.force_file:
+                log("Too many consecutive failures, spilling pending entries to disk", logging.WARNING)
+
+            self._write_pending_file(extras=entries)
+            self.failures_nb = 0
+            return True
+
+        return False
+
+    def _write_pending_file(self, extras: list[ExecutionLogEntry] | None = None) -> None:
+        """Appends whatever is left in the in-memory queue (plus `extras`, if given) to the pending JSON Lines file.
+        Never rereads what's already on disk, to reduce the cost of a spill to the new entries."""
+        entries = extras if extras is not None else []
+        while True:
+            try:
+                entries.append(self.queue.get_nowait())
+            except Empty:
+                break
+
+        if not entries:
+            return
+
+        try:
+            with open(self.pending_file, "a", encoding=ENCODING) as f:
+                for entry in entries:
+                    f.write(json.dumps(entry.to_dict(), ensure_ascii=False) + "\n")
+                f.flush()
+                fsync(f.fileno())
+        except OSError as e:
+            log(f"Failed to spill {len(entries)} pending log entrie(s) to {self.pending_file}: {e}", logging.ERROR)
+
+    def _read_pending_file(self, encoding=ENCODING) -> list[dict]:
+        """Reads the pending JSON Lines file one line at a time. An unparseable line is skipped."""
+        if not self.pending_file.exists():
+            return []
+
+        entries: list[dict] = []
+        try:
+            with open(self.pending_file, "r", encoding=encoding) as f:
+                for line_nb, line in enumerate(f, start=1):
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        entries.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        log(f"Skipping corrupt line {line_nb} in {self.pending_file}: {line}", logging.WARNING)
+        except OSError as e:
+            log(f"Could not read pending log file {self.pending_file}: {e}", logging.ERROR)
+            return []
+
+        return entries
+
+    def _retry_pending_file(self) -> None:
+        """Retry to write pending file to database. Do nothing if `self.force_file` is True."""
+        if self.force_file:
+            return
+
+        pending = self._read_pending_file()
+        if not pending:
+            return
+
+        entries: list[ExecutionLogEntry] = []
+        for data in pending:
+            try:
+                entries.append(ExecutionLogEntry.from_dict(data))
+            except Exception as e:
+                log(f"Skipping corrupt entry in {self.pending_file}: {e}", logging.WARNING)
+
+        if not entries:
+            self.pending_file.unlink(missing_ok=True)
+            return
+
+        if self.insert_into_central_db([e.as_row() for e in entries]):
+            self.pending_file.unlink(missing_ok=True)
+            self.failures_nb = 0
+            log(f"Recovered {len(entries)} pending log entrie(s) from {self.pending_file}")
+        else:
+            log(f"Still unable to write {len(entries)} pending log entrie(s), will retry later", logging.WARNING)
 
 
 if __name__ == "__main__":
     setup_standalone_logging()
 
     Path_Home: Path = Path.home() / "Pytre"
-    central_log = FileDriven(Path_Home)
+    central_log = ClientDriven(Path_Home)
     central_log.trigger_sync(Path_Home / "Pytre_Logs.db", "id_test", "name_test")
     for i in range(10):
         time.sleep(30)

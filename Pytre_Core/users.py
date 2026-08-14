@@ -1,19 +1,28 @@
 from __future__ import annotations
 
 import logging
+import secrets
 import os
 import getpass
 
 import csv
 import io
+from datetime import datetime, timezone
+from enum import Enum
 from uuid import UUID
 from pathlib import Path
 
+from argon2 import PasswordHasher
+from argon2.exceptions import InvalidHash, VerifyMismatchError
 from pykeepass.entry import Entry
 from pykeepass.group import Group
 
 from Pytre_Core.kee import Kee
 from Pytre_Core.utils import detect_encoding, log as _log, setup_standalone_logging
+
+
+_HASHER = PasswordHasher()
+_DUMMY_HASH = _HASHER.hash(secrets.token_urlsafe(32))
 
 
 def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__) -> None:
@@ -29,7 +38,8 @@ class Users:
         self.groups: set[str] = set()
 
         self.attribs_std: tuple[str, ...] = ("username", "title", "admin", "msg_login")
-        self.attribs_cust: list[str] = list()  # liste des attributs spéciaux
+        self.attribs_pwd: tuple[str, ...] = ("password", "auth_type", "password_changed_at")
+        self.attribs_cust: list[str] = list()  # attributes not predefined
 
         self.get_all_groups()
 
@@ -87,26 +97,30 @@ class Users:
         return self.groups
 
     def get_cust_attribs_list(self, reload: bool = False) -> list[str]:
+        """Updates and return attribs_cust with not predefined attributes"""
+
         if self.kee_grp is None:
             raise ValueError("No KeePass group selected, cannot get custom attribs list")
 
         self.open_db(reload)
 
-        u_entry: Entry | None = None
         attribs_set: set[str] = set()
 
+        # retrieve set of custom entry from all entries
         for u_entry in self.kee_grp.entries:
             attribs_set.update(self._get_cust_attribs_list(u_entry))
 
+        # create sorted list from set to update custom attributes
         self.attribs_cust = sorted(attribs_set)
 
         return self.attribs_cust
 
     def _get_cust_attribs_list(self, entry: Entry) -> set[str]:
+        """return not predefined attributes"""
         attribs_set: set[str] = set()
 
         for property in entry.custom_properties:
-            if property not in self.attribs_std + ("superuser",):
+            if property not in self.attribs_std + self.attribs_pwd + ("superuser",):  # superuser is admin field
                 attribs_set.add(property)
 
         return attribs_set
@@ -371,24 +385,34 @@ class Users:
         return User(self, entry=entry) if entry and isinstance(entry, Entry) else None
 
 
+class AuthType(Enum):
+    """Authentication types to identify how to interpret User.password_hash."""
+
+    BASIC = "basic"
+
+    def __str__(self):
+        return self.value
+
+
 class User:
     def __init__(self, users: Users, username: str = "", entry: Entry | None = None, detect_user: bool = True):
-        """
-        si pas de username et d'entry, et que detect_user est faux
-        alors pas de chrgmt à partir de la base keepass
-        """
+        """If no `username`, no `entry` and if `detect_user` is False then no loading from keepass db occurs"""
 
         self.users: Users = users
 
         self.uuid: str = ""
         self.username: str = ""
+        self._pwd_hash: str = ""
+        self._pwd_changed_at: datetime | None = None
+        self.auth_type: AuthType = AuthType.BASIC
         self.exists: bool = False
         self.is_authorized: bool = False
+
         self.title: str = ""
         self.admin: bool = False
-        self.grp_authorized: list[str] = ["all"]  # par défaut un utilisateur appartient au groupe all
+        self.grp_authorized: list[str] = ["all"]  # by default user belongs to "all" group
         self.msg_login: str = ""
-        self.attribs_cust: dict[str, str] = {}  # dictionnaire des attributs spéciaux
+        self.attribs_cust: dict[str, str] = {}  # dict of attributes not predefined
 
         if entry:
             self._load_from_entry(entry)
@@ -396,10 +420,35 @@ class User:
             self.username = username if username else self.users.get_current_username()
             self.load()
 
+    @property
+    def password_hash(self) -> str:
+        """On change `password_changed_at` is also automatically changed so it stays in sync
+        (used server-side to invalidate JWTs issued before this change)."""
+        return self._pwd_hash
+
+    @password_hash.setter
+    def password_hash(self, password_hash: str):
+        """Sets a new password hash and records when it changed so `password_changed_at`
+        can't get out of sync (used server-side to invalidate JWTs issued before this change).
+        A no-op reassignment (same value) leaves `password_changed_at` untouched."""
+        if password_hash == self._pwd_hash:
+            return
+
+        self._pwd_hash = password_hash
+        self._pwd_changed_at = datetime.now(timezone.utc)
+
+    @property
+    def password_changed_at(self) -> datetime | None:
+        """Can't be changed  - it is automatically set when changing `password_hash` so it stays in sync
+        (used server-side to invalidate JWTs issued before this change)."""
+        return self._pwd_changed_at
+
     def to_dict(self) -> dict:
         attribs = {
             "uuid": self.uuid,
             "id": self.username,
+            "auth_type": self.auth_type.name,
+            "password_changed_at": self.password_changed_at or "",
             "exist_in_settings": self.exists,
             "is_authorized": self.is_authorized,
             "title": self.title,
@@ -434,9 +483,10 @@ class User:
         self.exists = True
         self.is_authorized = True
 
-        # récup propriétés
+        # set attributes from keepass entry property / custom_property
         self.uuid = str(u_entry.uuid)
         self.username = str(u_entry.username)
+        self._pwd_hash = str(u_entry.password or "")
         self.title = str(u_entry.title or "")
         for property in u_entry.custom_properties:
             value = u_entry.get_custom_property(property)
@@ -444,12 +494,24 @@ class User:
 
             if property == "superuser":
                 self.admin = True if value and value.lower() == "true" else False
+            elif property == "auth_type":
+                try:
+                    self.auth_type = AuthType(value)
+                except ValueError:
+                    err_msg = f"Unknown AuthType '{value}' for user '{self.username}', defaulting to BASIC"
+                    log(err_msg, logging.WARNING)
+                    self.auth_type = AuthType.BASIC
+            elif property == "password_changed_at":
+                try:
+                    self._pwd_changed_at = datetime.fromisoformat(value) if value else None
+                except ValueError:
+                    self._pwd_changed_at = None
             elif property in self.users.attribs_std:
                 setattr(self, property, value)
             else:
                 self.attribs_cust[property] = value
 
-        # récup info groupes de l'utilisateur
+        # Retrieve groups from keepass entry tags
         tags = u_entry.tags if u_entry.tags else []
         for tag in tags:
             group = tag.lower().strip()
@@ -468,13 +530,13 @@ class User:
         if self.users.kee.db is None:
             raise RuntimeError("Database not opened, can't save it")
 
-        # contrôle
+        # control
         if next(
             (u for u in self.users.kee_grp.entries if u.username == self.username and str(u.uuid) != self.uuid), None
         ):
             raise ValueError(f"{self.username} est déjà utilisé comme identifiant")
 
-        # récupération d'une entrée pour la sauvegarde
+        # Get existing entry or create a new one
         u_entry = self.users.kee.db.find_entries(uuid=UUID(self.uuid), first=True) if self.uuid else None
         if not u_entry:
             u_entry = self.users.kee.db.add_entry(self.users.kee_grp, "", "", "")
@@ -482,17 +544,22 @@ class User:
         elif not isinstance(u_entry, Entry):
             raise TypeError("Unexpected type from find_entries() with first=True")
 
-        # mise à jour de l'entrée
+        # Update entry
         u_entry.username = self.username
+        u_entry.password = self._pwd_hash
         u_entry.title = self.title
         admin_val = "true" if self.admin else "false"
         u_entry.set_custom_property("superuser", admin_val)
         u_entry.set_custom_property("msg_login", self.msg_login)
+        u_entry.set_custom_property("auth_type", self.auth_type.value)
+        u_entry.set_custom_property(
+            "password_changed_at", self._pwd_changed_at.isoformat() if self._pwd_changed_at else ""
+        )
 
         for attr, val in self.attribs_cust.items():
             u_entry.set_custom_property(attr, val)
 
-        # caractères interdits par keepass pour les tags : , et ;
+        # Sanitize grp, keepass tags forbid colon and semi colon
         u_entry.tags = [grp.replace(",", "_").replace(";", "_") for grp in self.grp_authorized if not grp == "all"]
 
         self.users.kee.save_db()
@@ -518,6 +585,26 @@ class User:
         self.users.kee.save_db()
 
         return True
+
+
+def get_dummy_hash() -> str:
+    """Generate Precomputed hash to be used as a default hash so an unknown user login takes
+    the same time to be rejected as a known one (prevent account enumeration via response timing)"""
+    return _DUMMY_HASH
+
+
+def hash_password(password: str) -> str:
+    return _HASHER.hash(password)
+
+
+def verify_password(password: str, password_hash: str) -> bool:
+    """If `password_hash` is an empty string then Use a default hash so an unknown user login takes
+    the same time to be rejected as a known one (prevent account enumeration via response timing)"""
+    hash_to_use = password_hash or get_dummy_hash()
+    try:
+        return _HASHER.verify(hash_to_use, password)
+    except (VerifyMismatchError, InvalidHash):
+        return False
 
 
 if __name__ == "__main__":

@@ -1,11 +1,13 @@
+import hashlib
 import re
 from datetime import datetime
 from pathlib import Path
 
+from Pytre_Core.remotes import RemoteServer
 from Pytre_Core.settings import Settings
 from Pytre_Core.user_prefs import UserPrefs, PrefsEnum
 from Pytre_Core.sql_query.parameters import SqlParam, SqlParameters
-from Pytre_Core.sql_query.execute_config import ExecuteConfig
+from Pytre_Core.sql_query.execute_config import LocalExecuteCfg, RemoteExecuteCfg
 
 REPLACE_PARAM_PATTERN = re.compile(r"(?<![\d\w#_\$@])(@[\d\w#_\$@]+)")  # for cmd_builder
 
@@ -32,17 +34,14 @@ class CmdBuilder:
 
         return cmd_template
 
-    def build_exec_config(self, query_name: str, server_id: str, file_output: bool = True) -> ExecuteConfig:
-        # template et paramètres de la commande
-        cmd_template: str
-        cmd_parameters: dict = {}
+    def build_exec_local_cfg(self, server_id: str, query_id: str, file_output: bool = True) -> LocalExecuteCfg:
         cmd_template, cmd_parameters = self.build_command()
 
         # fichier d'extraction à utiliser
         extract_file: Path = Path()
         if file_output:
             file_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            extract_file = self.user_prefs.get(PrefsEnum.cache_folder) / (f"{query_name}_{file_stamp}.csv")
+            extract_file = self.user_prefs.get(PrefsEnum.cache_folder) / (f"{query_id}_{file_stamp}.csv")
 
         # metadata des paramètres
         params_metadata: dict = {}
@@ -54,16 +53,39 @@ class CmdBuilder:
                 "val_display": param.display_value,
             }
 
-        # renvoi de l'objet config
-        return ExecuteConfig(
-            query_name=query_name,
+        return LocalExecuteCfg(
             server_id=server_id,
+            query_id=query_id,
             cmd_template=cmd_template,
-            cmd_parameters=cmd_parameters,
             extract_file=extract_file,
             extract_encoding=self.settings.extract_encoding,
             params_metadata=params_metadata,
+            cmd_parameters=cmd_parameters,
         )
+
+    def build_exec_remote_cfg(self, server: RemoteServer, query_id: str, file_output: bool = True) -> RemoteExecuteCfg:
+        base_cfg = self.build_exec_local_cfg(server.id_on_remote, query_id, file_output=file_output)
+
+        display_parameters: dict[str, str] = {}
+        param: SqlParam
+        for key, param in self.parameters.params.items():
+            display_parameters[key] = param.display_value
+
+        return RemoteExecuteCfg(
+            server_id=server.id_on_remote,
+            query_id=query_id,
+            cmd_template=base_cfg.cmd_template,
+            extract_file=base_cfg.extract_file,
+            extract_encoding=self.settings.extract_encoding,
+            params_metadata=base_cfg.params_metadata,
+            cmd_parameters=base_cfg.cmd_parameters,
+            remote_server=server,
+            template_hash=self.get_template_hash(),
+            display_parameters=display_parameters,
+        )
+
+    def get_template_hash(self) -> str:
+        return hashlib.sha256(self.template.encode("utf-8")).hexdigest()
 
     def build_command(self) -> tuple[str, dict]:
         """Construit la commande finale avec remplacement des @! variables"""

@@ -42,6 +42,7 @@ class UserPrefs:
         self._cache_folder: Path = CACHE_FOLDER
         self._save_as_folder: Path = Path.home()
         self._last_server: str = ""
+
         self._cache: dict[str, Any] = {}
 
         self.load()
@@ -54,6 +55,9 @@ class UserPrefs:
         return json.dumps(self.to_json(), indent=2, ensure_ascii=False)
 
     def _change_cache_folder(self, folder: Path, init_load: bool = False) -> Issue | None:
+        """Validates and applies `folder` as the new cache folder.
+        Returns None on success or an Issue describing what went wrong (no raise on error)"""
+
         if folder.resolve() == CONFIG_FOLDER.resolve():
             if init_load:
                 self._migrate_cache_from_config_folder()
@@ -97,6 +101,8 @@ class UserPrefs:
             return Issue(type=IssueType.ERROR, msg=f"{err_msg}\nDossier cache retenu : {self._cache_folder}")
 
     def _migrate_cache_from_config_folder(self) -> None:
+        """Move extracted files from CONFIG_FOLDER to CACHE_FOLDER"""
+
         log("Migration du cache : déplacement des fichiers CSV de CONFIG_FOLDER vers CACHE_FOLDER...")
         if self._change_cache_folder(CACHE_FOLDER, init_load=True) is not None:
             log("Migration annulée : impossible de créer le dossier cache par défaut.", logging.ERROR)
@@ -113,6 +119,29 @@ class UserPrefs:
         log(f"Migration terminée : {moved} fichier(s) déplacé(s) vers {self._cache_folder}")
         self.save()
 
+    def _set_cache_folder(self, folder: str | Path | None, init_load: bool) -> str:
+        """Handle for set(). Raises ValueError when _change_cache_folder() returns an ERROR Issue,
+        otherwise returns a possibly empty warning string"""
+
+        pref_name = PrefsEnum.cache_folder.name
+        warning = ""
+
+        old_cache_folder = self._cache_folder
+        new_cache_folder: Path = Path(folder) if folder else CACHE_FOLDER
+
+        result = self._change_cache_folder(new_cache_folder, init_load=init_load)
+        if result is not None:
+            if result.type == IssueType.ERROR:
+                log(f"Valeur invalide '{pref_name}' : {new_cache_folder}\n{result.msg}", logging.ERROR)
+                raise ValueError(result.msg)
+            if result.type == IssueType.WARNING:
+                log(f"Warning '{pref_name}' : {result.msg}", logging.WARNING)
+                warning = result.msg
+        elif old_cache_folder.resolve() != self._cache_folder.resolve():
+            warning = "Le contenu du dossier cache est temporaire et nettoyé automatiquement."
+
+        return warning
+
     def to_json(self) -> dict:
         return {
             PrefsEnum.cache_folder.name: str(self._cache_folder),
@@ -120,7 +149,7 @@ class UserPrefs:
             PrefsEnum.last_server.name: self._last_server,
         }
 
-    def set(self, key: PrefsEnum, value: Any, save: bool = True, init_load: bool = False) -> str | None:
+    def set(self, key: PrefsEnum, value: Any, save: bool = True, init_load: bool = False) -> str:
         warning = ""
 
         if not isinstance(key, PrefsEnum):
@@ -129,18 +158,7 @@ class UserPrefs:
             raise AttributeError(f"Attribut interne manquant : {key.value}")
 
         if key is PrefsEnum.cache_folder:
-            old_cache_folder = self._cache_folder
-            new_cache_folder: Path = Path(value) if value else CACHE_FOLDER
-            result = self._change_cache_folder(new_cache_folder, init_load=init_load)
-            if result is not None:
-                if result.type == IssueType.ERROR:
-                    log(f"Valeur invalide '{key.value}' : {new_cache_folder}\n{result.msg}", logging.ERROR)
-                    raise ValueError(result.msg)
-                if result.type == IssueType.WARNING:
-                    log(f"Warning '{key.value}' : {result.msg}", logging.WARNING)
-                    warning = result.msg
-            elif old_cache_folder.resolve() != self._cache_folder.resolve():
-                warning = "Le contenu du dossier cache est temporaire et nettoyé automatiquement."
+            warning = self._set_cache_folder(value, init_load=init_load)
         elif key is PrefsEnum.save_as_folder:
             self._save_as_folder = Path(value) if value and Path(value).is_dir() else Path.home()
         else:

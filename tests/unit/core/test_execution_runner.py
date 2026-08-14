@@ -489,19 +489,27 @@ def test_execution_process_start_dispatches_to_run_task():
 
 @pytest.mark.unit
 def test_execution_process_run_task_success():
-    """run_task should deserialize the query, execute it, and report the result"""
+    """run_task should deserialize the query, construct a QueryExecute wired to it (this is the
+    exact call that regressed once - QueryExecute() built without passing query= at all, silently
+    breaking every local execution - so the constructor args are asserted explicitly here), then
+    execute it and report the result"""
     proc = _make_execution_process()
     proc.queue_result = Mock()
 
     fake_query = Mock()
-    fake_query.query_execute = Mock()
-    fake_query.execute = Mock(return_value=(42, "/tmp/out.csv"))
+    fake_query_execute = Mock()
+    fake_query_execute.execute = Mock(return_value=(42, "/tmp/out.csv"))
 
-    with patch("Pytre_Core.sql_query.execution_runner.Query") as MockQuery:
+    with (
+        patch("Pytre_Core.sql_query.execution_runner.Query") as MockQuery,
+        patch("Pytre_Core.sql_query.execution_runner.QueryExecute") as MockQueryExecute,
+    ):
         MockQuery.deserialize = Mock(return_value=fake_query)
+        MockQueryExecute.return_value = fake_query_execute
         proc.run_task("SRV1", {"name": "Q1"})
 
-    fake_query.execute.assert_called_once_with(server_id="SRV1", file_output=True)
+    MockQueryExecute.assert_called_once_with(proc.app_ctx, proc.user_ctx, query=fake_query)
+    fake_query_execute.execute.assert_called_once_with(server_id="SRV1", file_output=True)
     proc.queue_result.put.assert_any_call(("result", (42, "/tmp/out.csv")))
     proc.queue_result.put.assert_any_call(("done", None))
 

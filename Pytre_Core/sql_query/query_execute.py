@@ -4,56 +4,66 @@ from datetime import datetime
 from pathlib import Path
 from multiprocessing import Queue, Event as proc_get_event
 from multiprocessing.synchronize import Event as ProcEvent
+from typing import Any, TYPE_CHECKING
 
-import pymssql
-import psycopg2
+from httpx2 import RequestError, HTTPStatusError
 
-from Pytre_Core import settings, users, servers, logs_user
+from Pytre_Core import settings, users, logs_user
 from Pytre_Core.context import AppContext, UserContext
-from Pytre_Core.sql_query.execute_config import ExecuteConfig
+from Pytre_Core.remotes import RemoteCursor, RemoteServer
+from Pytre_Core.servers import Server
+from Pytre_Core.sql_query.execute_config import LocalExecuteCfg, RemoteExecuteCfg
 from Pytre_Core.sql_query.execution_msg import ExecResultMsg
 from Pytre_Core.sql_query.converter import SqlTypeConverter
 from Pytre_Core.sql_query.log_utils import _STANDALONE_BROADCAST_LOGGER
+from Pytre_Core.sql_query.query import Query
+from Pytre_Core.sql_query.query_drivers import ServerConnectionError, LocalCursor, DriverErrors, get_connection
 
-PRINT_DATE_FORMAT: str = "%d/%m/%Y à %H:%M:%S"  # pour le format de la date pour les logs / output
+
+Cursor = RemoteCursor | LocalCursor
+
+PRINT_DATE_FORMAT: str = "%d/%m/%Y à %H:%M:%S"  # date format for logs and output
 
 
 class QueryExecute:
-    def __init__(self, app_ctx: AppContext, user_ctx: UserContext):
+    def __init__(self, app_ctx: AppContext, user_ctx: UserContext, query: Query | None = None):
         self.app_ctx: AppContext = app_ctx
         self.user_ctx: UserContext = user_ctx
+        self.query: Query | None = query
 
-        self.converter: SqlTypeConverter = SqlTypeConverter()
+        self.converter: SqlTypeConverter = SqlTypeConverter(
+            date_display=app_ctx.settings.date_format,
+            decimal_separator=app_ctx.settings.decimal_separator,
+        )
 
-        self.config: ExecuteConfig | None = None
-        self.server: servers.Server | None = None
+        self.config: LocalExecuteCfg | RemoteExecuteCfg | None = None
+        self.server: Server | None = None
+        self.remote: RemoteServer | None = None
 
         self.app_settings: settings.Settings = app_ctx.settings
         self.field_separator = self.app_settings.field_separator
         self.print_date_format = PRINT_DATE_FORMAT
 
-        self.queue: Queue = Queue()  # pour transmettre les messages à l'UI
-        self.stop_requested: ProcEvent = proc_get_event()  # pour signaler que l'execution doit être stoppée
-        self.cannot_stop: ProcEvent = proc_get_event()  # pour savoir si l'execution ne peut pas stopper proprement
+        self.queue: Queue = Queue()  # to relay message to UI
+        self.stop_requested: ProcEvent = proc_get_event()  # to signal that execution must be stopped
+        self.cannot_stop: ProcEvent = proc_get_event()  # to know if execution cannot be stopped cleanly
 
-    def load_infos(self, config: ExecuteConfig) -> bool:
-        # controle validité du fichier d'extraction
-        if config.extract_file != Path() and config.extract_file.exists():
-            raise FileExistsError(f"Le fichier {config.extract_file} existe déjà.")
+    def _load_exec_config(self, server_id: str, file_output: bool) -> None:
+        """Load execution config from query"""
+        if self.query is None:
+            raise ValueError("A query is required to load a config grom it")
 
-        # controle validité de server_id
-        if not self.get_server(config.server_id):
-            return False
+        config = self.query.get_exec_config(server_id, file_output)
 
-        # controle qu'une commande existe bien
-        if config.cmd_template == "":
-            return False
+        if isinstance(config, RemoteExecuteCfg):
+            self.remote = config.remote_server
+        else:
+            self._get_server(config.server_id)
 
         self.config = config
 
-        return True
-
-    def get_server(self, server_id) -> servers.Server | None:
+    def _get_server(self, server_id: str) -> Server | None:
+        """Gets, sets and returns a local server from its `server_id`"""
         try:
             self.server = self.app_ctx.servers.servers_dict[server_id]
         except KeyError:
@@ -63,75 +73,163 @@ class QueryExecute:
 
         return self.server
 
-    def execute(self, config: ExecuteConfig) -> tuple[int, Path | list[list[str]] | None]:
-        if not self.load_infos(config):
+    def _check_exec_config(self) -> None:
+        """Validates that everything is set correctly to run a query.
+        Raises a FileExistsError or ValueError if something is wrong."""
+        # validate that a config exists
+        if self.config is None:
+            raise ValueError("Config d'execution manquante")
+
+        # validate the extraction file
+        if self.config.extract_file != Path() and self.config.extract_file.exists():
+            raise FileExistsError(f"Le fichier {self.config.extract_file} existe déjà.")
+
+        # validation checks for a RemoteServer
+        if isinstance(self.config, RemoteExecuteCfg):
+            if self.remote is None:
+                raise ValueError("Config d'execution remote mais pas de serveur remote initialisée.")
+            if self.config.template_hash == "":
+                raise ValueError("Config d'execution remote incomplète : template_hash manquant.")
+        # validation checks for a LocalServer
+        else:
+            if self.server is None:
+                raise ValueError("Config d'execution local mais pas de serveur initialisé.")
+            if self.config.cmd_template == "":
+                raise ValueError("Config d'execution local incomplète : cmd_template manquant.")
+
+    def _broadcast_operational_error(self, err: ServerConnectionError):
+        """Broadcasts an operational error"""
+        err_msg = str("=") * 50 + "\n" + str(err)
+        if not err_msg[-1] == "\n":
+            err_msg += "\n"
+        err_msg += str("=") * 50
+        self._broadcast(err_msg)
+
+    # ------------------------------------------------------------------------------------------
+    # Execution functions : executions are dispatched to _execute_local / _execute_remote
+    # then both converge on _extract_records then _execute_log_results() on successful extraction
+    # ------------------------------------------------------------------------------------------
+    def execute(self, server_id: str = "", file_output: bool = True) -> tuple[int, Path | list[list[str]] | None]:
+        """Executes a Query locally or via a remote Pytre_Server.
+        Returns as a tuple how many lines have been extracted and, depending on `file_output`,
+        a list of records if false or a filepath if True.
+        Raises ValueError if no query is set, any other error returns (-1, None) instead."""
+
+        if self.query is None:
+            raise ValueError("A query is required to execute it, `self.query` must be set")
+
+        # Update query parameters to current values
+        self.query.update_values()
+        if not self.query.values_ok():
+            err_msg = "\nImpossible d'executer des paramètres sont invalides"
+            self._broadcast(err_msg)
             return (-1, None)
+
+        # Load and check execution config
+        try:
+            self._load_exec_config(server_id, file_output)
+            self._check_exec_config()
+        except Exception as e:
+            err_msg = f"\nErreur chargement config d'execution : {e}"
+            self._broadcast(err_msg)
+            return (-1, None)
+
+        # Start query execution
+        try:
+            start_date = datetime.now()
+            result = self._execute_dispatch(start_date)
+            return result
+        except ServerConnectionError as err:
+            self._broadcast_operational_error(err)
+            return (-1, None)
+        except Exception as err:
+            self._broadcast(f"Erreur inattendue : {err}")
+            return (-1, None)
+
+    def _execute_dispatch(self, start_date: datetime) -> tuple[int, Path | list[list[str]] | None]:
+        """Dispatch execution to local or via a remote Pytre_Server.
+        Returns early if a stop was already requested."""
+
         if self.stop_requested.is_set():
             return (-1, None)
+        elif isinstance(self.config, RemoteExecuteCfg):
+            return self._execute_remote(start_date)
+        else:
+            return self._execute_local(start_date)
+
+    def _execute_local(self, start_date: datetime) -> tuple[int, Path | list[list[str]] | None]:
+        """Executes a Query locally.
+        Returns as a tuple how many lines have been extracted and, depending on config.extract_file,
+        a list of records or a filepath. Errors return (-1, None)"""
 
         if self.server is None or self.config is None:
-            return (-1, None)
+            raise RuntimeError("Server and ExecuteConfig must be initialized to be able to execute")
 
-        starting_date = datetime.now()
-        self._broadcast(starting_date.strftime(self.print_date_format) + " - Connexion à la base de données...")
+        assert isinstance(self.config, LocalExecuteCfg)
+        cfg: LocalExecuteCfg = self.config
 
+        self._broadcast(start_date.strftime(self.print_date_format) + " - Connexion à la base de données...")
         self.cannot_stop.set()
-        with self.server.get_connection() as conn, conn.cursor() as cursor:
-            # execution de la requête et gestion des erreurs liées
+        with get_connection(self.server) as conn, conn.cursor() as cursor:
             self._broadcast(self._time_log() + " - Requête en cours d'execution...")
             self.queue.put((ExecResultMsg.START_TIMER, ""))
             try:
-                cursor.execute(self.config.cmd_template, self.config.cmd_parameters)
+                # execute query
+                cursor.execute(cfg.cmd_template, cfg.cmd_parameters)
                 self.cannot_stop.clear()
                 self.queue.put((ExecResultMsg.STOP_TIMER, ""))
-            except (pymssql._pymssql.ProgrammingError, psycopg2.ProgrammingError) as err:
+                # extract records
+                return self._extract_records(cursor, start_date)
+            except DriverErrors.ProgrammingError as err:
                 self._broadcast(self._time_log() + f" - Erreur SQL : {str(err)}")
                 return (-1, None)
-            except Exception as err:
+            except DriverErrors.Error as err:
                 error_type = type(err).__name__
                 self._broadcast(self._time_log() + f" - Erreur d'execution inattendue ({error_type}) :\n{str(err)}")
                 return (-1, None)
 
-            # si pas de fichier d'extraction alors renvoi des données dans une liste
-            if self.config.extract_file == Path():
-                rows_count, execute_output = self._extract_to_list(cursor)
-                return rows_count, execute_output
+    def _execute_remote(self, start_date: datetime) -> tuple[int, Path | list[list[str]] | None]:
+        """Executes a Query via a remote Pytre_Server.
+        Returns as a tuple how many lines have been extracted and, depending on config.extract_file,
+        a list of records or a filepath. Errors return (-1, None)"""
 
-            # sinon extraction des données dans un fichier
-            try:
-                self._broadcast(self._time_log() + " - Début récupération des lignes...")
-                rows_count, execute_output = self._extract_to_file(cursor, config.extract_encoding)
-                if execute_output == "" and self.stop_requested.is_set():
-                    raise InterruptedError()
-                ending_date = datetime.now()
-                self._execute_end(starting_date, ending_date, rows_count)
-                return rows_count, execute_output
-            except InterruptedError:
-                self._broadcast(self._time_log() + " - Extraction interrompue")
-            except PermissionError:
-                self._broadcast(self._time_log() + f" - Ecriture refusée pour : {self.config.extract_file}")
-            except (FileNotFoundError, OSError) as e:
-                error_msg = str(e).split("]")[1].strip() if "]" in str(e) else str(e)
-                self._broadcast(
-                    self._time_log()
-                    + f" - Erreur ouverture de : {self.config.extract_file.name}\n"
-                    + f"Détail : {error_msg}"
-                )
+        if self.remote is None or self.config is None:
+            raise RuntimeError("RemoteServer and ExecuteConfig must be initialized to be able to execute")
 
-        # si erreur lors de l'extraction dans un fichier alors suppression du fichier créé
-        if self.config.extract_file != Path():
-            self.config.extract_file.unlink(missing_ok=True)
+        assert isinstance(self.config, RemoteExecuteCfg)
+        cfg: RemoteExecuteCfg = self.config
 
-        return (-1, None)
+        self._broadcast(start_date.strftime(self.print_date_format) + " - Connexion à la remote...")
+        self.cannot_stop.set()
+        self._broadcast(self._time_log() + " - Requête en cours d'execution...")
+        self.queue.put((ExecResultMsg.START_TIMER, ""))
+        try:
+            # execute query
+            with self.remote.execute(cfg.query_id, cfg.template_hash, cfg.display_parameters) as cursor:
+                self.cannot_stop.clear()
+                self.queue.put((ExecResultMsg.STOP_TIMER, ""))
+                # extract records
+                return self._extract_records(cursor, start_date)
+        except RequestError as e:
+            self._broadcast(self._time_log() + f" - Remote injoignable : {e}")
+            return (-1, None)
+        except HTTPStatusError as e:
+            err_msg = e.response.json()["detail"]
+            self._broadcast(self._time_log() + f" - Erreur du serveur remote : {err_msg}")
+            return (-1, None)
 
-    def _execute_end(self, starting_date: datetime, ending_date: datetime, rows_count: int):
-        assert self.server is not None and self.config is not None
+    def _execute_log_results(self, starting_date: datetime, ending_date: datetime, rows_count: int):
+        """Writes the user/central logs and broadcasts a completion summary."""
+
+        source = self.server or self.remote
+
+        assert source is not None and self.config is not None
 
         # writing user log
         user_log: logs_user.UserLogs = self.user_ctx.user_logs
         user_log.insert_exec(
-            self.server.id,
-            self.config.query_name,
+            source.id,
+            self.config.query_id,
             starting_date,
             ending_date,
             rows_count,
@@ -140,7 +238,7 @@ class QueryExecute:
         )
 
         # if on, launch central log
-        if self.app_settings.logs_are_on:
+        if self.app_settings.logs_are_on and not self.remote:
             user: users.User = self.user_ctx.current_user
             log_infos: dict = {"user_logs": user_log.db_path, "user_id": user.username, "user_name": user.title}
             self.queue.put((ExecResultMsg.CENTRAL_LOG, log_infos))
@@ -156,29 +254,77 @@ class QueryExecute:
             + f"\n{str('=') * 50}"
         )
 
-    def _extract_to_list(self, cursor) -> tuple[int, list[list[str]]]:
-        buffer = []
-        row_number = -1
+    # ------------------------------------------------------------------------------------------
+    # Extraction functions : _extract_records dispatches to _extract_to_list / _extract_to_file
+    # which convert each row via _convert_sql_record
+    # ------------------------------------------------------------------------------------------
+    def _extract_records(self, cursor: Cursor, start_date: datetime) -> tuple[int, Path | list[list[str]] | None]:
+        """Extracts to a list or file once the cursor source is ready - shared by local and remote execution.
+        Returns as a tuple how many lines have been extracted and, depending on config.extract_file,
+        a list of records or a filepath. Errors return (-1, None)"""
 
-        # ajout entête au buffer
-        row_headers = [colname[0] for colname in cursor.description]
-        buffer.append(row_headers)
+        assert self.config is not None
 
-        for row_number, record in enumerate(cursor):
-            # si arrêt demandé, sortie
+        # if no extraction file then return rows in a list
+        if self.config.extract_file == Path():
+            rows_count, execute_output = self._extract_to_list(cursor)
+            return rows_count, execute_output
+
+        # else extract rows to a file
+        try:
+            self._broadcast(self._time_log() + " - Début récupération des lignes...")
+            rows_count, execute_output = self._extract_to_file(cursor, self.config.extract_encoding)
+            if execute_output == "" and self.stop_requested.is_set():
+                raise InterruptedError()
+            ending_date = datetime.now()
+            self._execute_log_results(start_date, ending_date, rows_count)
+            return rows_count, execute_output
+        except InterruptedError:
+            self._broadcast(self._time_log() + " - Extraction interrompue")
+        except PermissionError:
+            self._broadcast(self._time_log() + f" - Ecriture refusée pour : {self.config.extract_file}")
+        except (FileNotFoundError, OSError) as e:
+            error_msg = str(e).split("]")[1].strip() if "]" in str(e) else str(e)
+            self._broadcast(
+                self._time_log()
+                + f" - Erreur ouverture de : {self.config.extract_file.name}\n"
+                + f"Détail : {error_msg}"
+            )
+
+        # if complete write failed then remove partial file
+        if self.config.extract_file != Path():
+            self.config.extract_file.unlink(missing_ok=True)
+
+        return (-1, None)
+
+    def _extract_to_list(self, cursor: Cursor) -> tuple[int, list[list[str]]]:
+        """Extracts records from a local or remote cursor into a list.
+        Returns as a tuple how many lines have been extracted and a list of records."""
+
+        buffer: list[list[str]] = []
+        row_num = -1
+
+        # add header to buffer
+        if cursor.description:
+            buffer.append([colname[0] for colname in cursor.description])
+
+        for row_num, record in enumerate(cursor):
+            # return if stop requested
             if self.stop_requested.is_set():
                 return 0, []
 
-            # ajout enregistrement courant au buffer
-            row_content = self._sql_record_to_text(record)
-            buffer.append(row_content)
+            # add record to buffer
+            buffer.append(self._convert_sql_record(record))
 
-        return row_number + 1, buffer
+        return row_num + 1, buffer
 
-    def _extract_to_file(self, cursor, encoding: str) -> tuple[int, Path | None]:
-        buffer = []  # buffer pour stocker les lignes avant écriture dans le fichier
-        buffer_max_size = 50_000  # nombre de lignes pour déclencher écriture dans fichier
-        row_number = -1
+    def _extract_to_file(self, cursor: Cursor, encoding: str) -> tuple[int, Path | None]:
+        """Extracts records from a local or remote cursor into a file.
+        Returns as a tuple how many lines have been extracted and a filepath."""
+
+        buffer = []  # buffer to hold rows before writing to file
+        buffer_max_size = 50_000  # number of lines to trigger file writing
+        row_num = -1
 
         if self.config is None or self.config.extract_file == Path():
             raise ValueError("Extraction to file is not possible without specifying one")
@@ -195,50 +341,49 @@ class QueryExecute:
         with open(self.config.extract_file, mode="w", encoding=encoding, errors="replace", newline="") as f:
             csv_writer = csv.writer(f, delimiter=self.field_separator, quotechar='"', quoting=csv.QUOTE_MINIMAL)
 
-            # ajout entête au buffer
-            buffer.append([colname[0] for colname in cursor.description])
+            # add header to buffer
+            if cursor.description:
+                buffer.append([colname[0] for colname in cursor.description])
 
-            for row_number, record in enumerate(cursor):
-                # si arrêt demandé, stopper l'extraction
+            for row_num, record in enumerate(cursor):
+                # return if stop requested
                 if self.stop_requested.is_set():
                     return 0, None
 
-                # ajout enregistrement courant au buffer
-                buffer.append(self._sql_record_to_text(record))
+                # add record to buffer
+                buffer.append(self._convert_sql_record(record))
 
-                # écriture du buffer si plein
-                if (row_number + 1) % buffer_max_size == 0:
+                # flush buffer if full
+                if (row_num + 1) % buffer_max_size == 0:
                     self._broadcast(
-                        self._time_log() + " - Ecriture ligne : {:,}...".format(row_number + 1).replace(",", " ")
+                        self._time_log() + " - Ecriture ligne : {:,}...".format(row_num + 1).replace(",", " ")
                     )
                     csv_writer.writerows(buffer)
                     buffer.clear()
 
-            # écriture du buffer si non vide et si ce n'est pas que l'entête
-            if buffer and row_number != -1:
+            # write remaining buffer if not empty and not only the header
+            if buffer and row_num != -1:
                 self._broadcast(self._time_log() + " - Ecriture des dernières lignes...")
                 csv_writer.writerows(buffer)
                 buffer.clear()
 
         self._broadcast(self._time_log() + " - Ecriture finie")
 
-        if row_number == -1:
+        if row_num == -1:
             self.config.extract_file.unlink(missing_ok=True)
 
-        return row_number + 1, self.config.extract_file
+        return row_num + 1, self.config.extract_file
 
-    def _sql_record_to_text(self, record) -> list:
-        if self.server is None:
-            raise RuntimeError("Server must be initialized before converting records")
+    def _convert_sql_record(self, record: tuple[Any, ...] | None) -> list:
+        """Converts record's values to display text"""
 
-        # mise en cache des éléments de conversion
-        charset = self.server.charset
+        charset = self.server.charset if self.server is not None else None  # a remote already returns clean encoding
         convert_func = self.converter.from_result
 
         def clean_value(val):
             value_txt = convert_func(val)
 
-            if isinstance(val, str):
+            if charset is not None and isinstance(val, str):
                 try:
                     return value_txt.encode(charset).decode("utf-8")
                 except (UnicodeDecodeError, UnicodeEncodeError, LookupError):
@@ -246,8 +391,11 @@ class QueryExecute:
 
             return value_txt
 
-        return [clean_value(val) for val in record]
+        return [clean_value(val) for val in record] if record else []
 
+    # ------------------------------------------------------------------------------------------
+    # Log functions
+    # ------------------------------------------------------------------------------------------
     def _broadcast(self, msg_to_display: str, msg_type: ExecResultMsg = ExecResultMsg.UI_OUTPUT) -> None:
         self.queue.put((msg_type, msg_to_display))
         _STANDALONE_BROADCAST_LOGGER.info(msg_to_display)

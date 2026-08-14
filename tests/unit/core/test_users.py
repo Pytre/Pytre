@@ -2,16 +2,17 @@
 Tests for Pytre/users.py
 
 REGRESSION TESTS:
-- Issue 2.1: CSV import validation (delimiter, quotechar, file existence)
-- Issue 4.1: Optimized list search with generators (csv_import)
+- CSV import validation (delimiter, quotechar, file existence)
+- Optimized list search with generators (csv_import)
 """
 
 import pytest
 import csv
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
 
-from Pytre_Core.users import Users, User
+from Pytre_Core.users import AuthType, Users, User, get_dummy_hash, hash_password, verify_password
 
 
 # ================================================================================
@@ -48,14 +49,57 @@ jdoe;John Doe;0;users;Welcome John
 
 
 # ================================================================================
-# REGRESSION TESTS - Issue 2.1: CSV Import Validation
+# hash_password / verify_password / get_dummy_hash
+# ================================================================================
+
+
+@pytest.mark.unit
+def test_hash_password_returns_a_verifiable_hash():
+    password_hash = hash_password("s3cret")
+
+    assert verify_password("s3cret", password_hash) is True
+
+
+@pytest.mark.unit
+def test_verify_password_rejects_wrong_password():
+    password_hash = hash_password("s3cret")
+
+    assert verify_password("wrong", password_hash) is False
+
+
+@pytest.mark.unit
+def test_verify_password_rejects_invalid_hash_without_raising():
+    assert verify_password("anything", "not-a-real-hash") is False
+
+
+@pytest.mark.unit
+def test_verify_password_uses_dummy_hash_when_hash_is_empty():
+    """Regression test: an empty password_hash (e.g. a user that exists but never had a
+    password set) must be rejected via the same slow dummy-hash path as an unknown user's
+    missing hash, not a fast short-circuit that would leak timing information."""
+    assert verify_password("anything", "") is False
+
+
+@pytest.mark.unit
+def test_get_dummy_hash_is_stable_and_never_verifies():
+    """Regression test: the dummy hash used to defend /login against account enumeration by
+    timing must stay constant across calls, and must never successfully verify any password -
+    otherwise it wouldn't be usable as a safe stand-in for a missing real hash."""
+    dummy = get_dummy_hash()
+
+    assert dummy == get_dummy_hash()
+    assert verify_password("anything", dummy) is False
+
+
+# ================================================================================
+# REGRESSION TESTS - CSV Import Validation
 # ================================================================================
 
 
 @pytest.mark.regression
 def test_csv_import_validates_delimiter(mock_kee):
     """
-    Regression test for Issue 2.1 - delimiter must be valid
+    Regression test: delimiter must be valid
 
     Delimiter must be single character and different from quotechar.
     """
@@ -103,14 +147,14 @@ def test_csv_import_validates_required_columns(tmp_path, mock_kee):
 
 
 # ================================================================================
-# REGRESSION TESTS - Issue 4.1: Optimized Search
+# REGRESSION TESTS - Optimized Search
 # ================================================================================
 
 
 @pytest.mark.regression
 def test_csv_import_uses_generator_for_search(tmp_path, mock_kee):
     """
-    Regression test for Issue 4.1 - use generator with next()
+    Regression test: use generator with next()
 
     The search for existing entry uses next() with generator
     expression for early termination.
@@ -914,6 +958,121 @@ def test_user_load_does_nothing_if_db_fails_to_open(mock_kee):
 
     assert user.exists is False
     assert user.is_authorized is False
+
+
+@pytest.mark.unit
+def test_user_default_auth_type_is_basic(mock_kee):
+    users = Users(mock_kee)
+    user = User(users, detect_user=False)
+
+    assert user.auth_type == AuthType.BASIC
+    assert user.password_hash == ""
+    assert user.password_changed_at is None
+
+
+@pytest.mark.unit
+def test_password_hash_setter_updates_hash_and_timestamp(mock_kee):
+    users = Users(mock_kee)
+    user = User(users, detect_user=False)
+
+    user.password_hash = "some-hash"
+
+    assert user.password_hash == "some-hash"
+    assert user.password_changed_at is not None
+
+
+@pytest.mark.unit
+def test_password_changed_at_cannot_be_set_directly(mock_kee):
+    """password_changed_at is read-only - it can only change as a side effect of assigning
+    password_hash, so a caller can't update one without the other."""
+    users = Users(mock_kee)
+    user = User(users, detect_user=False)
+
+    with pytest.raises(AttributeError):
+        setattr(user, "password_changed_at", datetime.now(timezone.utc))
+
+
+@pytest.mark.unit
+def test_user_load_from_entry_sets_password_hash_and_auth_type(mock_kee):
+    from pykeepass.entry import Entry
+
+    entry = Mock(spec=Entry)
+    entry.uuid = "12345678-1234-1234-1234-123456789012"
+    entry.username = "jdoe"
+    entry.title = "John Doe"
+    entry.password = "argon2-hash-value"
+    entry.tags = []
+    entry.custom_properties = ["auth_type", "password_changed_at"]
+
+    def get_prop(name):
+        return {"auth_type": "basic", "password_changed_at": "2026-01-15T10:30:00"}[name]
+
+    entry.get_custom_property = Mock(side_effect=get_prop)
+
+    users = Users(mock_kee)
+    user = User(users, entry=entry)
+
+    assert user.password_hash == "argon2-hash-value"
+    assert user.auth_type == AuthType.BASIC
+    assert user.password_changed_at == datetime(2026, 1, 15, 10, 30, 0)
+
+
+@pytest.mark.unit
+def test_user_load_from_entry_defaults_auth_type_on_unknown_value(mock_kee):
+    from pykeepass.entry import Entry
+
+    entry = Mock(spec=Entry)
+    entry.uuid = "12345678-1234-1234-1234-123456789012"
+    entry.username = "jdoe"
+    entry.title = "John Doe"
+    entry.password = ""
+    entry.tags = []
+    entry.custom_properties = ["auth_type"]
+    entry.get_custom_property = Mock(return_value="unknown_type")
+
+    users = Users(mock_kee)
+    user = User(users, entry=entry)
+
+    assert user.auth_type == AuthType.BASIC
+
+
+@pytest.mark.unit
+def test_user_load_from_entry_handles_missing_password_changed_at(mock_kee):
+    from pykeepass.entry import Entry
+
+    entry = Mock(spec=Entry)
+    entry.uuid = "12345678-1234-1234-1234-123456789012"
+    entry.username = "jdoe"
+    entry.title = "John Doe"
+    entry.password = ""
+    entry.tags = []
+    entry.custom_properties = []
+
+    users = Users(mock_kee)
+    user = User(users, entry=entry)
+
+    assert user.password_changed_at is None
+
+
+@pytest.mark.unit
+def test_user_save_writes_password_hash_auth_type_and_changed_at(mock_kee):
+    users = Users(mock_kee)
+    user = User(users, detect_user=False)
+    user.username = "jdoe"
+    user.password_hash = "new-hash"
+
+    new_entry = Mock()
+    new_entry.uuid = "new-uuid"
+    mock_kee.db.add_entry = Mock(return_value=new_entry)
+
+    user.save()
+
+    assert new_entry.password == "new-hash"
+    new_entry.set_custom_property.assert_any_call("auth_type", "basic")
+    changed_at_calls = [c for c in new_entry.set_custom_property.call_args_list if c.args[0] == "password_changed_at"]
+    assert len(changed_at_calls) == 1
+    assert user.password_changed_at is not None
+    assert changed_at_calls[0].args[1] == user.password_changed_at.isoformat()
 
 
 @pytest.mark.unit

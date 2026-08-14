@@ -1,0 +1,1432 @@
+"""
+Tests for Pytre_Core/remotes.py
+"""
+
+import json
+from datetime import date, datetime
+from decimal import Decimal
+from typing import Any
+
+import httpx2
+import pytest
+
+from Pytre_Core.remotes import (
+    Remote,
+    RemoteAddress,
+    RemoteExecutionError,
+    RemoteServer,
+    Remotes,
+    decode_row_value,
+    encode_row_value,
+)
+
+
+# ================================================================================
+# encode_row_value / decode_row_value
+# ================================================================================
+
+
+@pytest.mark.unit
+def test_encode_row_value_wraps_datetime_date_and_decimal():
+    assert encode_row_value(datetime(2026, 1, 1, 10, 30)) == {"$datetime": "2026-01-01T10:30:00"}
+    assert encode_row_value(date(2026, 1, 1)) == {"$date": "2026-01-01"}
+    assert encode_row_value(Decimal("12.50")) == {"$decimal": "12.50"}
+
+
+@pytest.mark.unit
+def test_encode_row_value_passes_through_json_native_types():
+    assert encode_row_value("hello") == "hello"
+    assert encode_row_value(3) == 3
+    assert encode_row_value(1.5) == 1.5
+    assert encode_row_value(True) is True
+    assert encode_row_value(None) is None
+
+
+@pytest.mark.unit
+def test_decode_row_value_unwraps_datetime_date_and_decimal():
+    assert decode_row_value({"$datetime": "2026-01-01T10:30:00"}) == datetime(2026, 1, 1, 10, 30)
+    assert decode_row_value({"$date": "2026-01-01"}) == date(2026, 1, 1)
+    assert decode_row_value({"$decimal": "12.50"}) == Decimal("12.50")
+
+
+@pytest.mark.unit
+def test_decode_row_value_passes_through_unwrapped_values():
+    assert decode_row_value("hello") == "hello"
+    assert decode_row_value(3) == 3
+    assert decode_row_value(None) is None
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "value", [datetime(2026, 1, 1, 10, 30), date(2026, 1, 1), Decimal("12.50"), "hello", 3, 1.5, True, None]
+)
+def test_encode_decode_round_trip(value):
+    assert decode_row_value(encode_row_value(value)) == value
+
+
+class _FakeResponse:
+    """Minimal stand-in for httpx2.Response - only what Remote/RemoteServer actually use."""
+
+    def __init__(self, json_data=None, status_code: int = 200, status_error: Exception | None = None):
+        self._json_data = json_data
+        self.status_code = status_code
+        self._status_error = status_error
+
+    def raise_for_status(self) -> None:
+        if self._status_error is not None:
+            raise self._status_error
+
+    def json(self):
+        return self._json_data
+
+
+@pytest.fixture
+def address() -> RemoteAddress:
+    """Loopback host so login()'s HTTPS-or-local gate doesn't get in the way of tests that
+    aren't specifically about that gate - see the dedicated tests near Remote.login()."""
+    return RemoteAddress(url="http://127.0.0.1", port=8000, username="alice")
+
+
+@pytest.fixture
+def remotes_file(tmp_path) -> Any:
+    """Path to a remotes json file, isolated per test - never touches the real
+    ~/Pytre/Pytre_Remotes.json. Doesn't need to exist: Remotes/load_remotes() handle a
+    missing file as an empty collection, same as a fresh install."""
+    return tmp_path / "remotes.json"
+
+
+def _write_remotes_file(path, addresses: list[RemoteAddress]) -> None:
+    """Writes a remotes json file in the same shape Remotes.save_remotes() produces -
+    keyed by uuid, uuid itself excluded from each value."""
+    data = {a.uuid: {k: v for k, v in a.to_dict().items() if k != "uuid"} for a in addresses}
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+
+def _read_remotes_file(path) -> dict:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+@pytest.fixture
+def remotes(remotes_file) -> Remotes:
+    """Empty Remotes collection - only used as the required back-reference for Remote(),
+    not exercised directly by tests that don't need real persistence."""
+    return Remotes(remotes_file)
+
+
+# ================================================================================
+# RemoteAddress
+# ================================================================================
+
+
+@pytest.mark.unit
+def test_remote_address_from_dict_builds_valid_object():
+    remote = RemoteAddress.from_dict({"url": "http://example.com", "port": 8000, "username": "alice"})
+
+    assert remote.url == "http://example.com"
+    assert remote.port == 8000
+    assert remote.username == "alice"
+
+
+@pytest.mark.unit
+def test_remote_address_from_dict_coerces_string_port_to_int():
+    remote = RemoteAddress.from_dict({"url": "http://example.com", "port": "8000", "username": "alice"})
+
+    assert remote.port == 8000
+    assert isinstance(remote.port, int)
+
+
+@pytest.mark.unit
+def test_remote_address_from_dict_rejects_non_dict():
+    with pytest.raises(TypeError):
+        RemoteAddress.from_dict("not_a_dict")  # type: ignore
+
+
+@pytest.mark.unit
+def test_remote_address_from_dict_rejects_missing_url():
+    with pytest.raises(ValueError, match="required"):
+        RemoteAddress.from_dict({"port": 8000})
+
+
+@pytest.mark.unit
+def test_remote_address_from_dict_rejects_missing_port():
+    with pytest.raises(ValueError, match="required"):
+        RemoteAddress.from_dict({"url": "http://example.com"})
+
+
+@pytest.mark.unit
+def test_remote_address_from_dict_rejects_empty_url():
+    with pytest.raises(ValueError, match="empty"):
+        RemoteAddress.from_dict({"url": "", "port": 8000})
+
+
+@pytest.mark.unit
+def test_remote_address_from_dict_rejects_non_numeric_port():
+    with pytest.raises(ValueError, match="integer"):
+        RemoteAddress.from_dict({"url": "http://example.com", "port": "not_a_number"})
+
+
+@pytest.mark.unit
+def test_remote_address_from_dict_rejects_missing_username():
+    with pytest.raises(ValueError, match="required"):
+        RemoteAddress.from_dict({"url": "http://example.com", "port": 8000})
+
+
+@pytest.mark.unit
+def test_remote_address_from_dict_rejects_empty_username():
+    with pytest.raises(ValueError, match="empty"):
+        RemoteAddress.from_dict({"url": "http://example.com", "port": 8000, "username": ""})
+
+
+@pytest.mark.unit
+def test_remote_address_to_dict_round_trips():
+    original = {
+        "uuid": "550e8400-e29b-41d4-a716-446655440000",
+        "url": "http://example.com",
+        "port": 8000,
+        "username": "alice",
+        "description": "Prod",
+    }
+
+    remote = RemoteAddress.from_dict(original)
+
+    assert remote.to_dict() == original | {"encrypted_pwd": ""}
+
+
+@pytest.mark.unit
+def test_remote_address_generates_uuid_when_not_given():
+    remote = RemoteAddress(url="http://a", port=8000, username="alice")
+
+    assert remote.uuid
+
+
+@pytest.mark.unit
+def test_remote_address_from_dict_generates_uuid_when_missing():
+    remote = RemoteAddress.from_dict({"url": "http://a", "port": 8000, "username": "alice"})
+
+    assert remote.uuid
+
+
+@pytest.mark.unit
+def test_remote_address_from_dict_preserves_given_uuid():
+    """Regression: save()/load() rely on the uuid surviving a to_dict()/from_dict() round
+    trip unchanged - a missing or regenerated uuid breaks identity across a reload."""
+    remote = RemoteAddress.from_dict(
+        {"uuid": "550e8400-e29b-41d4-a716-446655440000", "url": "http://a", "port": 8000, "username": "alice"}
+    )
+
+    assert remote.uuid == "550e8400-e29b-41d4-a716-446655440000"
+
+
+@pytest.mark.unit
+def test_remote_address_from_dict_leaves_description_unset_when_missing():
+    """No default is synthesized and persisted at load time - a stale "url:port" baked in
+    at creation wouldn't track later address edits. description_for_ui() computes the
+    fallback dynamically instead (see test_description_for_ui_falls_back_to_id below)."""
+    remote = RemoteAddress.from_dict({"url": "http://example.com", "port": 8000, "username": "alice"})
+
+    assert not remote.description
+
+
+@pytest.mark.unit
+def test_description_for_ui_falls_back_to_id_when_description_is_empty():
+    remote = RemoteAddress(url="http://example.com", port=8000, username="alice")
+
+    assert remote.description_for_ui == remote.id
+
+
+@pytest.mark.unit
+def test_description_for_ui_returns_description_when_set():
+    remote = RemoteAddress(url="http://example.com", port=8000, username="alice", description="Prod")
+
+    assert remote.description_for_ui == "Prod"
+
+
+@pytest.mark.unit
+def test_remote_address_from_dict_keeps_provided_description():
+    remote = RemoteAddress.from_dict(
+        {"url": "http://example.com", "port": 8000, "username": "alice", "description": "Prod"}
+    )
+
+    assert remote.description == "Prod"
+
+
+@pytest.mark.unit
+def test_remote_address_id_is_built_from_username_url_and_port():
+    remote = RemoteAddress(url="HTTP://Example.COM", port=8000, username="Alice")
+
+    assert remote.id == "alice@http://example.com:8000"
+    assert remote.id == remote.id  # stable across repeated access
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "url, port, username",
+    [("", 8000, "alice"), ("http://a", "", "alice"), ("http://a", 8000, ""), ("http://a", 8000, "  ")],
+)
+def test_remote_address_id_raises_if_any_value_blank(url, port, username):
+    with pytest.raises(ValueError):
+        RemoteAddress(url=url, port=port, username=username).id
+
+
+@pytest.mark.unit
+def test_remote_address_token_defaults_to_empty():
+    remote = RemoteAddress(url="http://a", port=8000, username="alice")
+
+    assert remote.token == ""
+
+
+@pytest.mark.unit
+def test_remote_address_token_is_excluded_from_to_dict():
+    """token is in-memory only, deliberately never persisted to Pytre_Remotes.json."""
+    remote = RemoteAddress(url="http://a", port=8000, username="alice")
+    remote.token = "some-token"
+
+    assert "token" not in remote.to_dict()
+
+
+@pytest.mark.unit
+def test_remote_address_from_dict_never_sets_token():
+    remote = RemoteAddress.from_dict({"url": "http://a", "port": 8000, "username": "alice"})
+
+    assert remote.token == ""
+
+
+# ================================================================================
+# Remote.login
+# ================================================================================
+
+
+@pytest.mark.unit
+def test_login_success_stores_token(address, remotes, monkeypatch):
+    monkeypatch.setattr(httpx2, "post", lambda **kwargs: _FakeResponse({"token": "abc123"}))
+
+    result = Remote(remotes, address).login()
+
+    assert result is True
+    assert address.token == "abc123"
+
+
+@pytest.mark.unit
+def test_login_sends_url_username_and_password(address, remotes, monkeypatch):
+    address.password = "s3cret"
+    captured = {}
+
+    def fake_post(url, json, timeout):
+        captured["url"] = url
+        captured["json"] = json
+        return _FakeResponse({"token": "abc123"})
+
+    monkeypatch.setattr(httpx2, "post", fake_post)
+
+    Remote(remotes, address).login()
+
+    assert captured["url"] == "http://127.0.0.1:8000/login"
+    assert captured["json"] == {"username": "alice", "password": "s3cret"}
+
+
+@pytest.mark.unit
+def test_login_returns_false_and_clears_token_on_request_error(address, remotes, monkeypatch):
+    address.token = "stale-token"
+
+    def fake_post(**kwargs):
+        raise httpx2.ConnectError("boom")
+
+    monkeypatch.setattr(httpx2, "post", fake_post)
+
+    result = Remote(remotes, address).login()
+
+    assert result is False
+    assert address.token == ""
+
+
+@pytest.mark.unit
+def test_login_returns_false_and_clears_token_on_http_status_error(address, remotes, monkeypatch):
+    address.token = "stale-token"
+    error = httpx2.HTTPStatusError("401", request=None, response=None)  # type: ignore
+    monkeypatch.setattr(httpx2, "post", lambda **kwargs: _FakeResponse(status_error=error))
+
+    result = Remote(remotes, address).login()
+
+    assert result is False
+    assert address.token == ""
+
+
+@pytest.mark.unit
+def test_login_refuses_plain_http_to_a_non_local_remote(address, remotes, monkeypatch):
+    """Regression: sending the password over plain HTTP to a real, non-local host would
+    expose it in cleartext on the network - login() must refuse before ever attempting the
+    request, not just log a warning after the fact."""
+    address.url = "http://example.com"
+    address.token = "stale-token"
+
+    def fake_post(**kwargs):
+        pytest.fail("httpx2.post should not be called")
+
+    monkeypatch.setattr(httpx2, "post", fake_post)
+
+    result = Remote(remotes, address).login()
+
+    assert result is False
+    assert address.token == ""
+
+
+@pytest.mark.unit
+def test_login_allows_https_to_a_non_local_remote(address, remotes, monkeypatch):
+    address.url = "https://example.com"
+    monkeypatch.setattr(httpx2, "post", lambda **kwargs: _FakeResponse({"token": "abc123"}))
+
+    result = Remote(remotes, address).login()
+
+    assert result is True
+    assert address.token == "abc123"
+
+
+@pytest.mark.unit
+def test_login_allows_plain_http_to_localhost(address, remotes, monkeypatch):
+    address.url = "http://localhost"
+    monkeypatch.setattr(httpx2, "post", lambda **kwargs: _FakeResponse({"token": "abc123"}))
+
+    result = Remote(remotes, address).login()
+
+    assert result is True
+
+
+@pytest.mark.unit
+def test_login_allows_plain_http_to_a_private_network_address(address, remotes, monkeypatch):
+    """Not just localhost/127.0.0.1 - any RFC 1918 private-network address is exempt, since
+    Pytre_Server is expected to run on an internal network, not just on the same machine."""
+    address.url = "http://192.168.1.10"
+    monkeypatch.setattr(httpx2, "post", lambda **kwargs: _FakeResponse({"token": "abc123"}))
+
+    result = Remote(remotes, address).login()
+
+    assert result is True
+
+
+@pytest.mark.unit
+def test_login_refuses_plain_http_to_a_public_ip(address, remotes, monkeypatch):
+    address.url = "http://8.8.8.8"
+
+    def fake_post(**kwargs):
+        pytest.fail("httpx2.post should not be called")
+
+    monkeypatch.setattr(httpx2, "post", fake_post)
+
+    result = Remote(remotes, address).login()
+
+    assert result is False
+
+
+# ================================================================================
+# Remote.auth_headers
+# ================================================================================
+
+
+@pytest.mark.unit
+def test_auth_headers_includes_bearer_token(address, remotes):
+    address.token = "abc123"
+
+    assert Remote(remotes, address).auth_headers == {"Authorization": "Bearer abc123"}
+
+
+@pytest.mark.unit
+def test_auth_headers_with_no_token_omits_authorization_header(address, remotes):
+    """Regression: `Authorization: Bearer ` (empty token, trailing space) is rejected by
+    httpx2/h11 as an illegal header value before the request ever reaches the server -
+    confirmed empirically against a real HTTP server (LocalProtocolError). Omitting the
+    header entirely is syntactically valid and the server already treats a missing header
+    the same as an invalid one (401), so "missing" and "expired" still share the same
+    retry path in get_authenticated()/execute()."""
+    assert Remote(remotes, address).auth_headers == {}
+
+
+# ================================================================================
+# Remote.get_authenticated
+# ================================================================================
+
+
+@pytest.mark.unit
+def test_get_authenticated_returns_response_without_retry_on_success(address, remotes, monkeypatch):
+    calls = []
+
+    def fake_get(**kwargs):
+        calls.append(kwargs)
+        return _FakeResponse({"ok": True}, status_code=200)
+
+    monkeypatch.setattr(httpx2, "get", fake_get)
+
+    response = Remote(remotes, address).get_authenticated("http://example.com:8000/servers")
+
+    assert response.json() == {"ok": True}
+    assert len(calls) == 1  # regression: used to always GET twice, even on immediate success
+
+
+@pytest.mark.unit
+def test_get_authenticated_sends_bearer_header_and_params(address, remotes, monkeypatch):
+    address.token = "abc123"
+    captured = {}
+
+    def fake_get(url, params, headers, timeout):
+        captured["url"] = url
+        captured["params"] = params
+        captured["headers"] = headers
+        return _FakeResponse(status_code=200)
+
+    monkeypatch.setattr(httpx2, "get", fake_get)
+
+    Remote(remotes, address).get_authenticated("http://example.com:8000/queries", params={"server_id": "s1"})
+
+    assert captured["url"] == "http://example.com:8000/queries"
+    assert captured["params"] == {"server_id": "s1"}
+    assert captured["headers"] == {"Authorization": "Bearer abc123"}
+
+
+@pytest.mark.unit
+def test_get_authenticated_sends_no_header_when_token_is_missing(address, remotes, monkeypatch):
+    """Regression: the very first call, before any token has ever been obtained, must not
+    send `Authorization: Bearer ` - httpx2/h11 rejects that as an illegal header value."""
+    captured = {}
+
+    def fake_get(url, params, headers, timeout):
+        captured["headers"] = headers
+        return _FakeResponse(status_code=200)
+
+    monkeypatch.setattr(httpx2, "get", fake_get)
+
+    Remote(remotes, address).get_authenticated("http://example.com:8000/servers")
+
+    assert captured["headers"] == {}
+
+
+@pytest.mark.unit
+def test_get_authenticated_relogs_in_and_retries_once_on_401(address, remotes, monkeypatch):
+    get_responses = iter([_FakeResponse(status_code=401), _FakeResponse({"ok": True}, status_code=200)])
+    monkeypatch.setattr(httpx2, "get", lambda **kwargs: next(get_responses))
+    monkeypatch.setattr(httpx2, "post", lambda **kwargs: _FakeResponse({"token": "new-token"}))
+
+    response = Remote(remotes, address).get_authenticated("http://example.com:8000/servers")
+
+    assert response.json() == {"ok": True}
+    assert address.token == "new-token"
+
+
+@pytest.mark.unit
+def test_get_authenticated_raises_request_error_if_login_fails_after_401(address, remotes, monkeypatch):
+    monkeypatch.setattr(httpx2, "get", lambda **kwargs: _FakeResponse(status_code=401))
+
+    def fake_post(**kwargs):
+        raise httpx2.ConnectError("boom")
+
+    monkeypatch.setattr(httpx2, "post", fake_post)
+
+    with pytest.raises(httpx2.RequestError):
+        Remote(remotes, address).get_authenticated("http://example.com:8000/servers")
+
+
+# ================================================================================
+# Remote.refresh_servers
+# ================================================================================
+
+
+@pytest.mark.unit
+def test_refresh_servers_populates_servers_on_success(address, remotes, monkeypatch):
+    servers_data = [{"id": "s1", "description": "Server 1"}, {"id": "s2", "description": "Server 2"}]
+    monkeypatch.setattr(httpx2, "get", lambda **kwargs: _FakeResponse(servers_data, status_code=200))
+
+    remote = Remote(remotes, address=address)
+    result = remote.refresh_servers()
+
+    assert result == remote.servers
+    assert [s.id_on_remote for s in remote.servers] == ["s1", "s2"]
+    assert all(s.remote is remote for s in remote.servers)
+    assert remote.last_error is None
+
+
+@pytest.mark.unit
+def test_refresh_servers_sends_correct_url_and_auth_header(address, remotes, monkeypatch):
+    address.token = "abc123"
+    captured = {}
+
+    def fake_get(url, params, headers, timeout):
+        captured["url"] = url
+        captured["headers"] = headers
+        return _FakeResponse([], status_code=200)
+
+    monkeypatch.setattr(httpx2, "get", fake_get)
+
+    Remote(remotes, address=address).refresh_servers()
+
+    assert captured["url"] == "http://127.0.0.1:8000/servers"
+    assert captured["headers"] == {"Authorization": "Bearer abc123"}
+
+
+@pytest.mark.unit
+def test_refresh_servers_keeps_previous_list_on_request_error(address, remotes, monkeypatch):
+    def fake_get(**kwargs):
+        raise httpx2.ConnectError("boom")
+
+    monkeypatch.setattr(httpx2, "get", fake_get)
+
+    remote = Remote(remotes, address=address)
+    remote.servers = [RemoteServer(id="old", description="Old", remote=remote)]
+
+    result = remote.refresh_servers()
+
+    assert result == remote.servers
+    assert [s.id_on_remote for s in remote.servers] == ["old"]
+    assert remote.last_error is not None
+
+
+@pytest.mark.unit
+def test_refresh_servers_keeps_previous_list_on_http_status_error(address, remotes, monkeypatch):
+    error = httpx2.HTTPStatusError("500", request=None, response=None)  # type: ignore
+    monkeypatch.setattr(httpx2, "get", lambda **kwargs: _FakeResponse(status_code=200, status_error=error))
+
+    remote = Remote(remotes, address=address)
+    remote.servers = [RemoteServer(id="old", description="Old", remote=remote)]
+
+    result = remote.refresh_servers()
+
+    assert [s.id_on_remote for s in remote.servers] == ["old"]
+    assert remote.last_error is not None
+
+
+@pytest.mark.unit
+def test_refresh_servers_success_clears_last_error(address, remotes, monkeypatch):
+    remote = Remote(remotes, address=address)
+    remote.last_error = "previous failure"
+
+    monkeypatch.setattr(httpx2, "get", lambda **kwargs: _FakeResponse([], status_code=200))
+    remote.refresh_servers()
+
+    assert remote.last_error is None
+
+
+# ================================================================================
+# RemoteServer.get_serialized_queries
+# ================================================================================
+
+
+@pytest.fixture
+def remote_server(address, remotes) -> RemoteServer:
+    remote = Remote(remotes, address)
+    return RemoteServer(id="SRV1", description="Server 1", remote=remote)
+
+
+@pytest.mark.unit
+def test_get_serialized_queries_populates_on_success(remote_server, monkeypatch):
+    queries_data = [{"name": "Q1"}, {"name": "Q2"}]
+    monkeypatch.setattr(httpx2, "get", lambda **kwargs: _FakeResponse(queries_data, status_code=200))
+
+    result = remote_server.get_serialized_queries()
+
+    assert result == queries_data
+    assert remote_server.serialized_queries == queries_data
+    assert remote_server.last_error is None
+
+
+@pytest.mark.unit
+def test_get_serialized_queries_sends_server_id_and_auth_header(remote_server, monkeypatch):
+    remote_server.address.token = "abc123"
+    captured = {}
+
+    def fake_get(url, params, headers, timeout):
+        captured["url"] = url
+        captured["params"] = params
+        captured["headers"] = headers
+        return _FakeResponse([], status_code=200)
+
+    monkeypatch.setattr(httpx2, "get", fake_get)
+
+    remote_server.get_serialized_queries()
+
+    assert captured["url"] == "http://127.0.0.1:8000/queries"
+    assert captured["params"] == {"server_id": "SRV1"}
+    assert captured["headers"] == {"Authorization": "Bearer abc123"}
+
+
+@pytest.mark.unit
+def test_get_serialized_queries_keeps_previous_list_on_request_error(remote_server, monkeypatch):
+    def fake_get(**kwargs):
+        raise httpx2.ConnectError("boom")
+
+    monkeypatch.setattr(httpx2, "get", fake_get)
+    remote_server.serialized_queries = [{"name": "old"}]
+
+    result = remote_server.get_serialized_queries()
+
+    assert result == [{"name": "old"}]
+    assert remote_server.last_error is not None
+
+
+@pytest.mark.unit
+def test_get_serialized_queries_keeps_previous_list_on_http_status_error(remote_server, monkeypatch):
+    error = httpx2.HTTPStatusError("500", request=None, response=None)  # type: ignore
+    monkeypatch.setattr(httpx2, "get", lambda **kwargs: _FakeResponse(status_code=200, status_error=error))
+    remote_server.serialized_queries = [{"name": "old"}]
+
+    result = remote_server.get_serialized_queries()
+
+    assert result == [{"name": "old"}]
+    assert remote_server.last_error is not None
+
+
+# ================================================================================
+# Remote construction
+# ================================================================================
+
+
+@pytest.mark.unit
+def test_remote_init_does_not_call_http_when_load_is_false(address, remotes, monkeypatch):
+    monkeypatch.setattr(httpx2, "get", lambda **kwargs: pytest.fail("httpx2.get should not be called"))
+
+    remote = Remote(remotes, address=address, load=False)
+
+    assert remote.servers == []
+
+
+@pytest.mark.unit
+def test_remote_init_with_load_true_fetches_servers(address, remotes, monkeypatch):
+    monkeypatch.setattr(
+        httpx2, "get", lambda **kwargs: _FakeResponse([{"id": "s1", "description": "Server 1"}], status_code=200)
+    )
+
+    remote = Remote(remotes, address=address, load=True)
+
+    assert [s.id_on_remote for s in remote.servers] == ["s1"]
+
+
+# ================================================================================
+# Remote.save / Remote.delete without a Remotes collection
+# ================================================================================
+
+
+@pytest.mark.unit
+def test_save_raises_runtime_error_when_remotes_is_none(address):
+    """The hollow Remote(None, address) built by RemoteServer.deserialize() must never be
+    saved/deleted - it only exists to carry an address across the execution round-trip."""
+    with pytest.raises(RuntimeError):
+        Remote(None, address).save()
+
+
+@pytest.mark.unit
+def test_delete_raises_runtime_error_when_remotes_is_none(address):
+    with pytest.raises(RuntimeError):
+        Remote(None, address).delete()
+
+
+# ================================================================================
+# Remotes
+# ================================================================================
+
+
+@pytest.fixture
+def no_remote_servers(monkeypatch):
+    """Every remote reports an empty server list - avoids real HTTP calls for tests that
+    aren't exercising refresh_servers() itself (already covered above)."""
+    monkeypatch.setattr(httpx2, "get", lambda **kwargs: _FakeResponse([]))
+
+
+@pytest.mark.unit
+def test_remotes_init_without_remotes_is_empty(remotes_file):
+    assert Remotes(remotes_file).remotes_dict == {}
+
+
+@pytest.mark.unit
+def test_remotes_init_builds_one_remote_per_address(no_remote_servers, remotes_file):
+    addr1 = RemoteAddress(url="http://a", port=8000, username="alice")
+    addr2 = RemoteAddress(url="http://b", port=8001, username="bob")
+    _write_remotes_file(remotes_file, [addr1, addr2])
+
+    remotes = Remotes(remotes_file)
+
+    assert {r.address.url for r in remotes.remotes_dict.values()} == {addr1.url, addr2.url}
+    assert set(remotes.remotes_dict.keys()) == {addr1.uuid, addr2.uuid}
+
+
+@pytest.mark.unit
+def test_remotes_init_does_not_fetch_servers(monkeypatch, remotes_file):
+    """Regression: Remotes.__init__ used to eagerly call get_all_servers(reload=True), a
+    blocking HTTP round trip per configured remote done twice in a row at Pytre_Client
+    startup (once here, once from App.refresh_servers() right after) - init must now only
+    load the remotes list from the remotes json file, never touch the network."""
+    addr = RemoteAddress(url="http://a", port=8000, username="alice")
+    _write_remotes_file(remotes_file, [addr])
+    monkeypatch.setattr(httpx2, "get", lambda **kwargs: pytest.fail("httpx2.get should not be called"))
+
+    remotes = Remotes(remotes_file)
+
+    assert remotes.servers_dict == {}
+    assert list(remotes.remotes_dict.values())[0].servers == []
+
+
+@pytest.mark.unit
+def test_get_all_servers_reload_refreshes_every_remote_and_merges_them(monkeypatch, remotes_file):
+    addr1 = RemoteAddress(url="http://a", port=8000, username="alice")
+    addr2 = RemoteAddress(url="http://b", port=8001, username="bob")
+    _write_remotes_file(remotes_file, [addr1, addr2])
+    monkeypatch.setattr(httpx2, "get", lambda **kwargs: _FakeResponse([{"id": "s1", "description": "Server 1"}]))
+
+    remotes = Remotes(remotes_file)
+    servers = remotes.get_all_servers(reload=True)
+
+    assert all(len(r.servers) == 1 for r in remotes.remotes_dict.values())
+    assert len(servers) == 2  # one "s1" server per remote, merged by RemoteServer.id (which disambiguates them)
+
+
+@pytest.mark.unit
+def test_get_all_servers_without_reload_assembles_from_current_state(monkeypatch, remotes_file):
+    """No network call: assembles servers_dict from whatever each remote already holds in
+    memory, rather than returning a possibly-empty separately-tracked cache."""
+    addr = RemoteAddress(url="http://a", port=8000, username="alice")
+    _write_remotes_file(remotes_file, [addr])
+    monkeypatch.setattr(httpx2, "get", lambda **kwargs: _FakeResponse([{"id": "s1", "description": "Server 1"}]))
+    remotes = Remotes(remotes_file)
+    remotes.get_all_servers(reload=True)  # populate remote.servers once, since init no longer does it
+
+    monkeypatch.setattr(httpx2, "get", lambda **kwargs: pytest.fail("httpx2.get should not be called"))
+    servers = remotes.get_all_servers()
+
+    assert len(servers) == 1
+
+
+@pytest.mark.unit
+def test_get_all_remotes_with_reload_rereads_file(no_remote_servers, remotes_file):
+    remotes = Remotes(remotes_file)
+    assert remotes.remotes_dict == {}
+
+    addr = RemoteAddress(url="http://a", port=8000, username="alice")
+    _write_remotes_file(remotes_file, [addr])
+
+    result = remotes.get_all_remotes(reload=True)
+
+    assert set(result.keys()) == {addr.uuid}
+
+
+@pytest.mark.unit
+def test_get_all_remotes_without_reload_does_not_reread_file(no_remote_servers, remotes_file):
+    remotes = Remotes(remotes_file)
+
+    addr = RemoteAddress(url="http://a", port=8000, username="alice")
+    _write_remotes_file(remotes_file, [addr])
+
+    result = remotes.get_all_remotes()
+
+    assert result == {}
+
+
+# ================================================================================
+# Remotes.find_remote_from_uuid / find_remote_from_id
+# ================================================================================
+
+
+@pytest.mark.unit
+def test_find_remote_from_id_returns_matching_remote_case_insensitive(no_remote_servers, address, remotes_file):
+    _write_remotes_file(remotes_file, [address])
+    remotes = Remotes(remotes_file)
+
+    found = remotes.find_remote_from_id(address.id.upper())
+
+    assert found is not None
+    assert found.address.url == address.url
+
+
+@pytest.mark.unit
+def test_find_remote_from_id_returns_none_when_not_found(no_remote_servers, remotes_file):
+    remotes = Remotes(remotes_file)
+
+    assert remotes.find_remote_from_id("unknown") is None
+
+
+@pytest.mark.unit
+def test_find_remote_from_uuid_returns_matching_remote(no_remote_servers, address, remotes_file):
+    _write_remotes_file(remotes_file, [address])
+    remotes = Remotes(remotes_file)
+
+    found = remotes.find_remote_from_uuid(address.uuid)
+
+    assert found is not None
+    assert found.address.url == address.url
+
+
+@pytest.mark.unit
+def test_find_remote_from_uuid_returns_none_when_not_found(no_remote_servers, remotes_file):
+    remotes = Remotes(remotes_file)
+
+    assert remotes.find_remote_from_uuid("unknown") is None
+
+
+# ================================================================================
+# Remote.save
+# ================================================================================
+
+
+@pytest.mark.unit
+def test_save_adds_new_remote(no_remote_servers, address, remotes_file):
+    remotes = Remotes(remotes_file)
+    remote = Remote(remotes, address)
+
+    remote.save()
+
+    assert [r.address.id for r in remotes.remotes_dict.values()] == [address.id]
+    saved = _read_remotes_file(remotes_file)
+    assert saved == {address.uuid: {k: v for k, v in address.to_dict().items() if k != "uuid"}}
+
+
+@pytest.mark.unit
+def test_save_raises_if_new_remote_id_collides_with_existing(no_remote_servers, address, remotes_file):
+    """A brand new remote (a different uuid) whose id collides with one already configured
+    must be rejected, not silently added as a duplicate."""
+    _write_remotes_file(remotes_file, [address])
+    remotes = Remotes(remotes_file)
+    colliding = Remote(remotes, RemoteAddress(url=address.url, port=address.port, username=address.username))
+
+    with pytest.raises(LookupError):
+        colliding.save()
+
+
+@pytest.mark.unit
+def test_save_overwrites_entry_with_same_uuid_after_editing_host(no_remote_servers, address, remotes_file):
+    """Regression: editing host/port/username changes .id but must not change .uuid -
+    save() must still find and replace the original entry by uuid, not create a duplicate
+    (this used to fail two different ways: uuid not surviving a reload, and save() only
+    inserting when no match was found instead of always overwriting by uuid)."""
+    _write_remotes_file(remotes_file, [address])
+    remotes = Remotes(remotes_file)
+    found = remotes.find_remote_from_uuid(address.uuid)
+    assert found is not None
+
+    found.address.url = "http://new-host"
+    found.address.description = "Updated"
+    found.save()
+
+    assert len(remotes.remotes_dict) == 1
+    saved = remotes.remotes_dict[address.uuid]
+    assert saved.address.url == "http://new-host"
+    assert saved.address.description == "Updated"
+
+
+# ================================================================================
+# Remote.delete
+# ================================================================================
+
+
+@pytest.mark.unit
+def test_delete_removes_matching_remote(no_remote_servers, address, remotes_file):
+    _write_remotes_file(remotes_file, [address])
+    remotes = Remotes(remotes_file)
+    remote = remotes.find_remote_from_uuid(address.uuid)
+    assert remote is not None
+
+    remote.delete()
+
+    assert remotes.remotes_dict == {}
+    assert _read_remotes_file(remotes_file) == {}
+
+
+@pytest.mark.unit
+def test_delete_raises_if_not_found(no_remote_servers, address, remotes_file):
+    remotes = Remotes(remotes_file)
+    orphan = Remote(remotes, address)  # never saved, its uuid is unknown to remotes
+
+    with pytest.raises(LookupError):
+        orphan.delete()
+
+
+# ================================================================================
+# Remotes.csv_import / csv_export
+# ================================================================================
+
+
+@pytest.mark.unit
+def test_csv_import_rejects_multi_character_delimiter(no_remote_servers, tmp_path, remotes_file):
+    remotes = Remotes(remotes_file)
+    csv_file = tmp_path / "remotes.csv"
+    csv_file.write_text("url;port;username;description\n", encoding="utf-8-sig")
+
+    with pytest.raises(ValueError, match="single character"):
+        remotes.csv_import(csv_file, delimiter=";;")
+
+
+@pytest.mark.unit
+def test_csv_import_raises_if_file_missing(no_remote_servers, tmp_path, remotes_file):
+    remotes = Remotes(remotes_file)
+
+    with pytest.raises(FileNotFoundError):
+        remotes.csv_import(tmp_path / "missing.csv")
+
+
+@pytest.mark.unit
+def test_csv_import_raises_if_columns_missing(no_remote_servers, tmp_path, remotes_file):
+    remotes = Remotes(remotes_file)
+    csv_file = tmp_path / "remotes.csv"
+    csv_file.write_text("url;port\nhttp://a;8000\n", encoding="utf-8-sig")
+
+    with pytest.raises(ValueError, match="Missing columns"):
+        remotes.csv_import(csv_file)
+
+
+@pytest.mark.unit
+def test_csv_import_adds_new_remotes_and_persists(no_remote_servers, tmp_path, remotes_file):
+    remotes = Remotes(remotes_file)
+    csv_file = tmp_path / "remotes.csv"
+    csv_file.write_text(
+        "url;port;username;description\nhttp://a;8000;alice;Remote A\nhttp://b;8001;bob;Remote B\n",
+        encoding="utf-8-sig",
+    )
+
+    remotes.csv_import(csv_file)
+
+    assert sorted(r.address.url for r in remotes.remotes_dict.values()) == ["http://a", "http://b"]
+    assert len(_read_remotes_file(remotes_file)) == 2  # persisted
+
+
+@pytest.mark.unit
+def test_csv_import_skips_invalid_rows(no_remote_servers, tmp_path, remotes_file):
+    remotes = Remotes(remotes_file)
+    csv_file = tmp_path / "remotes.csv"
+    csv_file.write_text(
+        "url;port;username;description\nhttp://a;8000;alice;Remote A\n;8001;bob;Remote B\n",
+        encoding="utf-8-sig",
+    )
+
+    remotes.csv_import(csv_file)
+
+    assert [r.address.url for r in remotes.remotes_dict.values()] == ["http://a"]
+
+
+@pytest.mark.unit
+def test_csv_import_updates_existing_remote_matching_id(no_remote_servers, address, tmp_path, remotes_file):
+    """Import is an upsert: a CSV row whose id matches an existing remote replaces it (and
+    keeps its uuid, see Remotes.csv_import), it isn't just ignored in favor of the entry
+    already configured, nor added as a second entry under a new uuid."""
+    _write_remotes_file(remotes_file, [address])
+    remotes = Remotes(remotes_file)
+    csv_file = tmp_path / "remotes.csv"
+    csv_file.write_text(
+        f"url;port;username;description\n{address.url};{address.port};{address.username};Updated\n",
+        encoding="utf-8-sig",
+    )
+
+    remotes.csv_import(csv_file)
+
+    assert len(remotes.remotes_dict) == 1
+    updated = remotes.remotes_dict[address.uuid]
+    assert updated.address.description == "Updated"
+
+
+@pytest.mark.unit
+def test_csv_import_keeps_existing_password_when_row_has_none(no_remote_servers, tmp_path, remotes_file):
+    """A CSV row without a password column (or with the column present but empty) must not
+    wipe out an already-configured password for that remote - only a non-empty password/
+    encrypted_pwd value should ever replace it."""
+    address = RemoteAddress(url="http://a", port=8000, username="alice", password="s3cret")
+    _write_remotes_file(remotes_file, [address])
+    remotes = Remotes(remotes_file)
+    csv_file = tmp_path / "remotes.csv"
+    csv_file.write_text(
+        f"url;port;username;description\n{address.url};{address.port};{address.username};Updated\n",
+        encoding="utf-8-sig",
+    )
+
+    remotes.csv_import(csv_file)
+
+    updated = remotes.remotes_dict[address.uuid]
+    assert updated.address.password == "s3cret"
+
+
+@pytest.mark.unit
+def test_csv_import_replaces_password_when_row_has_one(no_remote_servers, tmp_path, remotes_file):
+    address = RemoteAddress(url="http://a", port=8000, username="alice", password="old-pwd")
+    _write_remotes_file(remotes_file, [address])
+    remotes = Remotes(remotes_file)
+    csv_file = tmp_path / "remotes.csv"
+    csv_file.write_text(
+        f"url;port;username;password;description\n{address.url};{address.port};{address.username};new-pwd;Updated\n",
+        encoding="utf-8-sig",
+    )
+
+    remotes.csv_import(csv_file)
+
+    updated = remotes.remotes_dict[address.uuid]
+    assert updated.address.password == "new-pwd"
+
+
+@pytest.mark.unit
+def test_csv_export_rejects_multi_character_delimiter(no_remote_servers, tmp_path, remotes_file):
+    remotes = Remotes(remotes_file)
+
+    with pytest.raises(ValueError, match="single character"):
+        remotes.csv_export(tmp_path / "out.csv", delimiter=";;")
+
+
+@pytest.mark.unit
+def test_csv_export_raises_if_file_exists_and_overwrite_is_false(no_remote_servers, tmp_path, remotes_file):
+    remotes = Remotes(remotes_file)
+    existing = tmp_path / "out.csv"
+    existing.write_text("")
+
+    with pytest.raises(FileExistsError):
+        remotes.csv_export(existing, overwrite=False)
+
+
+@pytest.mark.unit
+def test_csv_export_writes_current_remotes(no_remote_servers, address, tmp_path, remotes_file):
+    _write_remotes_file(remotes_file, [address])
+    remotes = Remotes(remotes_file)
+    out_file = tmp_path / "out.csv"
+
+    remotes.csv_export(out_file, overwrite=True)
+
+    content = out_file.read_text(encoding="utf-8-sig")
+    assert "url;port;username;encrypted_pwd;description" in content
+    assert f"{address.url};{address.port};{address.username};" in content
+    assert f";{address.description}" in content
+
+
+# ================================================================================
+# RemoteServer construction / properties
+# ================================================================================
+
+
+@pytest.mark.unit
+def test_remote_server_address_property_delegates_to_remote(address, remotes):
+    remote = Remote(remotes, address)
+    server = RemoteServer(id="SRV1", description="Server 1", remote=remote)
+
+    assert server.address is remote.address
+
+
+@pytest.mark.unit
+def test_remote_server_auth_headers_delegates_to_remote(address, remotes):
+    address.token = "abc123"
+    remote = Remote(remotes, address)
+    server = RemoteServer(id="SRV1", description="Server 1", remote=remote)
+
+    assert server._auth_headers == {"Authorization": "Bearer abc123"}
+
+
+@pytest.mark.unit
+def test_remote_server_id_combines_id_on_remote_and_remote_address_id(address, remotes):
+    """RemoteServer.id disambiguates servers sharing the same id_on_remote across different
+    remotes, once merged into a flat list client-side."""
+    remote = Remote(remotes, address)
+    server = RemoteServer(id="SRV1", description="Server 1", remote=remote)
+
+    assert server.id == f"SRV1|{address.id}"
+
+
+# ================================================================================
+# RemoteServer.serialize / deserialize
+# ================================================================================
+
+
+@pytest.mark.unit
+def test_remote_server_serialize(address, remotes):
+    remote = Remote(remotes, address)
+    server = RemoteServer(id="SRV1", description="Server 1", remote=remote)
+
+    data = server.serialize()
+
+    assert data == {"id_on_remote": "SRV1", "description": "Server 1", "address": address.to_dict()}
+
+
+@pytest.mark.unit
+def test_remote_server_deserialize(address):
+    data = {"id_on_remote": "SRV1", "description": "Server 1", "address": address.to_dict()}
+
+    server = RemoteServer.deserialize(data)
+
+    assert server.id_on_remote == "SRV1"
+    assert server.description == "Server 1"
+    assert server.address.url == address.url
+    assert server.address.port == address.port
+    assert server.address.username == address.username
+
+
+@pytest.mark.unit
+def test_remote_server_deserialize_builds_a_remote_with_no_remotes_collection():
+    """Only used for the execution round-trip (see Query.serialize()) - the reconstructed
+    Remote is hollow (Remote(None, address)), so save()/delete() must raise on it, even
+    though nothing on this round-trip ever calls them."""
+    data = {
+        "id_on_remote": "SRV1",
+        "description": "Server 1",
+        "address": RemoteAddress.from_dict({"url": "http://a", "port": 8000, "username": "alice"}).to_dict(),
+    }
+
+    server = RemoteServer.deserialize(data)
+
+    assert server.remote.remotes is None
+    with pytest.raises(RuntimeError):
+        server.remote.save()
+
+
+@pytest.mark.unit
+def test_remote_server_serialize_deserialize_round_trip(address, remotes):
+    remote = Remote(remotes, address)
+    original = RemoteServer(id="SRV1", description="Server 1", remote=remote)
+
+    rebuilt = RemoteServer.deserialize(original.serialize())
+
+    assert rebuilt.id_on_remote == original.id_on_remote
+    assert rebuilt.description == original.description
+    assert rebuilt.address.url == original.address.url
+    assert rebuilt.address.port == original.address.port
+    assert rebuilt.address.username == original.address.username
+
+
+# ================================================================================
+# RemoteServer.execute
+# ================================================================================
+
+
+class _FakeStreamResponse:
+    """Minimal stand-in for the Response yielded by httpx2.stream() - only what
+    RemoteServer.execute() actually uses."""
+
+    def __init__(self, lines: list[str], status_code: int = 200, status_error: Exception | None = None):
+        self._lines = lines
+        self.status_code = status_code
+        self._status_error = status_error
+
+    def raise_for_status(self) -> None:
+        if self._status_error is not None:
+            raise self._status_error
+
+    def read(self) -> None:
+        """No-op: execute() calls this to buffer the body before re-raising on a status
+        error, so a later e.response.json()/.text access doesn't hit ResponseNotRead."""
+        pass
+
+    def iter_lines(self):
+        return iter(self._lines)
+
+
+class _FakeStreamContext:
+    """Minimal stand-in for the context manager httpx2.stream() returns."""
+
+    def __init__(self, response: _FakeStreamResponse):
+        self._response = response
+
+    def __enter__(self) -> _FakeStreamResponse:
+        return self._response
+
+    def __exit__(self, *exc_info) -> bool:
+        return False
+
+
+def _ndjson_lines(*payloads: dict) -> list[str]:
+    return [json.dumps(p) for p in payloads]
+
+
+def _mock_health_check_ok(monkeypatch) -> None:
+    """Mocks the GET /health pre-flight check that execute() makes before streaming -
+    without this, httpx2.get() would attempt a real network call in every test below."""
+    monkeypatch.setattr(httpx2, "get", lambda **kwargs: _FakeResponse({"status": "ok"}))
+
+
+@pytest.mark.unit
+def test_execute_yields_columns_and_rows(remote_server, monkeypatch):
+    _mock_health_check_ok(monkeypatch)
+    lines = _ndjson_lines({"__columns__": ["id", "name"]}, {"__row__": ["1", "a"]}, {"__row__": ["2", "b"]})
+    monkeypatch.setattr(httpx2, "stream", lambda *a, **k: _FakeStreamContext(_FakeStreamResponse(lines)))
+
+    with remote_server.execute("Q1", "hash1", {}) as rows:
+        assert [col[0] for col in rows.description] == ["id", "name"]
+        assert list(rows) == [("1", "a"), ("2", "b")]
+
+
+@pytest.mark.unit
+def test_execute_decodes_wrapped_datetime_date_and_decimal(remote_server, monkeypatch):
+    """Mirrors Pytre_Server's row encoding - the client must reconstruct real Python types
+    so its own SqlTypeConverter settings apply."""
+    _mock_health_check_ok(monkeypatch)
+    lines = _ndjson_lines(
+        {"__columns__": ["created", "day", "amount", "label"]},
+        {
+            "__row__": [
+                {"$datetime": "2026-01-01T10:30:00"},
+                {"$date": "2026-01-01"},
+                {"$decimal": "12.50"},
+                "unwrapped",
+            ]
+        },
+    )
+    monkeypatch.setattr(httpx2, "stream", lambda *a, **k: _FakeStreamContext(_FakeStreamResponse(lines)))
+
+    with remote_server.execute("Q1", "hash1", {}) as rows:
+        result = list(rows)
+
+    assert result == [(datetime(2026, 1, 1, 10, 30), date(2026, 1, 1), Decimal("12.50"), "unwrapped")]
+
+
+@pytest.mark.unit
+def test_execute_sends_correct_request(remote_server, monkeypatch):
+    _mock_health_check_ok(monkeypatch)
+    captured = {}
+    lines = _ndjson_lines({"__columns__": []})
+
+    def fake_stream(method, url, json=None, headers=None, timeout=None):
+        captured["method"] = method
+        captured["url"] = url
+        captured["json"] = json
+        captured["headers"] = headers
+        return _FakeStreamContext(_FakeStreamResponse(lines))
+
+    monkeypatch.setattr(httpx2, "stream", fake_stream)
+
+    with remote_server.execute("Q1", "hash1", {"p": "v"}) as rows:
+        list(rows)
+
+    assert captured["method"] == "POST"
+    assert captured["url"] == "http://127.0.0.1:8000/execute"
+    assert captured["json"] == {
+        "server_id": "SRV1",
+        "query_id": "Q1",
+        "template_hash": "hash1",
+        "parameters": {"p": "v"},
+    }
+    assert captured["headers"] == {}  # no token yet - no Authorization header, no username either
+
+
+@pytest.mark.unit
+def test_execute_empty_result_has_no_columns_or_rows(remote_server, monkeypatch):
+    _mock_health_check_ok(monkeypatch)
+    lines = _ndjson_lines({"__columns__": []})
+    monkeypatch.setattr(httpx2, "stream", lambda *a, **k: _FakeStreamContext(_FakeStreamResponse(lines)))
+
+    with remote_server.execute("Q1", "hash1", {}) as rows:
+        assert rows.description == ()
+        assert list(rows) == []
+
+
+@pytest.mark.unit
+def test_execute_raises_remote_execution_error_on_error_line(remote_server, monkeypatch):
+    _mock_health_check_ok(monkeypatch)
+    lines = _ndjson_lines(
+        {"__columns__": ["id"]},
+        {"__row__": ["1"]},
+        {"__error__": {"type": "ValueError", "message": "boom"}},
+    )
+    monkeypatch.setattr(httpx2, "stream", lambda *a, **k: _FakeStreamContext(_FakeStreamResponse(lines)))
+
+    collected = []
+    with remote_server.execute("Q1", "hash1", {}) as rows:
+        with pytest.raises(RemoteExecutionError, match="ValueError: boom"):
+            for row in rows:
+                collected.append(row)
+
+    assert collected == [("1",)]  # the row read before the error line is not lost
+
+
+@pytest.mark.unit
+def test_execute_propagates_http_status_error(remote_server, monkeypatch):
+    _mock_health_check_ok(monkeypatch)
+    error = httpx2.HTTPStatusError("404", request=None, response=None)  # type: ignore
+    monkeypatch.setattr(
+        httpx2, "stream", lambda *a, **k: _FakeStreamContext(_FakeStreamResponse([], status_error=error))
+    )
+
+    with pytest.raises(httpx2.HTTPStatusError):
+        with remote_server.execute("Q1", "hash1", {}):
+            pass
+
+
+@pytest.mark.unit
+def test_execute_checks_health_before_streaming(remote_server, monkeypatch):
+    """The GET /health pre-flight must hit the right URL, before the POST /execute stream."""
+    captured = {}
+    lines = _ndjson_lines({"__columns__": []})
+
+    def fake_get(url, timeout=None):
+        captured["url"] = url
+        return _FakeResponse({"status": "ok"})
+
+    monkeypatch.setattr(httpx2, "get", fake_get)
+    monkeypatch.setattr(httpx2, "stream", lambda *a, **k: _FakeStreamContext(_FakeStreamResponse(lines)))
+
+    with remote_server.execute("Q1", "hash1", {}) as rows:
+        list(rows)
+
+    assert captured["url"] == "http://127.0.0.1:8000/health"
+
+
+@pytest.mark.unit
+def test_execute_fails_fast_without_streaming_if_health_check_fails(remote_server, monkeypatch):
+    """Regression: if Pytre_Server itself is unreachable, execute() must fail via the short
+    /health timeout instead of ever attempting the long-timeout POST /execute stream."""
+
+    def fake_get(**kwargs):
+        raise httpx2.ConnectError("boom")
+
+    monkeypatch.setattr(httpx2, "get", fake_get)
+    monkeypatch.setattr(httpx2, "stream", lambda *a, **k: pytest.fail("httpx2.stream should not be called"))
+
+    with pytest.raises(httpx2.ConnectError):
+        with remote_server.execute("Q1", "hash1", {}):
+            pass
+
+
+@pytest.mark.unit
+def test_execute_relogs_in_and_retries_once_on_401(remote_server, monkeypatch):
+    """No upfront token check: a missing/expired token surfaces as a 401 on the first POST
+    /execute attempt, handled by the same retry-and-relogin path as a later invalidation."""
+    _mock_health_check_ok(monkeypatch)
+    success_lines = _ndjson_lines({"__columns__": ["id"]}, {"__row__": ["1"]})
+    stream_contexts = iter(
+        [
+            _FakeStreamContext(_FakeStreamResponse([], status_code=401)),
+            _FakeStreamContext(_FakeStreamResponse(success_lines, status_code=200)),
+        ]
+    )
+    monkeypatch.setattr(httpx2, "stream", lambda *a, **k: next(stream_contexts))
+    monkeypatch.setattr(httpx2, "post", lambda **kwargs: _FakeResponse({"token": "new-token"}))
+
+    with remote_server.execute("Q1", "hash1", {}) as rows:
+        result = list(rows)
+
+    assert result == [("1",)]
+    assert remote_server.address.token == "new-token"
+
+
+@pytest.mark.unit
+def test_execute_raises_http_status_error_if_still_401_after_relogin(remote_server, monkeypatch):
+    """Relogin succeeded (new token issued) but the retried request is still rejected - the
+    2nd attempt is the last one (max_login_retry reached), so it must surface as-is."""
+    _mock_health_check_ok(monkeypatch)
+    error = httpx2.HTTPStatusError("401", request=None, response=None)  # type: ignore
+    stream_contexts = iter(
+        [
+            _FakeStreamContext(_FakeStreamResponse([], status_code=401)),
+            _FakeStreamContext(_FakeStreamResponse([], status_code=401, status_error=error)),
+        ]
+    )
+    monkeypatch.setattr(httpx2, "stream", lambda *a, **k: next(stream_contexts))
+    monkeypatch.setattr(httpx2, "post", lambda **kwargs: _FakeResponse({"token": "new-token"}))
+
+    with pytest.raises(httpx2.HTTPStatusError):
+        with remote_server.execute("Q1", "hash1", {}):
+            pass
+
+
+@pytest.mark.unit
+def test_execute_raises_http_status_error_if_relogin_fails(remote_server, monkeypatch):
+    """Login itself fails (e.g. stored password no longer valid) - falls straight through to
+    the same HTTPStatusError as any other non-retriable failure, no separate exception type."""
+    _mock_health_check_ok(monkeypatch)
+    error = httpx2.HTTPStatusError("401", request=None, response=None)  # type: ignore
+    monkeypatch.setattr(
+        httpx2,
+        "stream",
+        lambda *a, **k: _FakeStreamContext(_FakeStreamResponse([], status_code=401, status_error=error)),
+    )
+
+    def fake_post(**kwargs):
+        raise httpx2.ConnectError("boom")
+
+    monkeypatch.setattr(httpx2, "post", fake_post)
+
+    with pytest.raises(httpx2.HTTPStatusError):
+        with remote_server.execute("Q1", "hash1", {}):
+            pass

@@ -8,8 +8,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from datetime import datetime
 
-from Pytre_Core import old_files, sql_query, settings, users, servers, utils, logs_central
+from Pytre_Core import old_files, sql_query, settings, users, servers, utils
 from Pytre_Core.context import AppContext, UserContext
+from Pytre_Core.logs_central import ClientDriven as CentralLogs
 from Pytre_Core.user_prefs import UserPrefs, PrefsEnum
 from Pytre_Core.sql_query import ExecutionRunner, ExecResultMsg
 from Pytre_Core.about import APP_NAME, APP_VERSION, APP_STATUS
@@ -67,7 +68,7 @@ class App(tk.Toplevel):
         self.app_settings: settings.Settings = self.app_ctx.settings
         self.servers: servers.Servers = self.app_ctx.servers
         self.server_id: str = ""
-        self._central_logs: logs_central.CentralLogs | None = None
+        self._central_logs: CentralLogs | None = None
 
         self.queries_all: list[sql_query.Query] = []
         self.queries: list[sql_query.Query] = []
@@ -925,13 +926,12 @@ class App(tk.Toplevel):
 
         return self.query.values_ok()
 
-    def get_central_logs(self) -> logs_central.CentralLogs | None:
+    def get_central_logs(self) -> CentralLogs | None:
         if self._central_logs:
             return self._central_logs
         elif self.app_settings.logs_are_on:
-            LogsClass = logs_central.get_default_class()
             logs_folder = self.app_settings.logs_folder
-            self._central_logs = LogsClass(logs_folder)
+            self._central_logs = CentralLogs(logs_folder)
 
             return self._central_logs
 
@@ -939,7 +939,7 @@ class App(tk.Toplevel):
 
     def app_exit(self, event: tkEvent | None = None):
         if logs := self.get_central_logs():
-            logs.stop_sync()
+            logs.stop()
 
         self.user_prefs.set(PrefsEnum.last_server, self.server_id)
 

@@ -1,14 +1,12 @@
 from pathlib import Path
+from typing import Self
 
 from Pytre_Core.context import AppContext, UserContext
-from Pytre_Core.servers import ServerConnectionError
+from Pytre_Core.remotes import RemoteServer
 from Pytre_Core.sql_query.file_parser import FileParser
 from Pytre_Core.sql_query.parameters import SqlParam, SqlParameters
 from Pytre_Core.sql_query.cmd_builder import CmdBuilder
-from Pytre_Core.sql_query.query_execute import QueryExecute
-from Pytre_Core.sql_query.execute_config import ExecuteConfig
-from Pytre_Core.sql_query.execution_msg import ExecResultMsg
-from Pytre_Core.sql_query.log_utils import _STANDALONE_BROADCAST_LOGGER
+from Pytre_Core.sql_query.execute_config import LocalExecuteCfg, RemoteExecuteCfg
 
 
 class Query:
@@ -16,6 +14,7 @@ class Query:
         """source can be a Path (it will be read and parsed)
         or an already-built FileParser (reused as-is without disk read)"""
         parser = source if isinstance(source, FileParser) else FileParser(source)
+        self.remote: RemoteServer | None = None  # initialisé en direct ou avec deserialize
 
         self.app_ctx: AppContext = app_ctx
         self.user_ctx: UserContext = user_ctx
@@ -34,8 +33,6 @@ class Query:
         self.parameters = SqlParameters(self.app_ctx.settings, self.user_ctx.current_user, self.file_content)
         self.cmd_builder = CmdBuilder(self.app_ctx.settings, self.user_ctx.user_prefs, self.raw_cmd, self.parameters)
 
-        self._query_execute: QueryExecute | None = None
-
     def _set_hide_level(self) -> int:
         hide: str = self.infos.get("hide", "0")
         return int(hide) if hide.isdigit() else 0
@@ -46,12 +43,6 @@ class Query:
             description = f"({'*' * self.hide}) {description}"
 
         return description
-
-    @property
-    def query_execute(self) -> QueryExecute:
-        if self._query_execute is None:
-            self._query_execute = QueryExecute(self.app_ctx, self.user_ctx)
-        return self._query_execute
 
     # ------------------------------------------------------------------------------------------
     # Gestion des paramètres avec SqlParameters
@@ -88,43 +79,19 @@ class Query:
         """position et longueur des paramètres après remplacement par leurs valeurs"""
         return self.cmd_builder.params_pos_for_debug(only_inlined)
 
-    def get_exec_config(self, server_id: str = "", file_output: bool = True) -> ExecuteConfig:
-        select_server_id: str = server_id or (self.servers_id[0] if self.servers_id else "")
-        return self.cmd_builder.build_exec_config(self.name, select_server_id, file_output)
-
-    # ------------------------------------------------------------------------------------------
-    # Gestion execution requête et autres fonctions
-    # ------------------------------------------------------------------------------------------
-    def execute(self, server_id: str = "", file_output: bool = True) -> tuple[int, Path | list[list[str]] | None]:
-        self.update_values()
-
-        if self.values_ok():
-            exec_config = self.get_exec_config(server_id, file_output)
-            try:
-                result = self.query_execute.execute(exec_config)
-                return result
-            except ServerConnectionError as err:
-                self._execute_operational_errors(err)
-                return (-1, None)
-            except Exception as err:
-                self._broadcast(f"Erreur inattendue : {err}")
-                return (-1, None)
+    def get_exec_config(self, server_id: str = "", file_output: bool = True) -> LocalExecuteCfg | RemoteExecuteCfg:
+        if self.remote:
+            return self.cmd_builder.build_exec_remote_cfg(self.remote, self.name, file_output)
         else:
-            err_msg = "\nImpossible d'executer des paramètres sont invalides"
-            self._broadcast(err_msg)
-            return (-1, None)
+            select_server_id: str = server_id or (self.servers_id[0] if self.servers_id else "")
+            return self.cmd_builder.build_exec_local_cfg(select_server_id, self.name, file_output)
 
-    def _execute_operational_errors(self, err: ServerConnectionError):
-        err_msg = str("=") * 50 + "\n" + str(err)
-        if not err_msg[-1] == "\n":
-            err_msg += "\n"
-        err_msg += str("=") * 50
-        self._broadcast(err_msg)
+    def get_template_hash(self) -> str:
+        return self.cmd_builder.get_template_hash()
 
-    def _broadcast(self, msg_to_broadcast: str, msg_type: ExecResultMsg = ExecResultMsg.UI_OUTPUT) -> None:
-        self.query_execute.queue.put((msg_type, msg_to_broadcast))
-        _STANDALONE_BROADCAST_LOGGER.info(msg_to_broadcast)
-
+    # ------------------------------------------------------------------------------------------
+    # Serialization / Deserialization
+    # ------------------------------------------------------------------------------------------
     def serialize(self) -> dict:
         display_params: dict[str, str] = {}
         param: SqlParam
@@ -132,6 +99,7 @@ class Query:
             display_params[key] = param.display_value
 
         return {
+            "remote": self.remote.serialize() if self.remote else None,
             "filename": str(self.filename),
             "file_content": self.file_content,
             "infos": self.infos,
@@ -146,9 +114,12 @@ class Query:
         }
 
     @classmethod
-    def deserialize(cls, app_ctx: AppContext, user_ctx: UserContext, data: dict) -> "Query":
+    def deserialize(
+        cls, app_ctx: AppContext, user_ctx: UserContext, data: dict, remote: RemoteServer | None = None
+    ) -> Self:
         query: Query = cls(app_ctx, user_ctx)
 
+        query.remote = remote or (RemoteServer.deserialize(data["remote"]) if data["remote"] else None)
         query.filename = Path(data["filename"])
         query.file_content = data["file_content"]
         query.infos = data["infos"]

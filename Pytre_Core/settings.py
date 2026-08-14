@@ -1,7 +1,9 @@
 import codecs
 import json
 import logging
+import secrets
 from datetime import datetime
+from enum import Enum
 from pathlib import Path, PureWindowsPath
 
 from pykeepass.entry import Entry
@@ -16,6 +18,22 @@ DEFAULT_LOGS_FOLDER = Path.home() / "Logs"
 
 def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__) -> None:
     _log(msg, level=level, sublogger=sublogger)
+
+
+class _KeepassEnum(Enum):
+    """List of keepass entries for Settings.
+    Name is the keepass entry title and value is its corresponding settings attribute."""
+
+    FIELD_SEPARATOR = "field_separator"
+    DECIMAL_SEPARATOR = "decimal_separator"
+    DATE_FORMAT = "date_format"
+    EXTRACT_ENCODING = "extract_encoding"
+    QUERIES_FOLDER = "queries_folder"
+    LOGS_ARE_ON = "logs_are_on"
+    LOGS_FOLDER = "logs_folder"
+    USERS_CACHE_EXPIRATION = "users_cache_expiration"
+    SETTINGS_VERSION = "settings_version"
+    JWT_SECRET = "jwt_secret"
 
 
 class Settings:
@@ -36,7 +54,7 @@ class Settings:
         self.logs_folder: Path = DEFAULT_LOGS_FOLDER  # répertoire où stocker les logs centraux
         self.users_cache_expiration: int = 10  # nombre de jours du cache utilisateur pour ses requêtes
 
-        self._params: dict[str, str] = self._get_params()  # mapping entre keepass title et attributs
+        self.jwt_secret: str = ""  # signature JWT pour Pytre_Server
 
         self.load()
 
@@ -46,21 +64,6 @@ class Settings:
             return False
         self.kee_grp = self.kee.grp_settings
         return True
-
-    def _get_params(self) -> dict[str, str]:
-        """key : keepass title, value : settings attribute"""
-
-        return {
-            "FIELD_SEPARATOR": "field_separator",
-            "DECIMAL_SEPARATOR": "decimal_separator",
-            "DATE_FORMAT": "date_format",
-            "EXTRACT_ENCODING": "extract_encoding",
-            "QUERIES_FOLDER": "queries_folder",
-            "LOGS_ARE_ON": "logs_are_on",
-            "LOGS_FOLDER": "logs_folder",
-            "USERS_CACHE_EXPIRATION": "users_cache_expiration",
-            "SETTINGS_VERSION": "settings_version",
-        }
 
     def _validate_encoding_format(self, encoding_format: str) -> bool:
         """if not valid raise a LookupError"""
@@ -87,22 +90,31 @@ class Settings:
 
         return True
 
+    def _validate_folder(self, folder: str | Path) -> bool:
+        """if not valid raise a ValueError"""
+        if not Path(folder).is_dir():
+            raise ValueError(f"Folder doesn't exist: '{folder}'")
+
+        return True
+
     def load(self, reload: bool = False) -> None:
         if not self.open_db(reload=reload):
             log("Error, couldn't load settings : base failed to open", logging.ERROR)
             return
 
-        for kee_title, attr_name in self._params.items():
+        for setting_item in _KeepassEnum:
+            kee_title, attr_name = setting_item.name, setting_item.value
+
             info: Entry = self.kee.db.find_entries(title=kee_title, group=self.kee_grp, first=True)  # type: ignore
             if not info:
                 continue
 
             value = info.username if info.username is not None else ""
 
-            if kee_title == "FIELD_SEPARATOR" and (not value or len(value) != 1):
+            if setting_item is _KeepassEnum.FIELD_SEPARATOR and (not value or len(value) != 1):
                 log(f"Invalid field separator '{value}', using default ';'", logging.WARNING)
                 value = ";"
-            elif kee_title == "DECIMAL_SEPARATOR":
+            elif setting_item is _KeepassEnum.DECIMAL_SEPARATOR:
                 if not value or len(value) != 1:
                     log(f"Invalid decimal separator '{value}', using default ','")
                     value = ","
@@ -112,27 +124,27 @@ class Settings:
                         logging.WARNING,
                     )
                     value = ","
-            elif kee_title == "DATE_FORMAT":
+            elif setting_item is _KeepassEnum.DATE_FORMAT:
                 try:
                     self._validate_date_format(value)
                 except ValueError:
                     default = "%d/%m/%Y"
                     log(f"Invalid date format settings '{value}', using default '{default}'", logging.WARNING)
                     value = default
-            elif kee_title == "EXTRACT_ENCODING":
+            elif setting_item is _KeepassEnum.EXTRACT_ENCODING:
                 try:
                     self._validate_encoding_format(value)
                 except LookupError:
                     default = self.default_encoding
                     log(f"Invalid encoding settings '{value}', using default '{default}'", logging.WARNING)
                     value = default
-            elif kee_title == "LOGS_ARE_ON":
+            elif setting_item is _KeepassEnum.LOGS_ARE_ON:
                 value = True if value.lower() == "true" else False
-            elif kee_title == "LOGS_FOLDER":
+            elif setting_item is _KeepassEnum.LOGS_FOLDER:
                 value = Path(value) if value and Path(value).is_dir() else DEFAULT_LOGS_FOLDER
-            elif kee_title == "QUERIES_FOLDER":
+            elif setting_item is _KeepassEnum.QUERIES_FOLDER:
                 value = Path(value) if value and Path(value).is_dir() else DEFAULT_QUERIES_FOLDER
-            elif kee_title == "USERS_CACHE_EXPIRATION":
+            elif setting_item is _KeepassEnum.USERS_CACHE_EXPIRATION:
                 if value.isnumeric():
                     value = int(value)
                 else:
@@ -144,32 +156,54 @@ class Settings:
 
             setattr(self, attr_name, value)
 
+        if not self.jwt_secret:
+            self.set_jwt_secret()
+
     def reload(self) -> None:
         self.load(reload=True)
+
+    def set_jwt_secret(self) -> None:
+        """Generate and persist a new jwt secret directly.
+        Avoid save() so other fields are not changed, revalidated and rewritten."""
+        kee_title = _KeepassEnum.JWT_SECRET.name
+
+        self.jwt_secret = secrets.token_urlsafe(32)
+
+        entry = self.kee.db.find_entries(title=kee_title, group=self.kee_grp, first=True)  # type: ignore
+        if not isinstance(entry, Entry):
+            entry = self.kee.db.add_entry(self.kee_grp, kee_title, username="", password="")  # type: ignore
+
+        entry.username = self.jwt_secret
+
+        self.kee.save_db()
 
     def save(self) -> bool:
         self.open_db()
 
         assert self.kee.db is not None
-        for kee_title, attr_name in self._params.items():
+        for setting_item in _KeepassEnum:
+            kee_title, attr_name = setting_item.name, setting_item.value
+
             info = self.kee.db.find_entries(title=kee_title, group=self.kee_grp, first=True)
             if not isinstance(info, Entry):
                 info = self.kee.db.add_entry(self.kee_grp, kee_title, username="", password="")
 
             value = getattr(self, attr_name)
-            if kee_title == "LOGS_ARE_ON":
+            if setting_item is _KeepassEnum.LOGS_ARE_ON:
                 value = "true" if value else "false"
-            elif kee_title in ("QUERIES_FOLDER", "LOGS_FOLDER"):
+            elif setting_item in (_KeepassEnum.QUERIES_FOLDER, _KeepassEnum.LOGS_FOLDER):
+                if setting_item is not _KeepassEnum.LOGS_FOLDER or self.logs_are_on:
+                    self._validate_folder(value)
                 value = PureWindowsPath(value).as_posix()  # always save path as posix for OSes compatibility
-            elif kee_title == "EXTRACT_ENCODING":
+            elif setting_item is _KeepassEnum.EXTRACT_ENCODING:
                 self._validate_encoding_format(value)
-            elif kee_title == "USERS_CACHE_EXPIRATION":
+            elif setting_item is _KeepassEnum.USERS_CACHE_EXPIRATION:
                 if not str(value).isnumeric():
                     raise ValueError(f"Invalid value for users cache expiration : '{value}'")
-            elif kee_title == "DATE_FORMAT":
+            elif setting_item is _KeepassEnum.DATE_FORMAT:
                 self._validate_date_format(value)
 
-            info.username = value
+            info.username = str(value)
 
         self.kee.save_db()
         return True
@@ -245,7 +279,6 @@ if __name__ == "__main__":
     print(f"Version mini Settings : {min_settings}")
     print(f"Version utilisée Settings : {my_settings.settings_version}")
 
-    param_attr = my_settings._params.values()
     print(f"{'=' * 50}\nSettings / Paramètres généraux\n{'=' * 50}")
-    for attr in param_attr:
-        print(f"- {attr}: {getattr(my_settings, attr)}")
+    for setting_item in _KeepassEnum:
+        print(f"- {setting_item.name}: {getattr(my_settings, setting_item.value)}")

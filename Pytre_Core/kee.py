@@ -22,6 +22,9 @@ def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__)
 
 class Kee:
     def __init__(self, password: str = ""):
+        """`password` also serve, instead of `BLANK_PWD`, to set a new base if it's needed"""
+        self._init_pwd: str = password or BLANK_PWD  # will be used to create db if it doesn't exists
+
         self.file: str | Path = KEE_FILE
         self.pwd: str = password
         self.db: PyKeePass | None = None
@@ -48,7 +51,7 @@ class Kee:
                 self.db = PyKeePass(self.file, password=self.pwd)
             except FileNotFoundError:
                 log(f"Base des paramètres introuvable : '{self.file}'", logging.WARNING)
-                self.create_db()
+                self.create_db(password=self._init_pwd)
             except CredentialsError:  # si erreur mot de passe, tentative avec les précédents
                 self.is_ko = True
                 db_unlocked = self.pwd_try()

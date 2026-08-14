@@ -148,9 +148,9 @@ def test_cmd_builder_build_exec_config_with_file_output(mock_settings, mock_user
     params = SqlParameters(mock_settings, mock_user, sql_content)
     builder = CmdBuilder(mock_settings, mock_user_prefs, "SELECT @p", params)
 
-    config = builder.build_exec_config("MY_QUERY", "SRV1", file_output=True)
+    config = builder.build_exec_local_cfg("SRV1", "MY_QUERY", file_output=True)
 
-    assert config.query_name == "MY_QUERY"
+    assert config.query_id == "MY_QUERY"
     assert config.server_id == "SRV1"
     assert config.extract_file.parent == tmp_path
     assert config.extract_file.name.startswith("MY_QUERY_")
@@ -164,7 +164,7 @@ def test_cmd_builder_build_exec_config_without_file_output(mock_settings, mock_u
     params = SqlParameters(mock_settings, mock_user, sql_content)
     builder = CmdBuilder(mock_settings, mock_user_prefs, "SELECT @p", params)
 
-    config = builder.build_exec_config("MY_QUERY", "SRV1", file_output=False)
+    config = builder.build_exec_local_cfg("SRV1", "MY_QUERY", file_output=False)
 
     assert config.extract_file == Path()
 

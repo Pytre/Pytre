@@ -2,7 +2,7 @@
 Tests for Pytre/kee.py
 
 REGRESSION TESTS:
-- Issue 3.2: Kee initialized as singleton with lazy initialization
+- Kee initialized as singleton with lazy initialization
 - Database access error handling
 """
 
@@ -46,7 +46,7 @@ def mock_credentials():
 
 
 # ================================================================================
-# REGRESSION TESTS - Issue 3.2: Singleton Initialization
+# REGRESSION TESTS - Singleton Initialization
 # ================================================================================
 
 
@@ -67,7 +67,7 @@ def test_kee_instances_are_independent():
 @pytest.mark.regression
 def test_kee_lazy_initialization():
     """
-    Regression test for Issue 3.2 - Kee should initialize in __init__
+    Regression test: Kee should initialize in __init__
 
     Database should be opened automatically during instantiation.
     """
@@ -120,6 +120,35 @@ def test_open_db_creates_database_if_missing(mock_pykeepass, mock_credentials):
 
             # Verify: create_db was called
             assert mock_create_db.called
+
+
+@pytest.mark.unit
+def test_init_pwd_defaults_to_blank_pwd_when_password_empty(mock_pykeepass, mock_credentials):
+    with patch("Pytre_Core.kee.PyKeePass", return_value=mock_pykeepass):
+        kee = Kee(password="")
+
+        assert kee._init_pwd == BLANK_PWD
+
+
+@pytest.mark.unit
+def test_init_pwd_uses_given_password_when_provided(mock_pykeepass, mock_credentials):
+    with patch("Pytre_Core.kee.PyKeePass", return_value=mock_pykeepass):
+        kee = Kee(password="custom-master-key")
+
+        assert kee._init_pwd == "custom-master-key"
+
+
+@pytest.mark.unit
+def test_open_db_creates_database_with_password_from_init(mock_credentials):
+    """_open_db() must create a new database using the password Kee() was constructed with, not
+    always BLANK_PWD - otherwise a server-provided master password would never match what
+    actually protects a freshly created database."""
+    with patch("Pytre_Core.kee.PyKeePass", side_effect=FileNotFoundError):
+        with patch.object(Kee, "create_db") as mock_create_db:
+            with pytest.raises(AssertionError):  # create_db is mocked out, self.db stays None
+                Kee(password="custom-master-key")
+
+    mock_create_db.assert_called_once_with(password="custom-master-key")
 
 
 @pytest.mark.unit

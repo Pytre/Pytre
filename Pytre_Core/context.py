@@ -6,8 +6,9 @@ from Pytre_Core.kee import Kee
 from Pytre_Core.settings import Settings
 from Pytre_Core.servers import Servers
 from Pytre_Core.users import Users, User
-from Pytre_Core.user_prefs import UserPrefs
+from Pytre_Core.user_prefs import UserPrefs, PrefsEnum
 from Pytre_Core.logs_user import UserLogs
+from Pytre_Core.remotes import Remotes
 
 
 T = TypeVar("T")
@@ -35,13 +36,17 @@ class LazyContext:
 
 
 class AppContext(LazyContext):
-    def __init__(self):
+    def __init__(self, master_key: str = ""):
+        """`master_key` is the key to access keepass database"""
+
         attributes = ("kee", "settings", "servers", "users")
         super().__init__(attributes=attributes)
 
+        self._master_key = master_key
+
     @property
     def kee(self) -> Kee:
-        return self._get_or_create("kee", Kee)
+        return self._get_or_create("kee", lambda: Kee(password=self._master_key))
 
     @property
     def settings(self) -> Settings:
@@ -61,7 +66,7 @@ class UserContext(LazyContext):
         self._users: Users = users
         self._username: str = username
 
-        attributes = ("current_user", "user_prefs", "user_logs")
+        attributes = ("current_user", "user_prefs", "user_logs", "remotes")
         super().__init__(attributes=attributes)
 
     @property
@@ -75,3 +80,7 @@ class UserContext(LazyContext):
     @property
     def user_logs(self) -> UserLogs:
         return self._get_or_create("user_logs", UserLogs)
+
+    @property
+    def remotes(self) -> Remotes:
+        return self._get_or_create("remotes", lambda: Remotes())

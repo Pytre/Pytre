@@ -6,7 +6,17 @@ import pytest
 from pathlib import Path
 from unittest.mock import Mock
 
-from Pytre_Core.sql_query.loader import get_queries, filter_queries, orphan_queries, load_files, build_queries
+from Pytre_Core.remotes import Remote
+from Pytre_Core.remotes import RemoteServer
+from Pytre_Core.remotes import RemoteAddress
+from Pytre_Core.sql_query.loader import (
+    get_queries,
+    filter_queries,
+    orphan_queries,
+    load_files,
+    build_queries_from_parsers,
+    build_queries_from_remote,
+)
 
 
 # ================================================================================
@@ -267,7 +277,7 @@ def test_build_queries_collects_and_sorts(mock_app_ctx, mock_user_ctx, tmp_path)
         (tmp_path / f"{name}.sql").write_text(f"/*\ncode: {code}\n*/\nSELECT 1")
     parsers, _ = load_files(tmp_path)
 
-    queries, errors = build_queries(mock_app_ctx, mock_user_ctx, parsers)
+    queries, errors = build_queries_from_parsers(mock_app_ctx, mock_user_ctx, parsers)
 
     assert errors == []
     assert [q.name for q in queries] == ["AQUERY", "BQUERY"]
@@ -279,7 +289,7 @@ def test_build_queries_collects_errors_without_blocking(mock_app_ctx, mock_user_
     (tmp_path / "bad.sql").write_text("/*\ncode: BAD\n*/\nDECLARE\n@!X as int = 1  -- Desc|ENTRY\n;\nSELECT 1")
     parsers, _ = load_files(tmp_path)
 
-    queries, errors = build_queries(mock_app_ctx, mock_user_ctx, parsers)
+    queries, errors = build_queries_from_parsers(mock_app_ctx, mock_user_ctx, parsers)
 
     assert len(queries) == 1
     assert queries[0].name == "GOOD"
@@ -306,8 +316,61 @@ def test_build_queries_computes_fresh_values_per_user_ctx(mock_app_ctx, tmp_path
     user_b.users.attribs_std = []
     user_ctx_b = Mock(current_user=user_b, user_prefs=Mock())
 
-    queries_a, _ = build_queries(mock_app_ctx, user_ctx_a, parsers)
-    queries_b, _ = build_queries(mock_app_ctx, user_ctx_b, parsers)
+    queries_a, _ = build_queries_from_parsers(mock_app_ctx, user_ctx_a, parsers)
+    queries_b, _ = build_queries_from_parsers(mock_app_ctx, user_ctx_b, parsers)
 
     assert queries_a[0].parameters.params["@USER"].display_value == "USER_A"
     assert queries_b[0].parameters.params["@USER"].display_value == "USER_B"
+
+
+# ================================================================================
+# build_queries_from_remote_server Tests
+# ================================================================================
+
+
+@pytest.fixture
+def remote_server() -> RemoteServer:
+    address = RemoteAddress(url="http://example.com", port=8000, username="alice")
+    return RemoteServer(id="REMOTE_SRV", description="Remote Server", remote=Remote(None, address))
+
+
+@pytest.mark.unit
+def test_build_queries_from_remote_empty_when_no_serialized_queries(mock_app_ctx, mock_user_ctx, remote_server):
+    queries, errors = build_queries_from_remote(mock_app_ctx, mock_user_ctx, remote_server)
+
+    assert queries == []
+    assert errors == []
+
+
+@pytest.mark.unit
+def test_build_queries_from_remote_collects_and_sorts(mock_app_ctx, mock_user_ctx, remote_server, tmp_path):
+    for name, code in [("b", "BQUERY"), ("a", "AQUERY")]:
+        (tmp_path / f"{name}.sql").write_text(f"/*\ncode: {code}\n*/\nSELECT 1")
+    local_queries, load_errors = get_queries(mock_app_ctx, mock_user_ctx, tmp_path)
+    assert load_errors == []
+    remote_server.serialized_queries = [q.serialize() for q in local_queries]
+
+    queries, errors = build_queries_from_remote(mock_app_ctx, mock_user_ctx, remote_server)
+
+    assert errors == []
+    assert [q.name for q in queries] == ["AQUERY", "BQUERY"]
+    assert all(q.remote is remote_server for q in queries)
+
+
+@pytest.mark.unit
+def test_build_queries_from_remote_collects_errors_without_blocking(
+    mock_app_ctx, mock_user_ctx, remote_server, tmp_path
+):
+    (tmp_path / "good.sql").write_text("/*\ncode: GOOD\n*/\nSELECT 1")
+    local_queries, load_errors = get_queries(mock_app_ctx, mock_user_ctx, tmp_path)
+    assert load_errors == []
+    good_data = local_queries[0].serialize()
+    bad_data = {"name": "BAD"}  # missing required keys - KeyError while deserializing
+    remote_server.serialized_queries = [good_data, bad_data]
+
+    queries, errors = build_queries_from_remote(mock_app_ctx, mock_user_ctx, remote_server)
+
+    assert len(queries) == 1
+    assert queries[0].name == "GOOD"
+    assert len(errors) == 1
+    assert remote_server.id_on_remote in errors[0]

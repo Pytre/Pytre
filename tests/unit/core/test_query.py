@@ -3,9 +3,11 @@ Tests for Pytre/sql_query/query.py
 """
 
 import pytest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 
+from Pytre_Core.remotes import Remote, RemoteServer
 from Pytre_Core.sql_query.query import Query
+from Pytre_Core.remotes import RemoteAddress
 
 
 # ================================================================================
@@ -135,6 +137,79 @@ def test_query_serialize_deserialize(mock_app_ctx, mock_user_ctx, sample_sql_fil
     assert query2.name == query1.name
     assert query2.description == query1.description
     assert query2.filename == query1.filename
+
+
+# ================================================================================
+# Query.remote - serialize / deserialize
+# ================================================================================
+
+
+@pytest.fixture
+def remote_server() -> RemoteServer:
+    address = RemoteAddress(url="http://example.com", port=8000, username="alice")
+    return RemoteServer(id="SRV1", description="Remote Server 1", remote=Remote(None, address))
+
+
+@pytest.mark.unit
+def test_query_serialize_includes_remote_when_set(mock_app_ctx, mock_user_ctx, sample_sql_file, remote_server):
+    query = Query(mock_app_ctx, mock_user_ctx, sample_sql_file)
+    query.remote = remote_server
+
+    data = query.serialize()
+
+    assert data["remote"] == remote_server.serialize()
+
+
+@pytest.mark.unit
+def test_query_serialize_remote_is_none_when_local(mock_app_ctx, mock_user_ctx, sample_sql_file):
+    query = Query(mock_app_ctx, mock_user_ctx, sample_sql_file)
+
+    data = query.serialize()
+
+    assert data["remote"] is None
+
+
+@pytest.mark.unit
+def test_query_deserialize_restores_remote_from_data(mock_app_ctx, mock_user_ctx, sample_sql_file, remote_server):
+    """The 'execution round-trip' use case (multiprocessing queue): the Query being
+    serialized already has .remote set, so data["remote"] carries it correctly."""
+    query1 = Query(mock_app_ctx, mock_user_ctx, sample_sql_file)
+    query1.remote = remote_server
+    data = query1.serialize()
+
+    query2 = Query.deserialize(mock_app_ctx, mock_user_ctx, data)
+
+    assert query2.remote is not None
+    assert query2.remote.id_on_remote == remote_server.id_on_remote
+    # description itself isn't compared: from_dict() always fills a blank description with
+    # a "host:port" fallback by design (see RemoteAddress), so it won't match the original "".
+    assert query2.remote.address.url == remote_server.address.url
+    assert query2.remote.address.port == remote_server.address.port
+    assert query2.remote.address.username == remote_server.address.username
+
+
+@pytest.mark.unit
+def test_query_deserialize_uses_explicit_remote_override(mock_app_ctx, mock_user_ctx, sample_sql_file, remote_server):
+    """The 'display' use case: data['remote'] is None (Pytre_Server never sets it on its
+    own Query objects), but the caller - who just fetched this query from that remote -
+    passes it explicitly instead."""
+    query1 = Query(mock_app_ctx, mock_user_ctx, sample_sql_file)
+    data = query1.serialize()
+    assert data["remote"] is None  # confirms this really is the "server never set it" case
+
+    query2 = Query.deserialize(mock_app_ctx, mock_user_ctx, data, remote=remote_server)
+
+    assert query2.remote is remote_server
+
+
+@pytest.mark.unit
+def test_query_deserialize_without_remote_stays_local(mock_app_ctx, mock_user_ctx, sample_sql_file):
+    query1 = Query(mock_app_ctx, mock_user_ctx, sample_sql_file)
+    data = query1.serialize()
+
+    query2 = Query.deserialize(mock_app_ctx, mock_user_ctx, data)
+
+    assert query2.remote is None
 
 
 # ================================================================================
@@ -368,66 +443,5 @@ SELECT @param
     config = query.get_exec_config(server_id="TEST_SERVER", file_output=False)
 
     assert config.server_id == "TEST_SERVER"
-    assert config.query_name == sql_file.stem
+    assert config.query_id == sql_file.stem
     assert isinstance(config.cmd_template, str)
-
-
-# ================================================================================
-# Query.execute() Tests
-# ================================================================================
-
-
-@pytest.mark.unit
-def test_query_execute_returns_error_if_values_invalid(mock_app_ctx, mock_user_ctx, tmp_path):
-    sql_file = tmp_path / "test.sql"
-    sql_file.write_text("SELECT 1")
-    query = Query(mock_app_ctx, mock_user_ctx, sql_file)
-    query.query_execute.queue = Mock()
-
-    with patch.object(query, "update_values"), patch.object(query, "values_ok", return_value=False):
-        result = query.execute(file_output=False)
-
-    assert result == (-1, None)
-    assert query.query_execute.queue.put.called
-
-
-@pytest.mark.unit
-def test_query_execute_delegates_to_query_execute(mock_app_ctx, mock_user_ctx, tmp_path):
-    sql_file = tmp_path / "test.sql"
-    sql_file.write_text("SELECT 1")
-    query = Query(mock_app_ctx, mock_user_ctx, sql_file)
-    query.query_execute.execute = Mock(return_value=(3, tmp_path / "out.csv"))
-
-    result = query.execute(server_id="SRV1", file_output=False)
-
-    assert result == (3, tmp_path / "out.csv")
-
-
-@pytest.mark.unit
-def test_query_execute_handles_operational_error(mock_app_ctx, mock_user_ctx, tmp_path):
-    from Pytre_Core.servers import ServerConnectionError
-
-    sql_file = tmp_path / "test.sql"
-    sql_file.write_text("SELECT 1")
-    query = Query(mock_app_ctx, mock_user_ctx, sql_file)
-    query.query_execute.execute = Mock(side_effect=ServerConnectionError("connection failed"))
-    query.query_execute.queue = Mock()
-
-    result = query.execute(file_output=False)
-
-    assert result == (-1, None)
-    assert query.query_execute.queue.put.called
-
-
-@pytest.mark.unit
-def test_query_execute_handles_unexpected_error(mock_app_ctx, mock_user_ctx, tmp_path):
-    sql_file = tmp_path / "test.sql"
-    sql_file.write_text("SELECT 1")
-    query = Query(mock_app_ctx, mock_user_ctx, sql_file)
-    query.query_execute.execute = Mock(side_effect=ValueError("boom"))
-    query.query_execute.queue = Mock()
-
-    result = query.execute(file_output=False)
-
-    assert result == (-1, None)
-    query.query_execute.queue.put.assert_any_call(("msg_output", "Erreur inattendue : boom"))

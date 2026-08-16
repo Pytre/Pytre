@@ -5,7 +5,7 @@ Tests for SQL type conversions (to_cmd, to_display, from_result)
 """
 
 import pytest
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 
 from Pytre_Core.sql_query.converter import SqlTypeConverter
@@ -375,6 +375,41 @@ def test_from_result_datetime_sql_min_becomes_empty(converter):
     dt = datetime(1753, 1, 1, 0, 0, 0)
     result = converter.from_result(dt)
     assert result == ""
+
+
+@pytest.mark.unit
+def test_from_result_date(converter):
+    """A plain date (not datetime) should use date_display_format"""
+    d = date(2025, 12, 25)
+    result = converter.from_result(d)
+    assert result == "25/12/2025"
+
+
+@pytest.mark.unit
+def test_from_result_date_us_format(converter_us):
+    """A plain date should respect the configured date_display_format"""
+    d = date(2025, 12, 25)
+    result = converter_us.from_result(d)
+    assert result == "12/25/2025"
+
+
+@pytest.mark.unit
+def test_from_result_date_sql_min_becomes_empty(converter):
+    """SQL Server min date (1753-01-01) should become empty, same rule as datetime"""
+    d = date(1753, 1, 1)
+    result = converter.from_result(d)
+    assert result == ""
+
+
+@pytest.mark.unit
+def test_from_result_date_is_not_confused_with_datetime(converter):
+    """type() dispatch is exact - a plain date must never hit the datetime handler
+    (which would fail: date has no .hour/.minute/.second)"""
+    d = date(2025, 12, 25)
+    dt = datetime(2025, 12, 25, 14, 30, 0)
+
+    assert converter.from_result(d) == "25/12/2025"
+    assert converter.from_result(dt) == "25/12/2025 14:30:00"
 
 
 # ================================================================================

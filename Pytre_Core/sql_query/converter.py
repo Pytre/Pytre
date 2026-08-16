@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, date
 
 
 class SqlTypeConverter:
@@ -190,6 +190,7 @@ class _FromResult:
             "<class 'int'>": self._from_number,
             "<class 'bool'>": self._from_bool,
             "<class 'datetime.datetime'>": self._from_datetime,
+            "<class 'datetime.date'>": self._from_date,
             "<class 'NoneType'>": self._from_none,
         }
 
@@ -227,6 +228,12 @@ class _FromResult:
             date_format = self.parent.date_display_format
 
         return value.strftime(date_format)
+
+    def _from_date(self, value: date) -> str:
+        if value == date(1753, 1, 1):
+            return ""
+
+        return value.strftime(self.parent.date_display_format)
 
     def _from_none(self, _) -> str:
         return ""

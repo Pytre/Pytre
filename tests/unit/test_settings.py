@@ -250,7 +250,7 @@ def test_load_reads_from_keepass(mock_kee):
         elif title == "DECIMAL_SEPARATOR":
             entry.username = "."
         elif title == "DATE_FORMAT":
-            entry.username = "yyyy-MM-dd"
+            entry.username = "%Y-%m-%d"
         else:
             return None
         return entry
@@ -262,7 +262,7 @@ def test_load_reads_from_keepass(mock_kee):
     # Verify loaded values
     assert settings.field_separator == "|"
     assert settings.decimal_separator == "."
-    assert settings.date_format == "yyyy-MM-dd"
+    assert settings.date_format == "%Y-%m-%d"
 
 
 @pytest.mark.unit
@@ -474,7 +474,7 @@ def test_load_handles_db_open_failure(mock_kee):
 
 @pytest.mark.unit
 def test_date_format_empty_uses_default(mock_kee):
-    """Empty date format should use default dd/MM/yyyy"""
+    """Empty date format should use default %d/%m/%Y"""
 
     def mock_find_entries(title, group, first):
         entry = Mock()
@@ -488,4 +488,70 @@ def test_date_format_empty_uses_default(mock_kee):
 
     settings = Settings(mock_kee)
 
-    assert settings.date_format == "dd/MM/yyyy"
+    assert settings.date_format == "%d/%m/%Y"
+
+
+# ================================================================================
+# Date Format Validation
+# ================================================================================
+
+
+@pytest.mark.unit
+def test_validate_date_format_valid(mock_kee):
+    """Should accept valid strftime date formats"""
+    settings = Settings(mock_kee)
+
+    assert settings._validate_date_format("%d/%m/%Y") is True
+    assert settings._validate_date_format("%Y-%m-%d") is True
+    assert settings._validate_date_format("%d-%m-%Y") is True
+
+
+@pytest.mark.unit
+def test_validate_date_format_invalid_raises_error(mock_kee):
+    """Should reject formats with no usable date directives"""
+    settings = Settings(mock_kee)
+
+    with pytest.raises(ValueError, match="Invalid date format"):
+        settings._validate_date_format("not-a-date")
+
+
+@pytest.mark.unit
+def test_validate_date_format_missing_component_raises_error(mock_kee):
+    """Should reject formats missing a day, month or year directive"""
+    settings = Settings(mock_kee)
+
+    with pytest.raises(ValueError, match="Invalid date format"):
+        settings._validate_date_format("%m/%Y")  # missing day
+
+
+@pytest.mark.unit
+def test_date_format_invalid_uses_default(mock_kee):
+    """Invalid date_format from KeePass should fall back to the default"""
+
+    def mock_find_entries(title, group, first):
+        entry = Mock()
+        if title == "DATE_FORMAT":
+            entry.username = "yyyy-MM-dd"  # not a strftime format
+        else:
+            return None
+        return entry
+
+    mock_kee.db.find_entries = mock_find_entries
+
+    settings = Settings(mock_kee)
+
+    assert settings.date_format == "%d/%m/%Y"
+
+
+@pytest.mark.unit
+def test_save_date_format_invalid_raises_error(mock_kee):
+    """save() should raise if date_format is invalid at save time"""
+    mock_entry = Mock()
+    mock_entry.username = ""
+    mock_kee.db.find_entries = Mock(return_value=mock_entry)
+
+    settings = Settings(mock_kee)
+    settings.date_format = "not-a-date"
+
+    with pytest.raises(ValueError, match="Invalid date format"):
+        settings.save()

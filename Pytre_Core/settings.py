@@ -1,6 +1,7 @@
 import codecs
 import json
 import logging
+from datetime import datetime
 from pathlib import Path, PureWindowsPath
 
 from pykeepass.entry import Entry
@@ -28,7 +29,7 @@ class Settings:
         self.settings_version: str = ""  # version actuelle des settings
         self.field_separator: str = ";"  # délimitateur de champs pour exports
         self.decimal_separator: str = ","  # séparateur décimal pour exports
-        self.date_format: str = "dd/MM/yyyy"  # format date pour les exports
+        self.date_format: str = "%d/%m/%Y"  # format date pour les exports
         self.extract_encoding: str = self.default_encoding  # encoding format pour les exports
         self.queries_folder: Path = DEFAULT_QUERIES_FOLDER  # répertoire des requêtes SQL
         self.logs_are_on: bool = False  # indicateur si logs centraux
@@ -70,6 +71,22 @@ class Settings:
 
         return True
 
+    def _validate_date_format(self, date_format: str) -> bool:
+        """if not valid raise a ValueError"""
+        # for proper validation, day must be a value valid for a month
+        # and day/month/year must differ from strptime's defaults (1/1/1900)
+        test_date = datetime(2001, 2, 3)
+
+        try:
+            formatted = test_date.strftime(date_format)
+            parsed = datetime.strptime(formatted, date_format)
+            if parsed.date() != test_date.date():
+                raise ValueError(f"Invalid date format: '{date_format}' does not round-trip")
+        except ValueError as e:
+            raise ValueError(f"Invalid date format: '{date_format}'") from e
+
+        return True
+
     def load(self, reload: bool = False) -> None:
         if not self.open_db(reload=reload):
             log("Error, couldn't load settings : base failed to open", logging.ERROR)
@@ -96,17 +113,19 @@ class Settings:
                     )
                     value = ","
             elif kee_title == "DATE_FORMAT":
-                if not value:
-                    value = "dd/MM/yyyy"
+                try:
+                    self._validate_date_format(value)
+                except ValueError:
+                    default = "%d/%m/%Y"
+                    log(f"Invalid date format settings '{value}', using default '{default}'", logging.WARNING)
+                    value = default
             elif kee_title == "EXTRACT_ENCODING":
                 try:
                     self._validate_encoding_format(value)
                 except LookupError:
-                    log(
-                        f"Invalid encoding settings '{value}', using default '{self.default_encoding}'",
-                        logging.WARNING,
-                    )
-                    value = self.default_encoding
+                    default = self.default_encoding
+                    log(f"Invalid encoding settings '{value}', using default '{default}'", logging.WARNING)
+                    value = default
             elif kee_title == "LOGS_ARE_ON":
                 value = True if value.lower() == "true" else False
             elif kee_title == "LOGS_FOLDER":
@@ -147,6 +166,8 @@ class Settings:
             elif kee_title == "USERS_CACHE_EXPIRATION":
                 if not str(value).isnumeric():
                     raise ValueError(f"Invalid value for users cache expiration : '{value}'")
+            elif kee_title == "DATE_FORMAT":
+                self._validate_date_format(value)
 
             info.username = value
 

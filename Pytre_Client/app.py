@@ -8,12 +8,20 @@ from dataclasses import dataclass
 from pathlib import Path
 from datetime import datetime
 
-from Pytre_Core import old_files, sql_query, settings, users, servers, utils
+from Pytre_Core import old_files, settings, users, utils
+from Pytre_Core.about import APP_NAME, APP_VERSION, APP_STATUS
 from Pytre_Core.context import AppContext, UserContext
 from Pytre_Core.logs_central import ClientDriven as CentralLogs
+from Pytre_Core.remotes import RemoteServer, Remotes
+from Pytre_Core.servers import Server, Servers
 from Pytre_Core.user_prefs import UserPrefs, PrefsEnum
-from Pytre_Core.sql_query import ExecutionRunner, ExecResultMsg
-from Pytre_Core.about import APP_NAME, APP_VERSION, APP_STATUS
+
+from Pytre_Core.sql_query.execution_runner import ExecutionRunner
+from Pytre_Core.sql_query.execution_msg import ExecResultMsg
+from Pytre_Core.sql_query.query import Query
+from Pytre_Core.sql_query.parameters import SqlParam
+from Pytre_Core.sql_query.query_execute import PRINT_DATE_FORMAT
+from Pytre_Core.sql_query.loader import build_queries_from_remote, get_queries, orphan_queries, filter_queries
 
 import Pytre_Client.ui_utils as ui_utils
 from Pytre_Client.ui_utils_thread import tk_call_when_ready
@@ -24,6 +32,7 @@ from Pytre_Client.MsgOverlay import MsgOverlay
 from Pytre_Client.app_logs import LogsWindow
 from Pytre_Client.app_debug import DebugWindow
 from Pytre_Client.app_users import UsersWindow
+from Pytre_Client.app_remotes import RemotesWindow
 from Pytre_Client.app_servers import ServersWindow
 from Pytre_Client.app_settings import SettingsWindow, UserPrefsWindow
 from Pytre_Client.app_password import PasswordWindow
@@ -66,13 +75,16 @@ class App(tk.Toplevel):
         self.user: users.User = self.user_ctx.current_user
         self.user_prefs: UserPrefs = self.user_ctx.user_prefs
         self.app_settings: settings.Settings = self.app_ctx.settings
-        self.servers: servers.Servers = self.app_ctx.servers
+        self.servers: Servers = self.app_ctx.servers
+        self.remotes: Remotes = self.user_ctx.remotes
+        self.servers_dict: dict[str, Server | RemoteServer] = {}
         self.server_id: str = ""
         self._central_logs: CentralLogs | None = None
 
-        self.queries_all: list[sql_query.Query] = []
-        self.queries: list[sql_query.Query] = []
-        self.query: sql_query.Query | None = sql_query.Query(self.app_ctx, self.user_ctx)
+        self.queries_by_remote_server: dict[str, list[Query]] = {}
+        self.queries_all_local: list[Query] = []
+        self.queries: list[Query] = []
+        self.query: Query | None = Query(self.app_ctx, self.user_ctx)
         self.params_widgets: dict[str, ParamWidgetGroup] = {}
         self.output_file: Path | None = None
 
@@ -85,7 +97,7 @@ class App(tk.Toplevel):
         self.start_time: datetime | None = None
         self._timer_after_id: str | None = None
 
-        self.date_format = sql_query.PRINT_DATE_FORMAT
+        self.date_format = PRINT_DATE_FORMAT
 
         self.setup_style()
         self.setup_ui()
@@ -97,7 +109,7 @@ class App(tk.Toplevel):
         self.check_user_access()  # quitte l'application si pas d'accès
 
         self._queries_first_load: bool = True
-        self.refresh_queries(reload_servers=False)
+        self.refresh_queries(reload_servers=False, reload_remotes=True)
 
         self.cache_folder_cleanup()
 
@@ -228,9 +240,12 @@ class App(tk.Toplevel):
     # ------------------------------------------------------------------------------------------
     # Définition de l'identité de l'appli et des styles / thème
     # ------------------------------------------------------------------------------------------
-    def setup_app_identity(self):
+    def get_default_title(self) -> str:
         app_version = APP_VERSION if not APP_STATUS else f"{APP_VERSION} ({APP_STATUS})"
-        self.title(f"{APP_NAME} - V.{app_version}")
+        return f"{APP_NAME} - V.{app_version}"
+
+    def setup_app_identity(self):
+        self.title(self.get_default_title())
 
         icon_file = self.app_settings.app_path / "res" / "app.png"
         icon_img = tk.PhotoImage(file=icon_file)
@@ -272,7 +287,9 @@ class App(tk.Toplevel):
 
         self.menu_query = tk.Menu(menubar, tearoff=False)
         self.menu_query.add_command(label="Executer", state="disabled", command=self.execute_query)
-        self.menu_query.add_command(label="Recharger", command=lambda: self.refresh_queries(reload_servers=True))
+        self.menu_query.add_command(
+            label="Recharger", command=lambda: self.refresh_queries(reload_servers=True, reload_remotes=True)
+        )
         self.menu_query.add_separator()
         self.menu_query.add_command(label="Journal...", command=lambda: self.open_logs(True))
         self.menu_query.add_command(label="Debug...", state="disabled", command=self.debug_query)
@@ -286,6 +303,7 @@ class App(tk.Toplevel):
         menubar.add_cascade(label="Requêtes", menu=self.menu_query)
 
         menu_prefs = tk.Menu(menubar, tearoff=False)
+        menu_prefs.add_command(label="Remotes...", command=self.manage_remotes)
         menu_prefs.add_command(label="Préférences...", command=self.manage_user_prefs)
         menubar.add_cascade(label="Préférences", menu=menu_prefs)
 
@@ -336,7 +354,10 @@ class App(tk.Toplevel):
         self.queries_label_filter = ttk.Label(self.left_frame, text="Filtre :", justify=tk.LEFT)
         self.queries_entry_filter = ttk.Entry(self.left_frame, textvariable=self.queries_filter_text, width=25)
         self.queries_btn_refresh = ttk.Button(
-            self.left_frame, text="\U00002b6e", width=4, command=lambda: self.refresh_queries(reload_servers=True)
+            self.left_frame,
+            text="\U00002b6e",
+            width=4,
+            command=lambda: self.refresh_queries(reload_servers=True, reload_remotes=True),
         )
 
         self.queries_tree = ttk.Treeview(self.left_frame, columns=(1, 2), show="headings", selectmode="browse")
@@ -481,7 +502,7 @@ class App(tk.Toplevel):
 
         self.params_widgets = {}
 
-    def ui_params_update(self, params: dict[str, sql_query.SqlParam] | None = None):
+    def ui_params_update(self, params: dict[str, SqlParam] | None = None):
         self.ui_params_reset()
 
         count_not_hidden = 0
@@ -493,7 +514,7 @@ class App(tk.Toplevel):
         else:
             self._ui_with_params_update(params)
 
-    def _ui_with_params_update(self, params: dict[str, sql_query.SqlParam]):
+    def _ui_with_params_update(self, params: dict[str, SqlParam]):
         for i, key in enumerate(params):
             # ne pas afficher le paramètre si il doit être caché
             # et que l'utilisateur n'est pas un super utilisateur
@@ -812,60 +833,135 @@ class App(tk.Toplevel):
     # ------------------------------------------------------------------------------------------
     # Traitements
     # ------------------------------------------------------------------------------------------
-    def refresh_queries(self, reload_servers: bool = False):
+    def refresh_queries(
+        self,
+        reload_servers: bool = False,
+        reload_remotes: bool = False,
+        remote_server: RemoteServer | None = None,
+        hide_end_msg: bool = False,
+    ):
+        """If `remote_server` is given, `reload_servers` / `reload_remotes` are ignored and refresh_servers()
+        is skipped (the servers list itself isn't touched). Only that remote server's own queries
+        are fetched via a HTTP call that always happens regardless of any cache."""
+
         overlay = MsgOverlay.display(self, "Chargement des requêtes...", 1500)
 
         self.lock_ui()
         self.ui_params_reset()
-        self.query = sql_query.Query(self.app_ctx, self.user_ctx)
+        self.query = Query(self.app_ctx, self.user_ctx)
         self.output_msg("")
         self.queries_filter_text.set("")
 
-        self.refresh_servers(reload_servers)
+        remote_target = remote_server
+        refresh_local = remote_server is None
+        first_load = self._queries_first_load
+
+        if remote_server:
+            first_load = first_load or self.queries_by_remote_server.get(remote_server.id, None) is None
+        else:
+            self.refresh_servers(reload_servers, reload_remotes)
+            if reload_remotes:
+                self.queries_by_remote_server = {}  # reset remotes queries cache
+                current_server = self.servers_dict.get(self.server_id)
+                remote_target = current_server if isinstance(current_server, RemoteServer) else None
 
         def worker():
-            queries_all, errors = [], []
-            try:
-                queries_all, errors = sql_query.get_queries(
-                    self.app_ctx, self.user_ctx, self.app_settings.queries_folder
-                )
-            except Exception as err:
-                queries_all, errors = [], [str(err)]
-            finally:
-                # retour dans le thread principal pour mettre à jour l'UI et finaliser
-                result_queue.put((queries_all, errors))
+            queries_local, queries_remote = {}, {}
+            errors_local, errors_remote = {}, {}
 
-        def refresh_end(queries_all, errors):
-            self.queries_all = queries_all
+            if refresh_local:
+                try:
+                    folder = self.app_settings.queries_folder
+                    q, e = get_queries(self.app_ctx, self.user_ctx, folder)
+                    queries_local, errors_local = {"local": q}, {"local": e}
+                except Exception as e:
+                    queries_local, errors_local = {"local": []}, {"local": [str(e)]}
+
+            if remote_target:
+                try:
+                    remote_target.get_serialized_queries()
+                    q, e = build_queries_from_remote(self.app_ctx, self.user_ctx, remote_target)
+
+                    remote_id = remote_target.description or remote_target.id_on_remote
+                    msg_prefix = f"La remote n'a pas réussi à se connecter à {remote_id} :\n"
+                    last_error = f"{msg_prefix}{remote_target.last_error}" if remote_target.last_error else ""
+
+                    queries_remote, errors_remote = {"remote": q}, {"remote": e, "cnx_error": last_error}
+                except Exception as e:
+                    queries_remote, errors_remote = {"remote": []}, {"remote": [str(e)]}
+
+            # retour dans le thread principal pour mettre à jour l'UI et finaliser
+            result_queue.put((queries_local | queries_remote, errors_local | errors_remote))
+
+        def refresh_end(queries: dict, errors: dict):
+            # mise à jour des listes de query et rechargement
+            if refresh_local:
+                self.queries_all_local = queries.get("local", [])
+
+            if remote_target:
+                self.queries_by_remote_server[remote_target.id] = queries.get("remote", [])
+
             self.queries_filter()
             self.tree_autosize()
 
+            # message d'accueil si initialisation de l'appli
             if self._queries_first_load:
+                self._queries_first_load = False
                 default_msg = f"Bonjour {self.user.title.split(' ')[0]} !" if self.user.title else "Bonjour !"
                 custom_msg = self.user.msg_login
                 self.output_msg(str(custom_msg or default_msg) + "\n", "1.0", "1.0")
 
-            if errors:
-                self.output_msg("\n".join(errors))
+            # liste des erreurs si problèmes rencontrés
+            errors_msg: list[str] = errors.get("local", []) + errors.get("remote", [])
 
+            if reload_remotes:  # récup des problèmes de récupération des serveurs par les remotes
+                for r in self.remotes.remotes_dict.values():
+                    if r.last_error:
+                        errors_msg.append(r.last_error)
+
+            if errors.get("cnx_error"):  # si remote a échoué à joindre le serveur
+                errors_msg.append(errors["cnx_error"])
+
+            if errors_msg:
+                self.output_msg("\n".join(errors_msg))
+
+            # deverouillage UI
             overlay.hide(callback=self.unlock_ui)
-            if not self._queries_first_load:
+
+            # afficher si besoin, dans une boite de dialogue, un message de fin
+            if hide_end_msg:
+                pass
+            elif errors.get("cnx_error"):
+                messagebox.showerror("Rechargement", errors["cnx_error"], parent=self)
+            elif not first_load:
                 messagebox.showinfo("Rechargement", "Ok requêtes rechargées", parent=self)
-            else:
-                self._queries_first_load = False
 
         result_queue = ThreadQueue()
         Thread(target=worker, daemon=True).start()
         tk_call_when_ready(self, result_queue, refresh_end)
 
-    def refresh_servers(self, reload_servers: bool = False):
+    def refresh_servers(self, reload_servers: bool = False, reload_remotes: bool = False):
+        # refresh servers_dict with local and remote servers
         grp_authorized = self.user.grp_authorized if not self.user.admin else None
-        servers_dict: dict = self.servers.get_all_servers(reload_servers, grp_authorized)
-        servers_name = [v.description or k for k, v in servers_dict.items()]
-        servers_id = list(servers_dict.keys())
+        local_servers: dict = self.servers.get_all_servers(reload_servers, grp_authorized)
 
+        remote_servers: dict[str, RemoteServer] = self.remotes.get_all_servers(reload=reload_remotes)
+
+        self.servers_dict = local_servers | remote_servers
+
+        # build server names and ids list to allow finding a default selection
+        servers_name: list[str] = []
+        for k, v in self.servers_dict.items():
+            name = v.description or k
+            if isinstance(v, RemoteServer):
+                name += f" (r : {v.address.description_for_ui})"
+            servers_name.append(name)
+
+        servers_id = list(self.servers_dict.keys())
+
+        # update servers selection list and determine which one to select by default
         self.servers_cb["values"] = tuple(servers_name)
-        if servers_dict:
+        if self.servers_dict:
             if self.servers_cb.current() == -1:
                 self.server_id = self.user_prefs.get(PrefsEnum.last_server)
 
@@ -873,13 +969,13 @@ class App(tk.Toplevel):
             self.server_id = servers_id[pos]
             self.servers_cb.set(servers_name[pos])
 
-        if len(self.servers.servers_dict) <= 1:
-            # if one server or less hide servers selection
+        # hide servers selection if no more than one server available
+        # or display it if it was hidden and there is more than one server
+        if len(self.servers_dict) <= 1:
             self.servers_label.grid_remove()
             self.servers_cb.grid_remove()
             self.left_frame.columnconfigure(1, weight=0)
         elif not self.servers_cb.grid_remove():
-            # display servers selection if hidden and more than one server
             self.servers_label.grid()
             self.servers_cb.grid()
             self.left_frame.columnconfigure(1, weight=1)
@@ -969,7 +1065,7 @@ class App(tk.Toplevel):
             utils.showfile(folder)
 
     def orphan_queries(self):
-        orphans = sql_query.orphan_queries(self.app_ctx, self.user_ctx, self.app_settings.queries_folder)
+        orphans = orphan_queries(self.app_ctx, self.user_ctx, self.app_settings.queries_folder)
         if not orphans:
             self.output_msg("Aucune requête orpheline !")
         else:
@@ -980,11 +1076,17 @@ class App(tk.Toplevel):
     # ------------------------------------------------------------------------------------------
     # Mise à jour de l'interface et des variables d'instances quand évènement
     # ------------------------------------------------------------------------------------------
+    def update_window_title(self) -> None:
+        selected_server: str = self.servers_cb.get()  # empty string if none
+        if selected_server:
+            self.title(self.get_default_title() + " | " + selected_server)
+
     def queries_filter_focus(self):
         self.queries_disable_filter = True
         self.queries_entry_filter.focus()
 
-    def queries_filter(self, text_filter: str = "", msg_filter: str = ""):
+    def queries_filter(self, text_filter: str = ""):
+        # return early if text_filter did not change since last call
         try:
             if self.queries_disable_filter and text_filter == self.queries_previous_filter:
                 return
@@ -995,18 +1097,30 @@ class App(tk.Toplevel):
         self.queries_disable_filter = False
         self.queries_previous_filter = text_filter
 
+        # reset display and state before rebuilding queries list
         for item in self.queries_tree.get_children():
             self.queries_tree.delete(item)
 
         self.ui_params_reset()
         self.query = None
-        self.output_msg(msg_filter)
+        self.output_msg("")
+        self.update_window_title()
 
-        servers_id = list(self.servers.servers_dict.keys())
+        # retrieve current selected server
         cb_current = self.servers_cb.current()
-        self.server_id = servers_id[cb_current] if cb_current > -1 else ""
-        self.queries = sql_query.filter_queries(self.app_ctx.servers, self.queries_all, self.server_id, self.user)
+        self.server_id = list(self.servers_dict.keys())[cb_current] if cb_current > -1 else ""
+        server = self.servers_dict.get(self.server_id, None)
 
+        # retrieve queries depending on whether server is local, remote cached or not
+        if isinstance(server, Server) or server is None:
+            self.queries = filter_queries(self.app_ctx.servers, self.queries_all_local, self.server_id, self.user)
+        elif self.server_id in self.queries_by_remote_server:
+            self.queries = self.queries_by_remote_server[self.server_id]
+        else:
+            self.refresh_queries(remote_server=server)
+            return  # remote not cached, refresh_queries() will callback filter after fetching queries
+
+        # display queries matching text_filter
         self.queries_tree.tag_configure("hidden", foreground="gray")
         for item in self.queries:
             if (
@@ -1128,37 +1242,44 @@ class App(tk.Toplevel):
     # ------------------------------------------------------------------------------------------
     def open_logs(self, all: bool = False):
         if not all and self.query is not None:
-            LogsWindow(self.user_ctx.user_logs, self.user_ctx.user_prefs, self, self.query.name)
+            LogsWindow(self.user_ctx.user_logs, self.user_ctx.user_prefs, parent=self, query_name=self.query.name)
         else:
-            LogsWindow(self.user_ctx.user_logs, self.user_ctx.user_prefs, self)
+            LogsWindow(self.user_ctx.user_logs, self.user_ctx.user_prefs, parent=self)
 
     def debug_query(self):
         if self.query is not None:
-            DebugWindow(self.query, self)
+            DebugWindow(self.query, parent=self)
 
     def manage_users(self):
         if getattr(self, "user_window", None) is None or not self.user_window.winfo_exists():
-            self.user_window = UsersWindow(self.app_ctx.users, self)
+            self.user_window = UsersWindow(self.app_ctx.users, parent=self)
         else:
             self.user_window.focus_set()
 
     def manage_servers(self):
-        ServersWindow(self.app_ctx.servers, self)
+        modified = ServersWindow.show(self.app_ctx.servers, parent=self)
+        if modified:
+            self.refresh_queries(reload_servers=True, hide_end_msg=True)
+
+    def manage_remotes(self):
+        modified = RemotesWindow.show(self.user_ctx.remotes, parent=self)
+        if modified:
+            self.refresh_queries(reload_remotes=True, hide_end_msg=True)
 
     def manage_user_prefs(self):
-        UserPrefsWindow(self.user_ctx.user_prefs, self)
+        UserPrefsWindow(self.user_ctx.user_prefs, parent=self)
 
     def manage_settings(self):
-        SettingsWindow(self.app_ctx.settings, self, self.app_settings.reload)
+        SettingsWindow(self.app_ctx.settings, parent=self, on_close_callback=self.app_settings.reload)
 
     def manage_password(self):
-        PasswordWindow(self.app_ctx.kee, self)
+        PasswordWindow(self.app_ctx.kee, parent=self)
 
     def console(self):
         self.console_app.deiconify()
 
     def about_info(self):
-        AboutWindow(self)
+        AboutWindow(parent=self)
 
 
 def app_start():

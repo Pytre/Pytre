@@ -15,7 +15,7 @@ class CsvTaskConfig:
     avec overlay de chargement et verrouillage de l'UI pendant l'exécution.
 
     La fonction csv_process_fn ne prend aucun argument et doit retourne une valeur booléenne
-    La fonction end_fn est toujours appelé
+    La fonction end_fn est toujours appelé et prend en argument la valeur booléenne retournée par csv_process_fn
     """
 
     ui_parent: tk.Toplevel
@@ -29,7 +29,7 @@ class CsvTaskConfig:
 
     end_msgbox_title: str
     end_msgbox_msg: str
-    end_fn: Callable[[], None] | None = None
+    end_fn: Callable[[bool], None] | None = None
 
 
 def csv_process_async(cfg: CsvTaskConfig) -> None:
@@ -58,7 +58,7 @@ def csv_process_async(cfg: CsvTaskConfig) -> None:
             messagebox.showerror(title=cfg.end_msgbox_title, message=msg, parent=cfg.ui_parent)
 
         if cfg.end_fn:
-            cfg.end_fn()
+            cfg.end_fn(result)
 
     result_queue = Queue()
     Thread(target=worker, daemon=True).start()

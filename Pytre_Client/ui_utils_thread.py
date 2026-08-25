@@ -14,7 +14,7 @@ def tk_call_when_ready(tk_window: tk.Toplevel, result_queue: Queue, callback, ch
     Execute callback from main thread using results from a queue as arguments.
 
     Args:
-        result_queue: queue to retrieve arguments, can be args or an (args, kwargs) tuple
+        result_queue: queue to retrieve arguments, a tuple will be unpacked else it will be treated as a single arg
         callback : function to execute with the results
         check_interval_ms: interval to check the queue in ms
     """
@@ -22,17 +22,10 @@ def tk_call_when_ready(tk_window: tk.Toplevel, result_queue: Queue, callback, ch
     def check():
         try:
             result = result_queue.get_nowait()
-
-            # if not a tuple:
-            if not isinstance(result, tuple):
-                callback(result)
-            # if (args, kwargs) tuple
-            elif len(result) == 2 and isinstance(result[1], dict):
-                args, kwargs = result
-                callback(*args, **kwargs)
-            # else when (arg1, arg2, ...) tuple
-            else:
+            if isinstance(result, tuple):
                 callback(*result)
+            else:
+                callback(result)
         except QueueIsEmpty:
             tk_window.after(check_interval_ms, check)
         except Exception as e:

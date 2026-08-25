@@ -22,6 +22,13 @@ class WidgetGroup:
 
 
 class ServersWindow(tk.Toplevel):
+    @classmethod
+    def show(cls, servers: Servers, parent=None) -> bool:
+        """Create windows and reports if modifications has been made after it has been closed"""
+        dialog = ServersWindow(servers, parent=parent)
+        dialog.wait_window()
+        return dialog.servers_modified
+
     def __init__(self, servers: Servers, parent=None):
         super().__init__()
         self.parent = parent
@@ -40,6 +47,7 @@ class ServersWindow(tk.Toplevel):
 
         self.server: Server | None = None
         self.new_server: bool = False
+        self.servers_modified: bool = False
 
         set_theme(self)
         self._setup_ui()
@@ -420,6 +428,7 @@ class ServersWindow(tk.Toplevel):
         # signalement de la fin de l'enregistrement
         if result:
             self.new_server = False
+            self.servers_modified = True
             self.reload_all()
             msg = "Modifications enregistrées"
             messagebox.showinfo(title="Mise à jour infos serveur", message=msg, parent=self)
@@ -436,6 +445,7 @@ class ServersWindow(tk.Toplevel):
         if result:
             self.reload_all()
             self.tree_select_pos(max(curr_pos - 1, 0))
+            self.servers_modified = True
             msg = "Suppression du serveur réussi"
             messagebox.showinfo(title="Suppression infos serveur", message=msg, parent=self)
         else:
@@ -449,6 +459,11 @@ class ServersWindow(tk.Toplevel):
         if not filename:
             return
 
+        def import_end(result: bool) -> None:
+            if result:
+                self.servers_modified = True
+            self.reload_all()
+
         csv_task_cfg = CsvTaskConfig(
             ui_parent=self,
             ui_lock_fn=self.lock_ui,
@@ -458,7 +473,7 @@ class ServersWindow(tk.Toplevel):
             csv_process_fn=lambda: self.servers.csv_import(filename),
             end_msgbox_title="Import",
             end_msgbox_msg="Fin de l'import des serveurs",
-            end_fn=self.reload_all,
+            end_fn=import_end,
         )
 
         csv_process_async(csv_task_cfg)

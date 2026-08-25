@@ -108,9 +108,8 @@ class ConsoleWindow(tk.Toplevel):
         self.context_menu = tk.Menu(self.textbox, tearoff=0)
         self.context_menu.add_command(label="Copier (Ctrl+C)", command=self.copy_selection)
 
-        self.textbox.bind("<Button-3>", self.display_context_menu)
+        self.textbox.bind("<Button-3>", lambda e: self.context_menu.tk_popup(e.x_root, e.y_root))
         self.textbox.bind("<Control-c>", lambda _: self.copy_selection())
-        self.context_menu.bind("<FocusOut>", lambda _: self.context_menu.unpost())
 
     def _setup_textbox_tags(self):
         self.textbox.tag_configure("stdout", foreground="#FFFFFF")
@@ -130,13 +129,6 @@ class ConsoleWindow(tk.Toplevel):
     # ----------------------------------------------
     def _toggle_filter(self, tag: str, var: tk.BooleanVar):
         self.textbox.tag_configure(tag, elide=not var.get())
-
-    def display_context_menu(self, event: Event):
-        """Display context menu"""
-        try:
-            self.context_menu.tk_popup(event.x_root, event.y_root)
-        finally:
-            self.context_menu.grab_release()
 
     def copy_selection(self):
         """Copy text to clipboard"""

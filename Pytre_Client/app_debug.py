@@ -3,13 +3,13 @@ import tkinter as tk
 from tkinter import ttk, Event
 from pathlib import Path
 
-from Pytre_Core import sql_query
-from Pytre_Core.sql_query import SqlLexer, TokenType
+from Pytre_Core.sql_query.query import Query
+from Pytre_Core.sql_query.sql_lexer import SqlLexer, TokenType
 from Pytre_Client.app_theme import set_theme
 
 
 class DebugWindow(tk.Toplevel):
-    def __init__(self, query: sql_query.Query, parent=None):
+    def __init__(self, query: Query, parent=None):
         super().__init__()
 
         self.parent = parent
@@ -19,7 +19,7 @@ class DebugWindow(tk.Toplevel):
         else:
             self.focus_set()
 
-        self.query: sql_query.Query = query
+        self.query: Query = query
         self.tabs = {}
 
         set_theme(self)
@@ -136,6 +136,6 @@ if __name__ == "__main__":
     else:
         app_ctx = AppContext()
         user_ctx = UserContext(app_ctx.users)
-        my_query = sql_query.Query(app_ctx, user_ctx, filename)
+        my_query = Query(app_ctx, user_ctx, filename)
         my_app = DebugWindow(my_query)
         my_app.mainloop()

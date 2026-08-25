@@ -1,14 +1,14 @@
 import logging
 import tkinter as tk
 from dataclasses import dataclass
-from tkinter import StringVar, ttk, Event, font, messagebox, filedialog
+from tkinter import ttk, Event, font, messagebox, filedialog
 from threading import Thread
 from queue import Queue
 from collections.abc import Iterator
 
 from Pytre_Core import utils
 from Pytre_Core.kee import Kee
-from Pytre_Core.users import Users, User
+from Pytre_Core.users import Users, User, AuthType
 from Pytre_Core.about import APP_NAME
 
 import Pytre_Client.ui_utils as ui_utils
@@ -32,7 +32,7 @@ class WidgetGroup:
 
 
 class UsersWindow(tk.Toplevel):
-    def __init__(self, users: Users, parent=None):
+    def __init__(self, users: Users, show_pwd_related: bool = False, parent=None):
         super().__init__()
         self.parent = parent
         if self.parent:
@@ -45,6 +45,7 @@ class UsersWindow(tk.Toplevel):
         self.filter_var: tk.StringVar
 
         self.users: Users = users
+        self.show_pwd_related: bool = show_pwd_related
         self.default_sort_col: str = "title"
         self.sort_info: dict[str, str | bool | None] = {"col": None, "reverse": None}
         self.groups: set = set()
@@ -156,6 +157,12 @@ class UsersWindow(tk.Toplevel):
         for attr in cust_attribs:
             cols[attr] = {"text": attr, "minwidth": 60, "stretch": False}
 
+        if self.show_pwd_related:
+            pwd_related = {"auth_type": {"text": "Auth", "minwidth": 20, "stretch": False}}
+            items = list(cols.items())
+            items[1:1] = list(pwd_related.items())
+            cols = dict(items)
+
         return cols
 
     # ------------------------------------------------------------------------------------------
@@ -169,7 +176,7 @@ class UsersWindow(tk.Toplevel):
         self.tree.bind("<Next>", lambda e: self.tree_select_move(10, e))
         self.tree.bind("<Prior>", lambda e: self.tree_select_move(-10, e))
         self.tree.bind("<Double-Button-1>", lambda e: self.user_modify())
-        self.tree.bind("<Button-3>", lambda e: self.menubar.post(e.x_root, e.y_root))
+        self.tree.bind("<Button-3>", lambda e: self.menubar.tk_popup(e.x_root, e.y_root))
 
         self.protocol("WM_DELETE_WINDOW", self.app_exit)  # arrêter le programme quand fermeture de la fenêtre
 
@@ -287,6 +294,7 @@ class UsersWindow(tk.Toplevel):
                         value = "".join([f"[{item}]" for item in value])
                     if col == "admin":
                         value = "\U0001f5f9" if value is True else "\U000000b7"
+
                     values.append(value)
 
                 try:
@@ -478,7 +486,7 @@ class UsersWindow(tk.Toplevel):
             csv_process_fn=lambda: self.users.csv_import(filename),
             end_msgbox_title="Import",
             end_msgbox_msg="Fin de l'import des utilisateurs",
-            end_fn=self.tree_refresh,
+            end_fn=lambda _: self.tree_refresh(),
         )
 
         csv_process_async(csv_task_cfg)
@@ -566,9 +574,16 @@ class UserDialog(tk.Toplevel):
             "admin": "Admin",
             "msg_login": "Login Message",
         }
+
         self.entries: dict[str, WidgetGroup] = {}
         for attr in self.users.attribs_cust:
             entries_caption[attr] = attr
+
+        if self.parent.show_pwd_related:
+            pwd_related = {"auth_type": "Auth", "password_hash": "Hash"}
+            items = list(entries_caption.items())
+            items[1:1] = list(pwd_related.items())
+            entries_caption = dict(items)
 
         num_row = 0
         for key, caption in entries_caption.items():
@@ -659,7 +674,9 @@ class UserDialog(tk.Toplevel):
         # mise à jour des infos de l'utilisateur
         for key, w_group in self.entries.items():
             val = w_group.var.get()
-            if key in self.users.attribs_cust:
+            if key == "auth_type":
+                user.auth_type = AuthType(val)
+            elif key in self.users.attribs_cust:
                 user.attribs_cust[key] = val
             else:
                 setattr(user, key, val)
@@ -1000,5 +1017,5 @@ class AttribsDialog(tk.Toplevel):
 if __name__ == "__main__":
     kee = Kee()
     users = Users(kee)
-    my_app = UsersWindow(users)
+    my_app = UsersWindow(users, show_pwd_related=True)
     my_app.mainloop()

@@ -11,6 +11,28 @@
             "program": "${file}",
             "cwd": "${workspaceFolder}",
             "console": "integratedTerminal"
+        },
+        {
+            "name": "Pytre Client",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/Pytre_Client/app.py",
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "Pytre Server",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/Pytre_Server/app.py",
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal"
         }
-    ]
+    ],
+    "compounds": [
+        {
+            "name": "Pytre Server + Client",
+            "configurations": ["Pytre Server", "Pytre Client"]
+        }
+    ],
 }

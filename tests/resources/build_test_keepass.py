@@ -17,7 +17,7 @@ import Pytre_Core.kee as kee_module
 from Pytre_Core.kee import BLANK_PWD, Kee
 from Pytre_Core.servers import Server, Servers
 from Pytre_Core.settings import Settings
-from Pytre_Core.users import User, Users, hash_password
+from Pytre_Core.users import AuthType, User, Users, hash_password
 
 # Local-only docker container (mssql-test), no security criticality.
 # Password pinned deliberately - update here if the container changes.
@@ -72,6 +72,7 @@ def main() -> None:
     user = User(users, username=TEST_USERNAME, detect_user=False)
     user.title = TEST_USER_TITLE
     user.admin = True
+    user.auth_type = AuthType.BASIC
     user.password_hash = hash_password(TEST_USER_PASSWORD)
     user.save()
 

@@ -29,6 +29,60 @@ def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__)
     _log(msg, level=level, sublogger=sublogger)
 
 
+class _CsvStatus(Enum):
+    REQUIRED = "required"
+    OPTIONAL = "optional"
+    EXCLUDED = "excluded"
+
+
+class _DbKind(Enum):
+    NATIVE = "native"  # entry property / attribute
+    CUSTOM = "custom"  # entry custom property
+    TAGS = "tags"  # entry tags
+
+
+class UserField(Enum):
+    """Registry of User's predefined KeePass storage fields - single source of truth for where each one
+    lives (db_kind/db_key), and for CSV whether they are included and CSV col name (csv_status/csv_header).
+    Dynamic custom fields (attribs_cust) aren't part of this registry - they have no fixed
+    identity."""
+
+    ID = (_CsvStatus.REQUIRED, "id", _DbKind.NATIVE, "username")
+    DESCRIPTION = (_CsvStatus.REQUIRED, "description", _DbKind.NATIVE, "title")
+    ADMIN = (_CsvStatus.REQUIRED, "admin", _DbKind.CUSTOM, "superuser")
+    GROUPS = (_CsvStatus.REQUIRED, "groups", _DbKind.TAGS, "")
+    LOGIN_MSG = (_CsvStatus.REQUIRED, "login message", _DbKind.CUSTOM, "msg_login")
+
+    AUTH_TYPE = (_CsvStatus.OPTIONAL, "auth", _DbKind.CUSTOM, "auth_type")
+    PWD = (_CsvStatus.OPTIONAL, "password", _DbKind.NATIVE, "password")
+    PWD_HASH = (_CsvStatus.OPTIONAL, "password hash", _DbKind.NATIVE, "password")
+
+    PWD_CHANGED_AT = (_CsvStatus.EXCLUDED, "", _DbKind.CUSTOM, "password_changed_at")  # set via password_hash setter
+
+    def __init__(self, csv_status: _CsvStatus, csv_header: str, db_kind: _DbKind, db_key: str):
+        self.csv_status: _CsvStatus = csv_status
+        self.csv_header: str = csv_header
+        self.db_kind: _DbKind = db_kind
+        self.db_key: str = db_key
+
+    @property
+    def label(self) -> str:
+        """Human-readable header label for csv_export() - "login message" -> "Login Message"."""
+        return self.csv_header.title()
+
+    @classmethod
+    def custom_keys(cls) -> frozenset[str]:
+        """Storage keys of the CUSTOM-kind columns - used to tell predefined custom
+        properties apart from genuinely dynamic ones (attribs_cust)."""
+        return frozenset(c.db_key for c in cls if c.db_kind is _DbKind.CUSTOM and c.db_key)
+
+    @classmethod
+    def reserved_keys(cls) -> frozenset[str]:
+        """All predefined storage keys (native and custom) - used to guard a dynamic custom
+        attribute name against colliding with an internal field."""
+        return frozenset(f.db_key for f in cls if f.db_key)
+
+
 class Users:
     def __init__(self, kee: Kee):
         self.kee: Kee = kee
@@ -36,9 +90,6 @@ class Users:
         self.kee_servers_grp: Group | None = None
 
         self.groups: set[str] = set()
-
-        self.attribs_std: tuple[str, ...] = ("username", "title", "admin", "msg_login")
-        self.attribs_pwd: tuple[str, ...] = ("password", "auth_type", "password_changed_at")
         self.attribs_cust: list[str] = list()  # attributes not predefined
 
         self.get_all_groups()
@@ -61,7 +112,7 @@ class Users:
 
         u_entry: Entry | None = None
         for u_entry in self.kee_grp.entries:
-            if u_entry.get_custom_property("superuser") == "true":
+            if u_entry.get_custom_property(UserField.ADMIN.db_key) == "true":
                 admin_exists = True
                 break
 
@@ -117,15 +168,17 @@ class Users:
 
     def _get_cust_attribs_list(self, entry: Entry) -> set[str]:
         """return not predefined attributes"""
+
         attribs_set: set[str] = set()
+        predefined_custom_keys = UserField.custom_keys()
 
         for property in entry.custom_properties:
-            if property not in self.attribs_std + self.attribs_pwd + ("superuser",):  # superuser is admin field
+            if property not in predefined_custom_keys:
                 attribs_set.add(property)
 
         return attribs_set
 
-    def users_add_groups(self, usernames: list[str] | tuple[str, ...], groups: list[str]):
+    def users_add_groups(self, user_uuids: list[str] | tuple[str, ...], groups: list[str]):
         if self.kee_grp is None:
             raise ValueError("No KeePass group selected, cannot add users groups")
 
@@ -133,23 +186,22 @@ class Users:
 
         save: bool = False
 
-        groups = [group for group in groups if not group == "all"]
-        u_entry: Entry | None = None
-        for u_entry in self.kee_grp.entries:
-            if u_entry.username not in usernames:
+        groups_to_add = [group for group in groups if not group == "all"]
+        for uuid in user_uuids:
+            user = self.find_user_by_uuid(uuid)
+            if user is None:
                 continue
 
-            new_groups = u_entry.tags if u_entry.tags else []
-            new_groups = list(set(new_groups + groups))
-
-            if not new_groups == u_entry.tags:
-                u_entry.tags = new_groups
+            new_groups = list(set(user.groups + groups_to_add))
+            if not set(new_groups) == set(user.groups):
+                user.groups = new_groups
+                user.save(save_db=False)  # update db without committing changes
                 save = True
 
         if save:
-            self.kee.save_db()
+            self.kee.save_db()  # commit db changes to disk
 
-    def users_remove_groups(self, usernames: list[str] | tuple[str, ...], groups: list[str]):
+    def users_remove_groups(self, user_uuids: list[str] | tuple[str, ...], groups: list[str]):
         if self.kee_grp is None:
             raise ValueError("No KeePass group selected, cannot remove users groups")
 
@@ -157,19 +209,19 @@ class Users:
 
         save: bool = False
 
-        u_entry: Entry | None = None
-        for u_entry in self.kee_grp.entries:
-            if u_entry.username not in usernames or not u_entry.tags:
+        for uuid in user_uuids:
+            user = self.find_user_by_uuid(uuid)
+            if user is None:
                 continue
 
-            new_groups: list[str] = [tag for tag in u_entry.tags if tag not in groups]
-
-            if not new_groups == u_entry.tags:
-                u_entry.tags = new_groups
+            new_groups: list[str] = [g for g in user.groups if g not in groups]
+            if not set(new_groups) == set(user.groups):
+                user.groups = new_groups
+                user.save(save_db=False)  # update db without committing changes
                 save = True
 
         if save:
-            self.kee.save_db()
+            self.kee.save_db()  # commit db changes to disk
 
     def modify_custom_attribs(self, fields: list[str], new_value: str | None = None):
         """
@@ -235,78 +287,102 @@ class Users:
         if self.kee.db is None:
             raise RuntimeError("Database not opened, can't import csv")
 
-        # dictionnaire des utilisateurs déjà existants
+        # retrieve existing users
         entries_dict = {}
         u_entry: Entry
         for u_entry in self.kee_grp.entries:
             entries_dict[(u_entry.username or "").upper()] = u_entry
 
-        # colonnes attendues dans le fichier à importer
-        cols_std = ["id", "description", "admin", "groups", "login message"]
+        # define expected columns
+        cols_std = [c.csv_header for c in UserField if c.csv_status is _CsvStatus.REQUIRED]
+        cols_pwd = [c for c in UserField if c.csv_status is _CsvStatus.OPTIONAL]
         cols_cust = {col: col.lower() for col in self.get_cust_attribs_list()}
         cols_required = cols_std + list(cols_cust.values())
 
-        # identifier le format d'encodage du fichier à importer
+        # identify file encoding
         encoding = detect_encoding(filepath)
         if not encoding:
             raise ValueError(f"Unable to detect encoding for: {filepath}")
 
-        # traitement du fichier à importer
+        # process import file
         with open(filepath, mode="r", encoding=encoding) as csv_file:
             csv_reader = csv.DictReader(csv_file, delimiter=delimiter, quotechar=quotechar)
 
-            # normalisation des fieldnames pour les colonnes standard
+            # csv fieldnames standardization
             csv_reader.fieldnames = [header.strip().lower() for header in csv_reader.fieldnames or []]
 
-            # vérification de la présence des colonnes
+            # check for missing columns
             missing_cols = [col for col in cols_required if col not in csv_reader.fieldnames]
             if missing_cols:
                 raise ValueError(f"Missing columns in file to import : {', '.join(missing_cols)}")
 
+            # control that there is not both a password and a password_hash
+            cols_pwd_in_csv = [c for c in cols_pwd if c.csv_header in csv_reader.fieldnames]
+            creds_in_csv = [c for c in cols_pwd_in_csv if c.db_kind is _DbKind.NATIVE]
+            if len(creds_in_csv) > 1:
+                raise ValueError("Import file can't have both a password and a password_hash column")
+
+            # process rows
             for row_num, row in enumerate(csv_reader, start=2):
-                username = row["id"].strip()
+                username = row[UserField.ID.csv_header].strip()
                 if not username:
                     log(f"Ligne {row_num} ignorée : aucun id renseigné", logging.WARNING)
                     continue
 
-                # contrôle si utilisateurs à modifier ou à créer
+                # create or retrieve db entry
                 if username.upper() in entries_dict.keys():
                     u_entry = entries_dict[username.upper()]
                     u_entry.username = username
                 else:
                     u_entry = self.kee.db.add_entry(self.kee_grp, "", username, "")
 
-                # modification des propriétés obligatoires
-                u_entry.title = row.get("description", "").strip()
+                # update standard infos
+                u_entry.title = row.get(UserField.DESCRIPTION.csv_header, "").strip()
 
-                if row["admin"].strip() == "1":
-                    u_entry.set_custom_property("superuser", "true")
+                if row[UserField.ADMIN.csv_header].strip() == "1":
+                    u_entry.set_custom_property(UserField.ADMIN.db_key, "true")
                 else:
-                    u_entry.set_custom_property("superuser", "false")
+                    u_entry.set_custom_property(UserField.ADMIN.db_key, "false")
 
-                u_entry.set_custom_property("msg_login", row["login message"].strip())
+                csv_col = UserField.LOGIN_MSG
+                u_entry.set_custom_property(csv_col.db_key, row[csv_col.csv_header].strip())
 
-                # récup des groupes en utilisant csv.reader pour parser les cas de groupe entre guillemets
-                grp_authorized = row["groups"].strip()
+                # update password related infos
+                for col in cols_pwd_in_csv:
+                    value = row[col.csv_header].strip()
+
+                    if col is UserField.AUTH_TYPE:
+                        auth_type = AuthType.from_value(value)
+                        if auth_type is None:
+                            log(f"Row {row_num} ignored : '{value}' is not a valid auth type", logging.WARNING)
+                            continue
+                        u_entry.set_custom_property(col.db_key, auth_type.value)
+                    elif not value == "":  # avoid overwriting password for an existing user when no value
+                        u_entry.password = value if col is UserField.PWD_HASH else hash_password(value)
+
+                # update groups using csv.reader to parse imported string
+                grp_authorized = row[UserField.GROUPS.csv_header].strip()
                 if grp_authorized:
                     grp_reader = csv.reader([grp_authorized], delimiter=delimiter, quotechar=quotechar)
                     u_entry.tags = [grp.strip() for grp in next(grp_reader) if grp.strip().lower() not in ["all", ""]]
-                    # remplacement caractères interdits par keepass
+                    # replace forbidden keepass caracters (colon and semi colon)
                     u_entry.tags = [grp.replace(",", "_").replace(";", "_") for grp in u_entry.tags]
                 else:
                     u_entry.tags = []
 
-                # modification des propriétés custom si présentes dans le fichier importé
+                # update custom infos
                 for prop, csv_header in cols_cust.items():
                     if csv_header in row:
                         u_entry.set_custom_property(prop, row[csv_header].strip())
 
-            # une fois que toutes les entries sont à jour, sauvegarde de la base
+            # commit changes
             self.kee.save_db()
 
             return True
 
-    def csv_export(self, filepath: Path | str, delimiter: str = ";", overwrite: bool = False) -> bool:
+    def csv_export(
+        self, filepath: Path | str, delimiter: str = ";", overwrite: bool = False, pwd_infos: bool = False
+    ) -> bool:
         quotechar = '"'
 
         if self.kee_grp is None:
@@ -317,16 +393,26 @@ class Users:
         if Path(filepath).exists() and not overwrite:
             raise FileExistsError(f"File to export users already exists and overwrite is set to False : {filepath}")
 
-        items_std = ["superuser", "group", "msg_login"]
-        items_cust = self.get_cust_attribs_list()
+        # Determine which attr to saves
+        attr_std = [c for c in UserField if c.csv_status is _CsvStatus.REQUIRED]
+        attr_pwd = [UserField.AUTH_TYPE, UserField.PWD_HASH]
+        attr_cust = self.get_cust_attribs_list()
 
-        rows = [["Id", "Description"] + ["Admin", "Groups", "Login Message"] + items_cust]
+        attr_to_export = attr_std + attr_cust
+        if pwd_infos:
+            attr_to_export[1:1] = attr_pwd
+
+        # Create and add header row to rows
+        header = [attr.label if isinstance(attr, UserField) else attr for attr in attr_to_export]
+        rows = [header]
+
+        # Start to construct rows list which will be saved to file
         self.open_db(True)
         u_entry: Entry | None
         for u_entry in self.kee_grp.entries:
-            row = [u_entry.username or "", u_entry.title or ""]
+            row = []
 
-            # utilisation de csv.writer pour joindre les groupes et gérer les caractères similaires au delimiter
+            # Convert groups list to string using csv.writer (avoid problem for caracters similar to delimiter)
             tags = u_entry.tags if u_entry.tags else []
             if tags:
                 output = io.StringIO()
@@ -337,20 +423,22 @@ class Users:
             else:
                 group = ""
 
-            properties_dict = {}
-            for property in u_entry.custom_properties:
-                value = u_entry.get_custom_property(property)
-                properties_dict[property] = value
-
-            for item in items_std + items_cust:
-                if item == "group":
+            # Retrieve values and append them to current row
+            for attr in attr_to_export:
+                if attr is UserField.GROUPS:
                     value = group
+                elif attr is UserField.ADMIN:
+                    value = u_entry.get_custom_property(attr.db_key) or ""
+                    value = 1 if value.lower() == "true" else 0
+                elif isinstance(attr, UserField) and attr.db_kind is _DbKind.NATIVE:
+                    assert attr.db_key is not None
+                    value = getattr(u_entry, attr.db_key) or ""
+                elif isinstance(attr, UserField):  # db_kind == "custom"
+                    value = u_entry.get_custom_property(attr.db_key)
                 else:
-                    value = u_entry.get_custom_property(item)
+                    value = u_entry.get_custom_property(attr)  # dynamic custom attribute (plain string)
 
                 value = value if value is not None else ""
-                if item == "superuser":
-                    value = 1 if value.lower() == "true" else 0
 
                 row.append(value)
 
@@ -388,10 +476,16 @@ class Users:
 class AuthType(Enum):
     """Authentication types to identify how to interpret User.password_hash."""
 
+    NONE = "none"
     BASIC = "basic"
 
     def __str__(self):
-        return self.value
+        return self.value.title()
+
+    @classmethod
+    def from_value(cls, value: str) -> AuthType | None:
+        """Return AuthType from value - case insensitive. On invalid value return None"""
+        return next((auth for auth in AuthType if value.lower() == auth.value.lower()), None)
 
 
 class User:
@@ -404,13 +498,13 @@ class User:
         self.username: str = ""
         self._pwd_hash: str = ""
         self._pwd_changed_at: datetime | None = None
-        self.auth_type: AuthType = AuthType.BASIC
+        self.auth_type: AuthType = AuthType.NONE
         self.exists: bool = False
         self.is_authorized: bool = False
 
         self.title: str = ""
         self.admin: bool = False
-        self.grp_authorized: list[str] = ["all"]  # by default user belongs to "all" group
+        self.groups: list[str] = ["all"]  # by default user belongs to "all" group
         self.msg_login: str = ""
         self.attribs_cust: dict[str, str] = {}  # dict of attributes not predefined
 
@@ -443,6 +537,14 @@ class User:
         (used server-side to invalidate JWTs issued before this change)."""
         return self._pwd_changed_at
 
+    def user_info(self, attr: str) -> str:
+        """Returns an attribute value exposed to a SQL query's USER_INFO(...)"""
+
+        if attr in ("username", "title", "admin", "msg_login"):  # allowed predefined info
+            return getattr(self, attr, "")
+
+        return self.attribs_cust.get(attr, "")  # or custom info
+
     def to_dict(self) -> dict:
         attribs = {
             "uuid": self.uuid,
@@ -453,7 +555,7 @@ class User:
             "is_authorized": self.is_authorized,
             "title": self.title,
             "superuser": self.admin,
-            "grp_authorized": self.grp_authorized,
+            "grp_authorized": self.groups,
             "msg_login": self.msg_login,
         }
 
@@ -492,22 +594,21 @@ class User:
             value = u_entry.get_custom_property(property)
             value = value if value else ""
 
-            if property == "superuser":
+            if property == UserField.ADMIN.db_key:
                 self.admin = True if value and value.lower() == "true" else False
-            elif property == "auth_type":
-                try:
-                    self.auth_type = AuthType(value)
-                except ValueError:
-                    err_msg = f"Unknown AuthType '{value}' for user '{self.username}', defaulting to BASIC"
+            elif property == UserField.AUTH_TYPE.db_key:
+                auth_type = AuthType.from_value(value)
+                if auth_type is None:
+                    err_msg = f"Unknown AuthType '{value}' for user '{self.username}', defaulting to NONE"
                     log(err_msg, logging.WARNING)
-                    self.auth_type = AuthType.BASIC
-            elif property == "password_changed_at":
+                self.auth_type = auth_type or AuthType.NONE
+            elif property == UserField.PWD_CHANGED_AT.db_key:
                 try:
                     self._pwd_changed_at = datetime.fromisoformat(value) if value else None
                 except ValueError:
                     self._pwd_changed_at = None
-            elif property in self.users.attribs_std:
-                setattr(self, property, value)
+            elif property == UserField.LOGIN_MSG.db_key:
+                self.msg_login = value
             else:
                 self.attribs_cust[property] = value
 
@@ -515,18 +616,24 @@ class User:
         tags = u_entry.tags if u_entry.tags else []
         for tag in tags:
             group = tag.lower().strip()
-            self.grp_authorized.append(group)
+            self.groups.append(group)
 
         return True
 
-    def save(self) -> bool:
+    def save(self, save_db: bool = True) -> bool:
+        """Updates the user's entry in memory. If `save_db` is False then save_db() is not called -
+        the caller is responsible for persisting the change."""
+
         if self.users.kee_grp is None:
             raise ValueError("No KeePass group selected, cannot save user")
 
         if not self.username or self.username == "":
             raise ValueError("User must have an Id / Username")
 
-        self.users.open_db(True)
+        if self.auth_type not in AuthType:
+            raise ValueError(f"User can't have an unknown auth type: {self.auth_type.value}")
+
+        self.users.open_db(save_db)  # batching (save_db=False) shouldn't reload to avoid discarding earlier changes
         if self.users.kee.db is None:
             raise RuntimeError("Database not opened, can't save it")
 
@@ -548,21 +655,23 @@ class User:
         u_entry.username = self.username
         u_entry.password = self._pwd_hash
         u_entry.title = self.title
+
         admin_val = "true" if self.admin else "false"
-        u_entry.set_custom_property("superuser", admin_val)
-        u_entry.set_custom_property("msg_login", self.msg_login)
-        u_entry.set_custom_property("auth_type", self.auth_type.value)
-        u_entry.set_custom_property(
-            "password_changed_at", self._pwd_changed_at.isoformat() if self._pwd_changed_at else ""
-        )
+        pwd_changed_at_val = self._pwd_changed_at.isoformat() if self._pwd_changed_at else ""
+
+        u_entry.set_custom_property(UserField.ADMIN.db_key, admin_val)
+        u_entry.set_custom_property(UserField.LOGIN_MSG.db_key, self.msg_login)
+        u_entry.set_custom_property(UserField.AUTH_TYPE.db_key, self.auth_type.value)
+        u_entry.set_custom_property(UserField.PWD_CHANGED_AT.db_key, pwd_changed_at_val)
 
         for attr, val in self.attribs_cust.items():
             u_entry.set_custom_property(attr, val)
 
         # Sanitize grp, keepass tags forbid colon and semi colon
-        u_entry.tags = [grp.replace(",", "_").replace(";", "_") for grp in self.grp_authorized if not grp == "all"]
+        u_entry.tags = [grp.replace(",", "_").replace(";", "_") for grp in self.groups if not grp == "all"]
 
-        self.users.kee.save_db()
+        if save_db:
+            self.users.kee.save_db()
         self.users.get_all_groups(reload=False)
 
         self.exists = True

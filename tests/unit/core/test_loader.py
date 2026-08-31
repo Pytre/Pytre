@@ -37,11 +37,8 @@ def mock_settings():
 
 @pytest.fixture
 def mock_user():
-    """Mock current user for SqlParam/SqlParameters (used by the user_info() dynamic function)"""
+    """Mock current user for SqlParam/SqlParameters"""
     mock = Mock()
-    mock.users = Mock()
-    mock.users.attribs_std = []
-    mock.attribs_cust = {}
     return mock
 
 
@@ -109,7 +106,7 @@ def test_get_queries_collects_errors_without_blocking(mock_app_ctx, mock_user_ct
 def test_filter_queries_returns_empty_if_server_unknown(mock_app_ctx):
     servers_obj = Mock()
     servers_obj.servers_dict = {}
-    user = Mock(admin=False, grp_authorized=["all"])
+    user = Mock(admin=False, groups=["all"])
 
     result = filter_queries(servers_obj, [], "UNKNOWN", user)
 
@@ -121,7 +118,7 @@ def test_filter_queries_denies_user_without_matching_server_group():
     servers_obj = Mock()
     server = Mock(grp_authorized=["restricted"])
     servers_obj.servers_dict = {"SRV1": server}
-    user = Mock(admin=False, grp_authorized=["all"])
+    user = Mock(admin=False, groups=["all"])
 
     result = filter_queries(servers_obj, [], "SRV1", user)
 
@@ -133,7 +130,7 @@ def test_filter_queries_admin_bypasses_group_checks():
     servers_obj = Mock()
     server = Mock(grp_authorized=["restricted"])
     servers_obj.servers_dict = {"SRV1": server}
-    user = Mock(admin=True, grp_authorized=["all"])
+    user = Mock(admin=True, groups=["all"])
 
     query = Mock(servers_id=["SRV1"], grp_authorized=["restricted"], hide=0)
 
@@ -147,7 +144,7 @@ def test_filter_queries_skips_query_not_for_server():
     servers_obj = Mock()
     server = Mock(grp_authorized=[])
     servers_obj.servers_dict = {"SRV1": server}
-    user = Mock(admin=False, grp_authorized=["all"])
+    user = Mock(admin=False, groups=["all"])
 
     query = Mock(servers_id=["OTHER_SERVER"], grp_authorized=[], hide=0)
 
@@ -161,7 +158,7 @@ def test_filter_queries_respects_hide_level_for_non_admin():
     servers_obj = Mock()
     server = Mock(grp_authorized=[])
     servers_obj.servers_dict = {"SRV1": server}
-    user = Mock(admin=False, grp_authorized=["all"])
+    user = Mock(admin=False, groups=["all"])
 
     hidden_query = Mock(servers_id=["SRV1"], grp_authorized=[], hide=1)
 
@@ -175,7 +172,7 @@ def test_filter_queries_admin_sees_hide_level_1_but_not_2():
     servers_obj = Mock()
     server = Mock(grp_authorized=[])
     servers_obj.servers_dict = {"SRV1": server}
-    user = Mock(admin=True, grp_authorized=["all"])
+    user = Mock(admin=True, groups=["all"])
 
     hide1 = Mock(servers_id=["SRV1"], grp_authorized=[], hide=1)
     hide2 = Mock(servers_id=["SRV1"], grp_authorized=[], hide=2)
@@ -309,11 +306,11 @@ def test_build_queries_computes_fresh_values_per_user_ctx(mock_app_ctx, tmp_path
     assert load_errors == []
 
     user_a = Mock(attribs_cust={"x3_id": "USER_A"})
-    user_a.users.attribs_std = []
+    user_a.user_info = Mock(return_value="USER_A")
     user_ctx_a = Mock(current_user=user_a, user_prefs=Mock())
 
     user_b = Mock(attribs_cust={"x3_id": "USER_B"})
-    user_b.users.attribs_std = []
+    user_b.user_info = Mock(return_value="USER_B")
     user_ctx_b = Mock(current_user=user_b, user_prefs=Mock())
 
     queries_a, _ = build_queries_from_parsers(mock_app_ctx, user_ctx_a, parsers)

@@ -36,11 +36,8 @@ def mock_settings():
 
 @pytest.fixture
 def mock_user():
-    """Mock current user for SqlParam/SqlParameters (used by the user_info() dynamic function)"""
+    """Mock current user for SqlParam/SqlParameters"""
     mock = Mock()
-    mock.users = Mock()
-    mock.users.attribs_std = []
-    mock.attribs_cust = {}
     return mock
 
 
@@ -419,15 +416,16 @@ def test_sql_param_today_with_offset(mock_settings, mock_user):
 
 @pytest.mark.unit
 def test_sql_param_user_info_function(mock_settings, mock_user):
-    """SqlParam should get user info via the user_info() dynamic function"""
+    """SqlParam should resolve USER_INFO(...) by calling User.user_info() and using its result -
+    the predefined-vs-custom-attribute logic is User.user_info()'s own responsibility (tested
+    directly in test_users.py), not re-simulated here."""
     param_text = "@username as nvarchar(50) = ''  -- User|USER_INFO(username)"
-
-    # "username" isn't in attribs_std, so user_info() falls back to attribs_cust
-    mock_user.attribs_cust = {"username": "jdoe"}
+    mock_user.user_info = Mock(return_value="jdoe")
 
     param = SqlParam(mock_settings, mock_user, param_text)
 
     assert param.display_value == "jdoe"
+    mock_user.user_info.assert_called_once_with("username")
 
 
 # ================================================================================

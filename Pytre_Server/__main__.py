@@ -90,7 +90,6 @@ def main() -> None:
     if args.hash_password:
         hash_password_interactive()
         return
-
     if process_master_key_args(args):  # return True if any
         return
 

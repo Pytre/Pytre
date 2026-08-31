@@ -6,7 +6,13 @@ from unittest.mock import Mock
 
 import pytest
 
-from Pytre_Server.__main__ import create_parser, hash_password_interactive, main, process_master_key_args, start_server
+from Pytre_Server.__main__ import (
+    create_parser,
+    hash_password_interactive,
+    main,
+    process_master_key_args,
+    start_server,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -219,3 +225,4 @@ def test_main_dispatches_to_hash_password_flag_and_skips_server_start(monkeypatc
     main()
 
     assert not start.called
+

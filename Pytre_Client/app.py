@@ -942,7 +942,7 @@ class App(tk.Toplevel):
 
     def refresh_servers(self, reload_servers: bool = False, reload_remotes: bool = False):
         # refresh servers_dict with local and remote servers
-        grp_authorized = self.user.grp_authorized if not self.user.admin else None
+        grp_authorized = self.user.groups if not self.user.admin else None
         local_servers: dict = self.servers.get_all_servers(reload_servers, grp_authorized)
 
         remote_servers: dict[str, RemoteServer] = self.remotes.get_all_servers(reload=reload_remotes)

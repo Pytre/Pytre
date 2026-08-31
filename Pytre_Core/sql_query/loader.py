@@ -120,7 +120,7 @@ def filter_queries(servers: Servers, queries: list[Query], server_id: str, user:
     if server is None:
         return []
     if not user.admin:
-        if server.grp_authorized != [] and not set(user.grp_authorized) & set(server.grp_authorized):
+        if server.grp_authorized != [] and not set(user.groups) & set(server.grp_authorized):
             return []
 
     # check which query user can see
@@ -130,11 +130,7 @@ def filter_queries(servers: Servers, queries: list[Query], server_id: str, user:
             continue
 
         # ignore query if user not allowed to access it
-        if (
-            not user.admin
-            and not query.grp_authorized == []
-            and not set(user.grp_authorized) & set(query.grp_authorized)
-        ):
+        if not user.admin and not query.grp_authorized == [] and not set(user.groups) & set(query.grp_authorized):
             continue
 
         # finally check hidden property to determine if query must be listed

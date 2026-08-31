@@ -8,7 +8,7 @@ from collections.abc import Iterator
 
 from Pytre_Core import utils
 from Pytre_Core.kee import Kee
-from Pytre_Core.users import Users, User, AuthType
+from Pytre_Core.users import Users, User, UserField, AuthType
 from Pytre_Core.about import APP_NAME
 
 import Pytre_Client.ui_utils as ui_utils
@@ -32,7 +32,7 @@ class WidgetGroup:
 
 
 class UsersWindow(tk.Toplevel):
-    def __init__(self, users: Users, show_pwd_related: bool = False, parent=None):
+    def __init__(self, users: Users, pwd_infos: bool = False, parent=None):
         super().__init__()
         self.parent = parent
         if self.parent:
@@ -45,7 +45,7 @@ class UsersWindow(tk.Toplevel):
         self.filter_var: tk.StringVar
 
         self.users: Users = users
-        self.show_pwd_related: bool = show_pwd_related
+        self.pwd_infos: bool = pwd_infos
         self.default_sort_col: str = "title"
         self.sort_info: dict[str, str | bool | None] = {"col": None, "reverse": None}
         self.groups: set = set()
@@ -148,7 +148,7 @@ class UsersWindow(tk.Toplevel):
             "username": {"text": "Id", "minwidth": 200, "stretch": False},
             "title": {"text": "Libellé", "minwidth": 200, "stretch": False},
             "admin": {"text": "Admin", "minwidth": 75, "stretch": False},
-            "grp_authorized": {"text": "Groupes", "minwidth": 60, "stretch": True},
+            "groups": {"text": "Groupes", "minwidth": 60, "stretch": True},
             "msg_login": {"text": "Login Message", "minwidth": 100, "stretch": False},
         }
 
@@ -157,7 +157,7 @@ class UsersWindow(tk.Toplevel):
         for attr in cust_attribs:
             cols[attr] = {"text": attr, "minwidth": 60, "stretch": False}
 
-        if self.show_pwd_related:
+        if self.pwd_infos:
             pwd_related = {"auth_type": {"text": "Auth", "minwidth": 20, "stretch": False}}
             items = list(cols.items())
             items[1:1] = list(pwd_related.items())
@@ -197,14 +197,7 @@ class UsersWindow(tk.Toplevel):
                 self.tree.column(col, anchor=tk.CENTER)
 
     def tree_filter(self, cols: list[str] = []):
-        cols = cols if cols else list(self.users.attribs_std) + self.users.attribs_cust
-        i = 0
-        while i < len(cols):
-            if cols[i] not in self.tree["columns"]:
-                log(f'Error when filtering : "{cols[i]}" do not exists in tree columns', logging.WARNING)
-                cols.pop(i)
-            else:
-                i += 1
+        cols = cols if cols else list(self.tree["columns"])
 
         text_filter = self.filter_var.get()
         if text_filter == "" and self.detached_items == {}:
@@ -286,7 +279,7 @@ class UsersWindow(tk.Toplevel):
                     else:
                         value = getattr(u, col, "")
 
-                    if col == "grp_authorized":
+                    if col == "groups":
                         assert isinstance(value, list)
                         value.remove("all")
                         value.sort()
@@ -504,7 +497,7 @@ class UsersWindow(tk.Toplevel):
             ui_unlock_fn=self.unlock_ui,
             overlay_dialog_msg="Export des utilisateurs...",
             overlay_dialog_wait_ms=1500,
-            csv_process_fn=lambda: self.users.csv_export(filename, overwrite=True),
+            csv_process_fn=lambda: self.users.csv_export(filename, overwrite=True, pwd_infos=self.pwd_infos),
             end_msgbox_title="Export",
             end_msgbox_msg="Fin de l'export des utilisateurs",
             end_fn=None,
@@ -520,6 +513,7 @@ class UserDialog(tk.Toplevel):
 
         self.users: Users = self.parent.users
         self.user: User | None = user
+        self.auth_values: tuple[str, ...] = tuple([str(auth) for auth in AuthType])
         self.user_modified: bool = False
 
         self.focus_set()
@@ -579,7 +573,7 @@ class UserDialog(tk.Toplevel):
         for attr in self.users.attribs_cust:
             entries_caption[attr] = attr
 
-        if self.parent.show_pwd_related:
+        if self.parent.pwd_infos:
             pwd_related = {"auth_type": "Auth", "password_hash": "Hash"}
             items = list(entries_caption.items())
             items[1:1] = list(pwd_related.items())
@@ -592,6 +586,10 @@ class UserDialog(tk.Toplevel):
             if key == "admin":
                 my_tk_var = tk.BooleanVar()
                 my_entry = ttk.Checkbutton(self.entries_frame, variable=my_tk_var, onvalue=True, offvalue=False)
+            elif key == "auth_type":
+                my_tk_var = tk.StringVar()
+                my_entry = ttk.Combobox(self.entries_frame, textvariable=my_tk_var, values=self.auth_values)
+                my_entry.configure(state="readonly" if len(AuthType) > 1 else "disable")
             else:
                 my_tk_var = tk.StringVar()
                 my_entry = ttk.Entry(self.entries_frame, textvariable=my_tk_var)
@@ -648,6 +646,9 @@ class UserDialog(tk.Toplevel):
             else:
                 val = getattr(self.user, key, "")
 
+            if key == "auth_type":  # User attr is an AuthType not a string
+                val = str(val)
+
             w_group.var.set(val)
 
     def groups_set(self):
@@ -656,7 +657,7 @@ class UserDialog(tk.Toplevel):
 
         if self.user:
             for i, line in enumerate(self.listbox.get(0, tk.END)):
-                if line in self.user.grp_authorized:
+                if line in self.user.groups:
                     self.listbox.selection_set(i)
 
     def group_add(self):
@@ -675,13 +676,13 @@ class UserDialog(tk.Toplevel):
         for key, w_group in self.entries.items():
             val = w_group.var.get()
             if key == "auth_type":
-                user.auth_type = AuthType(val)
+                user.auth_type = AuthType.from_value(val) or AuthType.NONE
             elif key in self.users.attribs_cust:
                 user.attribs_cust[key] = val
             else:
                 setattr(user, key, val)
 
-        user.grp_authorized = [self.listbox.get(line) for line in self.listbox.curselection()]
+        user.groups = [self.listbox.get(line) for line in self.listbox.curselection()]
 
         # enregistrement des infos
         def worker():
@@ -718,22 +719,22 @@ class UserDialog(tk.Toplevel):
 
 class GroupsDialog(tk.Toplevel):
     @classmethod
-    def add(cls, parent: UsersWindow, usernames: tuple[str, ...]):
-        dialog = GroupsDialog(parent=parent, usernames=usernames, remove_mode=False)
+    def add(cls, parent: UsersWindow, uuids: tuple[str, ...]):
+        dialog = GroupsDialog(parent=parent, uuids=uuids, remove_mode=False)
         dialog.wait_window()
         return
 
     @classmethod
-    def remove(cls, parent: UsersWindow, usernames: tuple[str, ...]):
-        dialog = GroupsDialog(parent=parent, usernames=usernames, remove_mode=True)
+    def remove(cls, parent: UsersWindow, uuids: tuple[str, ...]):
+        dialog = GroupsDialog(parent=parent, uuids=uuids, remove_mode=True)
         dialog.wait_window()
         return
 
-    def __init__(self, parent: UsersWindow, usernames: tuple[str, ...], remove_mode: bool = False):
+    def __init__(self, parent: UsersWindow, uuids: tuple[str, ...], remove_mode: bool = False):
         super().__init__(master=parent)
         self.parent: UsersWindow = parent
         self.users: Users = self.parent.users
-        self.usernames: tuple[str, ...] = usernames
+        self.uuids: tuple[str, ...] = uuids
 
         self.focus_set()
         ui_utils.ui_disable_parent(self, self.parent)
@@ -751,7 +752,7 @@ class GroupsDialog(tk.Toplevel):
     # Création de l'interface
     # ------------------------------------------------------------------------------------------
     def _setup_ui(self):
-        nb_txt = "(1 utilisateur)" if len(self.usernames) <= 1 else f"({len(self.usernames)} utilisateurs)"
+        nb_txt = "(1 utilisateur)" if len(self.uuids) <= 1 else f"({len(self.uuids)} utilisateurs)"
         if not self.remove_mode:
             self.title(f"{APP_NAME} - Affecter groupes {nb_txt}")
         else:
@@ -803,7 +804,7 @@ class GroupsDialog(tk.Toplevel):
     def _setup_buttons(self):
         self.buttons_frame.columnconfigure(0, weight=1)
 
-        save_txt = "Ajouter" if not self.remove_mode else "Retirer"
+        save_txt = "Affecter" if not self.remove_mode else "Retirer"
         self.btn_save = ttk.Button(self.buttons_frame, text=save_txt, command=self.users_update_groups)
         self.btn_cancel = ttk.Button(self.buttons_frame, text="Annuler", command=self.close)
 
@@ -831,15 +832,15 @@ class GroupsDialog(tk.Toplevel):
         groups = [self.listbox.get(line) for line in self.listbox.curselection()]
 
         if not groups:
-            action = "ajouter" if not self.remove_mode else "retirer"
+            action = "affecter" if not self.remove_mode else "retirer"
             msg = f"Aucun groupe à {action} sélectionné !"
             messagebox.showerror(title="Erreur modification", message=msg, parent=self)
             return
 
         if not self.remove_mode:
-            self.users.users_add_groups(self.usernames, groups)
+            self.users.users_add_groups(self.uuids, groups)
         else:
-            self.users.users_remove_groups(self.usernames, groups)
+            self.users.users_remove_groups(self.uuids, groups)
 
         self.close(refresh_tree=True)
 
@@ -972,7 +973,7 @@ class AttribsDialog(tk.Toplevel):
             msg = f"{new_attrib} existe déjà."
             messagebox.showerror(title="Erreur ajout champs", message=msg, parent=self)
             return
-        elif any(new_attrib.lower() == attrib.lower() for attrib in list(self.users.attribs_std)):
+        elif any(new_attrib.lower() == attrib.lower() for attrib in UserField.reserved_keys()):
             msg = f"{new_attrib} est déjà utilisé en interne."
             messagebox.showerror(title="Erreur ajout champs", message=msg, parent=self)
             return
@@ -1017,5 +1018,5 @@ class AttribsDialog(tk.Toplevel):
 if __name__ == "__main__":
     kee = Kee()
     users = Users(kee)
-    my_app = UsersWindow(users, show_pwd_related=True)
+    my_app = UsersWindow(users, pwd_infos=True)
     my_app.mainloop()

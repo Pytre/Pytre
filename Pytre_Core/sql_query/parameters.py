@@ -150,12 +150,7 @@ class SqlParam:
     # ------------------------------------------------------------------------------------------
     def _funcs_init(self) -> dict[str, Callable[..., str]]:
         def user_info(attr: str) -> str:
-            if attr in self.user.users.attribs_std:
-                info = getattr(self.user, attr, "")
-            else:
-                info = self.user.attribs_cust.get(attr, "")
-
-            return info
+            return self.user.user_info(attr)
 
         def fiscal_year(
             last_month: int, month_offset: int = 0, days_offset: int = 0, today_mth_offset: int = 0

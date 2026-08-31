@@ -28,11 +28,8 @@ def mock_settings():
 
 @pytest.fixture
 def mock_user():
-    """Mock current user for SqlParam/SqlParameters (used by the user_info() dynamic function)"""
+    """Mock current user for SqlParam/SqlParameters"""
     mock = Mock()
-    mock.users = Mock()
-    mock.users.attribs_std = []
-    mock.attribs_cust = {}
     return mock
 
 

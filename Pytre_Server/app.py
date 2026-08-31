@@ -250,7 +250,7 @@ def create_app(master_key: str, chunk_size: int = 2000, max_concurrency_per_user
         state: ServerState = app.state.server
         user_ctx = UserContext(state.app_ctx.users, username=username)
         user = user_ctx.current_user
-        grp_authorized = user.grp_authorized if not user.admin else None
+        grp_authorized = user.groups if not user.admin else None
         servers_dict = filter_servers(state.app_ctx.servers.servers_dict, grp_filter=grp_authorized)
 
         supported_servers = []

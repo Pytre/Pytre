@@ -205,7 +205,7 @@ class QueryExecute:
         self.queue.put((ExecResultMsg.START_TIMER, ""))
         try:
             # execute query
-            with self.remote.execute(cfg.query_id, cfg.template_hash, cfg.display_parameters) as cursor:
+            with self.remote.execute(cfg.remote_query_id, cfg.template_hash, cfg.display_parameters) as cursor:
                 self.cannot_stop.clear()
                 self.queue.put((ExecResultMsg.STOP_TIMER, ""))
                 # extract records

@@ -130,7 +130,8 @@ def fake_remote() -> _FakeRemote:
 @pytest.fixture
 def remote_config(fake_remote) -> RemoteExecuteCfg:
     return RemoteExecuteCfg(
-        query_id="Q1",
+        query_id="Q1",  # display label (extract filename / UserLogs) - distinct from remote_query_id on purpose
+        remote_query_id="RQ1",  # collision-proof id actually sent over the wire
         server_id="REMOTE_SQL_SRV",
         remote_server=fake_remote,
         template_hash="hash1",
@@ -578,6 +579,26 @@ def test_execute_remote_returns_list_when_no_extract_file(qe, mock_query, remote
 
     assert rows_count == 2
     assert output == [["col1", "col2"], ["a", "1"], ["b", "2"]]
+
+
+@pytest.mark.unit
+def test_execute_remote_sends_remote_query_id_not_query_id(qe, mock_query, remote_config):
+    """Regression: the wire call must use RemoteExecuteCfg.remote_query_id (collision-proof
+    Query.file_id) - not query_id (Query.name, the display label used for the extract filename
+    and UserLogs, kept separate on purpose)."""
+    captured = {}
+
+    @contextmanager
+    def spy_execute(query_id, template_hash, parameters):
+        captured["query_id"] = query_id
+        yield RemoteCursor(("col1", "col2"), (row for row in [("a", "1")]))
+
+    remote_config.remote_server.execute = spy_execute
+    mock_query.get_exec_config.return_value = remote_config
+
+    qe.execute()
+
+    assert captured["query_id"] == "RQ1"
 
 
 @pytest.mark.unit

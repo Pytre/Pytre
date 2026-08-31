@@ -8,6 +8,7 @@ from unittest.mock import Mock
 from Pytre_Core.remotes import Remote, RemoteServer
 from Pytre_Core.sql_query.query import Query
 from Pytre_Core.remotes import RemoteAddress
+from Pytre_Core.sql_query.execute_config import RemoteExecuteCfg
 
 
 # ================================================================================
@@ -99,6 +100,7 @@ def test_query_initialization(mock_app_ctx, mock_user_ctx, sample_sql_file):
 
     assert query.filename == sample_sql_file
     assert query.name == "TEST_QUERY"
+    assert query.file_id == "test_query"  # filename stem - independent of the code: header
     assert query.description == "Test Query for Unit Tests"
     assert query.hide == 0
 
@@ -442,3 +444,21 @@ SELECT @param
     assert config.server_id == "TEST_SERVER"
     assert config.query_id == sql_file.stem
     assert isinstance(config.cmd_template, str)
+
+
+@pytest.mark.unit
+def test_query_get_exec_config_remote_splits_query_id_from_remote_query_id(
+    mock_app_ctx, mock_user_ctx, sample_sql_file, remote_server
+):
+    """Regression: query_id (Query.name, display label - extract filename/UserLogs) and
+    remote_query_id (Query.file_id, collision-proof wire id) must stay independent - sample_sql_file
+    deliberately has a code: header ("TEST_QUERY") that differs from its filename stem
+    ("test_query"), so a bug conflating the two would be caught here."""
+    query = Query(mock_app_ctx, mock_user_ctx, sample_sql_file)
+    query.remote = remote_server
+
+    config = query.get_exec_config(file_output=False)
+
+    assert isinstance(config, RemoteExecuteCfg)
+    assert config.query_id == "TEST_QUERY"
+    assert config.remote_query_id == "test_query"

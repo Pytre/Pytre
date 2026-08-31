@@ -63,7 +63,9 @@ class CmdBuilder:
             cmd_parameters=cmd_parameters,
         )
 
-    def build_exec_remote_cfg(self, server: RemoteServer, query_id: str, file_output: bool = True) -> RemoteExecuteCfg:
+    def build_exec_remote_cfg(
+        self, server: RemoteServer, query_id: str, remote_query_id: str, file_output: bool = True
+    ) -> RemoteExecuteCfg:
         base_cfg = self.build_exec_local_cfg(server.id_on_remote, query_id, file_output=file_output)
 
         display_parameters: dict[str, str] = {}
@@ -80,6 +82,7 @@ class CmdBuilder:
             params_metadata=base_cfg.params_metadata,
             cmd_parameters=base_cfg.cmd_parameters,
             remote_server=server,
+            remote_query_id=remote_query_id,
             template_hash=self.get_template_hash(),
             display_parameters=display_parameters,
         )

@@ -33,6 +33,11 @@ class Query:
         self.parameters = SqlParameters(self.app_ctx.settings, self.user_ctx.current_user, self.file_content)
         self.cmd_builder = CmdBuilder(self.app_ctx.settings, self.user_ctx.user_prefs, self.raw_cmd, self.parameters)
 
+    @property
+    def file_id(self):
+        """Filesystem-guaranteed unique identifier for this query. Used for server-side wire identity."""
+        return self.filename.stem
+
     def _set_hide_level(self) -> int:
         hide: str = self.infos.get("hide", "0")
         return int(hide) if hide.isdigit() else 0
@@ -81,7 +86,7 @@ class Query:
 
     def get_exec_config(self, server_id: str = "", file_output: bool = True) -> LocalExecuteCfg | RemoteExecuteCfg:
         if self.remote:
-            return self.cmd_builder.build_exec_remote_cfg(self.remote, self.name, file_output)
+            return self.cmd_builder.build_exec_remote_cfg(self.remote, self.name, self.file_id, file_output)
         else:
             select_server_id: str = server_id or (self.servers_id[0] if self.servers_id else "")
             return self.cmd_builder.build_exec_local_cfg(select_server_id, self.name, file_output)

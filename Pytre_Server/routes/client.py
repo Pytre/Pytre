@@ -211,18 +211,18 @@ async def execute_query(
     user_ctx = UserContext(state.app_ctx.users, username=username)
 
     # build the requested query and filter to keep only if authorized
-    target_parser = state.query_catalog.by_name.get(request.query_id)
+    target_parser = state.query_catalog.by_file_id.get(request.query_id)
     queries, _errors = build_queries_from_parsers(state.app_ctx, user_ctx, [target_parser] if target_parser else [])
     authorized = filter_queries(state.app_ctx.servers, queries, request.server_id, user_ctx.current_user)
 
     # get query version on the server matching the requested query_id
-    query = next((q for q in authorized if q.name == request.query_id), None)
+    query = next((q for q in authorized if q.file_id == request.query_id), None)
     if query is None:
         http_error = status.HTTP_404_NOT_FOUND
         raise HTTPException(status_code=http_error, detail="Unknown or unauthorized query_id for this server_id")
 
     # check if the client's template hash matches the server's version, unless exempted
-    hash_exemption_until = resources.ignore_hash_until.get(query.name)
+    hash_exemption_until = resources.ignore_hash_until.get(query.file_id)
     hash_must_be_checked = hash_exemption_until is None or datetime.now() > hash_exemption_until
     if hash_must_be_checked and request.template_hash != query.get_template_hash():
         http_error = status.HTTP_409_CONFLICT

@@ -166,6 +166,28 @@ def test_cmd_builder_build_exec_config_without_file_output(mock_settings, mock_u
     assert config.extract_file == Path()
 
 
+@pytest.mark.unit
+def test_cmd_builder_build_exec_remote_cfg_keeps_query_id_and_remote_query_id_separate(
+    mock_settings, mock_user, mock_user_prefs, tmp_path
+):
+    """query_id (display label - extract filename/UserLogs) and remote_query_id (collision-proof
+    wire id, Query.file_id) must be forwarded independently, not conflated into a single value."""
+    mock_user_prefs.get = Mock(return_value=tmp_path)
+    mock_server = Mock()
+    mock_server.id_on_remote = "SRV1"
+
+    sql_content = "DECLARE\n@p as int = 10  -- Param\n;\nSELECT @p"
+    params = SqlParameters(mock_settings, mock_user, sql_content)
+    builder = CmdBuilder(mock_settings, mock_user_prefs, "SELECT @p", params)
+
+    config = builder.build_exec_remote_cfg(mock_server, "MY_QUERY", "my_query_file", file_output=True)
+
+    assert config.query_id == "MY_QUERY"
+    assert config.remote_query_id == "my_query_file"
+    assert config.extract_file.name.startswith("MY_QUERY_")  # extract filename still keyed on query_id
+    assert config.remote_server is mock_server
+
+
 # ================================================================================
 # CmdBuilder inlined ("@!") parameter Tests
 # ================================================================================

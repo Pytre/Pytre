@@ -15,10 +15,10 @@ class QueryCatalog:
 
     parsers: list[FileParser]
     load_errors: list[str]
-    by_name: dict[str, FileParser]  # query name -> parser
+    by_file_id: dict[str, FileParser]  # query file_id -> parser
 
     @classmethod
     def load(cls, folder: Path) -> typing.Self:
         parsers, errors = load_files(folder)
-        by_name = {p.extract_header_infos().get("code", p.filename.stem): p for p in parsers}
-        return cls(parsers=parsers, load_errors=errors, by_name=by_name)
+        by_file_id = {p.filename.stem: p for p in parsers}
+        return cls(parsers=parsers, load_errors=errors, by_file_id=by_file_id)

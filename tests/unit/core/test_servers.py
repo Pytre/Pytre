@@ -146,6 +146,7 @@ def test_csv_import_uses_generator_for_search(tmp_path, mock_kee):
         "server",
         "login_timeout",
         "timeout",
+        "trust_server_certificate",
     ]
     row = [
         "existing_server",
@@ -161,6 +162,7 @@ def test_csv_import_uses_generator_for_search(tmp_path, mock_kee):
         "srv",
         "5",
         "30",
+        "false",
     ]
 
     with open(csv_file, "w", encoding="latin-1", newline="") as f:
@@ -215,6 +217,7 @@ def test_csv_import_creates_new_entries(tmp_path, mock_kee):
         "server",
         "login_timeout",
         "timeout",
+        "trust_server_certificate",
     ]
     row = [
         "NEW_SERVER",
@@ -230,6 +233,7 @@ def test_csv_import_creates_new_entries(tmp_path, mock_kee):
         "srv",
         "5",
         "30",
+        "false",
     ]
 
     with open(csv_file, "w", encoding="latin-1", newline="") as f:
@@ -280,6 +284,7 @@ def test_csv_import_preserves_password_when_column_blank(tmp_path, mock_kee):
         "server",
         "login_timeout",
         "timeout",
+        "trust_server_certificate",
     ]
     row = [
         "EXISTING_SERVER",
@@ -295,6 +300,7 @@ def test_csv_import_preserves_password_when_column_blank(tmp_path, mock_kee):
         "srv",
         "5",
         "30",
+        "false",
     ]
 
     with open(csv_file, "w", encoding="latin-1", newline="") as f:
@@ -337,6 +343,7 @@ def test_csv_import_parses_groups_with_delimiter(tmp_path, mock_kee):
         "server",
         "login_timeout",
         "timeout",
+        "trust_server_certificate",
     ]
     # Groups with delimiter in quotes
     row = [
@@ -353,6 +360,7 @@ def test_csv_import_parses_groups_with_delimiter(tmp_path, mock_kee):
         "srv",
         "5",
         "30",
+        "false",
     ]
 
     with open(csv_file, "w", encoding="latin-1", newline="") as f:
@@ -397,6 +405,7 @@ def test_csv_import_replaces_invalid_chars_in_tags(tmp_path, mock_kee):
         "server",
         "login_timeout",
         "timeout",
+        "trust_server_certificate",
     ]
     row = [
         "SERVER1",
@@ -412,6 +421,7 @@ def test_csv_import_replaces_invalid_chars_in_tags(tmp_path, mock_kee):
         "srv",
         "5",
         "30",
+        "false",
     ]
 
     with open(csv_file, "w", encoding="latin-1", newline="") as f:
@@ -755,6 +765,7 @@ def test_server_initialization():
     assert server.port == "1433"
     assert server.login_timeout == 60
     assert server.timeout == 300
+    assert server.trust_server_certificate is False
     assert server.grp_authorized == []
 
 
@@ -778,6 +789,7 @@ def test_server_to_dict():
     assert result["password"] == "secret"
     assert "type" in result
     assert "port" in result
+    assert result["trust_server_certificate"] is False
 
 
 @pytest.mark.unit
@@ -881,8 +893,9 @@ def test_csv_import_empty_groups_clears_tags(tmp_path, mock_kee):
         "server",
         "login_timeout",
         "timeout",
+        "trust_server_certificate",
     ]
-    row = ["SERVER1", "Server", "user", "pass", "", "MSSQL", "utf8", "db", "host", "1433", "srv", "5", "30"]
+    row = ["SERVER1", "Server", "user", "pass", "", "MSSQL", "utf8", "db", "host", "1433", "srv", "5", "30", "false"]
 
     with open(csv_file, "w", encoding="latin-1", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=headers, delimiter=";")
@@ -1216,6 +1229,26 @@ def test_server_save_updates_existing_entry(mock_kee):
 
 
 @pytest.mark.unit
+def test_server_save_writes_trust_server_certificate(mock_kee):
+    """save should persist trust_server_certificate as a "true"/"false" custom property"""
+    from pykeepass.entry import Entry
+    from Pytre_Core.servers import Server, ServerField
+
+    servers = Servers(mock_kee)
+    server = Server(servers)
+    server.id = "SERVER1"
+    server.uuid = "12345678-1234-1234-1234-123456789012"
+    server.trust_server_certificate = True
+
+    existing_entry = Mock(spec=Entry)
+    mock_kee.db.find_entries = Mock(return_value=existing_entry)
+
+    server.save()
+
+    existing_entry.set_custom_property.assert_any_call(ServerField.TRUST_CERTIFICATE.db_key, "true")
+
+
+@pytest.mark.unit
 def test_server_save_raises_on_unexpected_type(mock_kee):
     """save should raise TypeError if find_entries returns something other than an Entry"""
     from Pytre_Core.servers import Server
@@ -1281,6 +1314,45 @@ def test_load_from_entry_invalid_timeout_keeps_default(mock_kee):
 
     server = servers.servers_dict["SERVER1"]
     assert server.timeout == 300  # default kept
+
+
+@pytest.mark.unit
+def test_load_from_entry_parses_trust_server_certificate_true(mock_kee):
+    entry = Mock()
+    entry.uuid = "uuid-1"
+    entry.title = "SERVER1"
+    entry.username = "user"
+    entry.password = "pass"
+    entry.notes = ""
+    entry.tags = []
+    entry.custom_properties = ["trust_server_certificate"]
+    entry.get_custom_property = Mock(side_effect=lambda key: "true" if key == "trust_server_certificate" else None)
+
+    mock_kee.grp_servers.entries = [entry]
+    servers = Servers(mock_kee)
+
+    server = servers.servers_dict["SERVER1"]
+    assert server.trust_server_certificate is True
+
+
+@pytest.mark.unit
+def test_load_from_entry_missing_trust_server_certificate_defaults_to_false(mock_kee):
+    """Absent property (entry created before this field existed) must keep the secure default"""
+    entry = Mock()
+    entry.uuid = "uuid-1"
+    entry.title = "SERVER1"
+    entry.username = "user"
+    entry.password = "pass"
+    entry.notes = ""
+    entry.tags = []
+    entry.custom_properties = []
+    entry.get_custom_property = Mock(return_value=None)
+
+    mock_kee.grp_servers.entries = [entry]
+    servers = Servers(mock_kee)
+
+    server = servers.servers_dict["SERVER1"]
+    assert server.trust_server_certificate is False
 
 
 @pytest.mark.unit

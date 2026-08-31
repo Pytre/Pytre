@@ -1,0 +1,66 @@
+{% extends "admin/base.html" %}
+{% block title %}Custom attributes — Pytre Server{% endblock %}
+{% block main_class %}main-flush{% endblock %}
+{% block content %}
+<div class="center-page">
+    <div class="form-panel" id="modal-root">
+        <h2>Existing attributes</h2>
+        <p class="description">Attributes are shared across every user - add or remove them here.</p>
+
+        {% if error %}<p class="error form-error">{{ error }}</p>{% endif %}
+
+        <form
+            method="post"
+            id="attrib-remove-form"
+            action="/admin/users/attributes/remove"
+            onsubmit="return pytreConfirmSubmit(event, 'Remove the selected attribute(s) from every user?')"
+        >
+            <div class="checkbox-grid" id="attributes-grid">
+                {% for attrib in attribs %}
+                <label class="checkbox-item">
+                    <input type="checkbox" name="names" value="{{ attrib }}">
+                    {{ attrib }}
+                </label>
+                {% endfor %}
+            </div>
+            <div class="form-actions">
+                <button type="submit" class="danger">Remove selected</button>
+                <button type="button" class="secondary" onclick="cancelFormDialog('/admin/users')">Cancel</button>
+            </div>
+        </form>
+
+        <form
+            method="post"
+            id="attrib-add-form"
+            action="/admin/users/attributes/add"
+            onsubmit="return pytreConfirmSubmit(event, 'Add this custom attribute to every user?')"
+            style="display: none;"
+        >
+            <input type="hidden" name="name" id="attrib-add-hidden-name">
+        </form>
+
+        <script>
+        (function () {
+            var grid = document.getElementById("attributes-grid");
+
+            var addBtn = document.createElement("button");
+            addBtn.type = "button";
+            addBtn.className = "add-chip-btn";
+            addBtn.textContent = "+ Create";
+            grid.appendChild(addBtn);
+
+            var addForm = document.getElementById("attrib-add-form");
+            var addHiddenName = document.getElementById("attrib-add-hidden-name");
+
+            addBtn.addEventListener("click", function () {
+                pytrePrompt("New attribute name").then(function (name) {
+                    if (!name) return;
+                    addHiddenName.value = name;
+                    addForm.requestSubmit();
+                });
+            });
+        })();
+        </script>
+    </div>
+</div>
+{% endblock %}

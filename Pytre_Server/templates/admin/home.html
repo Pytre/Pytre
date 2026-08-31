@@ -1,0 +1,29 @@
+{% extends "admin/base.html" %}
+{% block main_class %}main-flush{% endblock %}
+{% block content %}
+<div class="center-page">
+    <div class="form-panel">
+        <p class="description">Available administration functions.</p>
+
+        <a class="tool" href="/admin/queries" style="margin-top: 8px;">
+            <div class="tool-name">Queries management</div>
+        </a>
+        
+        <a class="tool" href="/admin/users" style="margin-top: 8px;">
+            <div class="tool-name">Users management</div>
+        </a>
+
+        <a class="tool" href="/admin/servers" style="margin-top: 8px;">
+            <div class="tool-name">Servers management</div>
+        </a>
+
+        <a class="tool" href="/admin/settings" style="margin-top: 8px;">
+            <div class="tool-name">General settings</div>
+        </a>
+
+        <a class="tool" href="/admin/master-key" style="margin-top: 8px;">
+            <div class="tool-name">Master key management</div>
+        </a>
+    </div>
+</div>
+{% endblock %}

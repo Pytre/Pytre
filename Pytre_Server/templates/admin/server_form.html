@@ -1,0 +1,143 @@
+{% extends "admin/base.html" %}
+{% block title %}{% if server.uuid %}Edit server{% else %}New server{% endif %} — Pytre Server{% endblock %}
+{% block main_class %}main-flush{% endblock %}
+{% block content %}
+<div class="center-page">
+    <div class="form-panel wide" id="modal-root">
+        {% if error %}<p class="error form-error">{{ error }}</p>{% endif %}
+
+        <form
+            method="post"
+            id="server-form"
+            action="{% if server.uuid %}/admin/servers/{{ server.uuid }}/edit{% else %}/admin/servers/new{% endif %}"
+            onsubmit="return pytreConfirmSubmit(event, '{% if server.uuid %}Save changes to this server?{% else %}Create this new server?{% endif %}')"
+        >
+            <div class="form-row">
+                <div class="form-col" style="flex: 3;">
+                    <label for="id">Id</label>
+                    <input type="text" id="id" name="id" value="{{ server.id }}" required>
+                </div>
+                <div class="form-col" style="flex: 7;">
+                    <label for="description">Description</label>
+                    <input type="text" id="description" name="description" value="{{ server.description }}">
+                </div>
+            </div>
+
+            <label for="type">Type</label>
+            <select id="type" name="type">
+                {% for st in server_types %}
+                <option value="{{ st.value }}" {% if server.type == st.name %}selected{% endif %}>{{ st.value }}</option>
+                {% endfor %}
+            </select>
+
+            <div class="form-row">
+                <div class="form-col" style="flex: 0 0 340px">
+                    <label for="login">Login</label>
+                    <input type="text" id="login" name="login" value="{{ server.user }}">
+                </div>
+                <div class="form-col">
+                    <label for="password">
+                        {% if server.uuid %}Password (leave blank to keep the current one){% else %}Password{% endif %}
+                    </label>
+                    <div class="password-field">
+                        <input type="password" id="password" name="password" autocomplete="new-password">
+                        <button type="button" class="password-toggle" onclick="togglePasswordField(this)" title="Show/hide password">
+                            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="form-row">
+                <div class="form-col" style="flex: 0 0 340px">
+                    <label for="host">Host</label>
+                    <input type="text" id="host" name="host" value="{{ server.host }}">
+                </div>
+                <div class="form-col" style="flex: 0 0 80px;">
+                    <label for="port">Port</label>
+                    <input type="text" id="port" name="port" value="{{ server.port }}">
+                </div>
+                <div class="form-col">
+                    <label for="database">Database</label>
+                    <input type="text" id="database" name="database" value="{{ server.database }}">
+                </div>
+            </div>
+
+            <label for="server">Server</label>
+            <input type="text" id="server" name="server" value="{{ server.server }}">
+
+            
+            <label for="trust_server_certificate">Server certificate (skip TLS validation)</label>
+            <label class="checkbox-item">
+                <input type="checkbox" id="trust_server_certificate" name="trust_server_certificate" value="1" {% if server.trust_server_certificate %}checked{% endif %} style="margin-top: 4px;">
+                <span id="trust-state-text">{{ "trusted" if server.trust_server_certificate else "untrusted" }}</span>
+            </label>
+
+            <div class="form-row">
+                <div class="form-col">
+                    <label for="charset">Charset</label>
+                    <input type="text" id="charset" name="charset" value="{{ server.charset }}">
+                </div>
+                <div class="form-col">
+                    <label for="login_timeout">Login Timeout</label>
+                    <input type="text" id="login_timeout" name="login_timeout" value="{{ server.login_timeout }}">
+                </div>
+                <div class="form-col">
+                    <label for="timeout">Timeout</label>
+                    <input type="text" id="timeout" name="timeout" value="{{ server.timeout }}">
+                </div>
+            </div>
+
+            <label>Groups restriction</label>
+            <div class="checkbox-grid" id="groups-grid">
+                {% for group in all_groups %}
+                <label class="checkbox-item">
+                    <input
+                        type="checkbox" name="groups" value="{{ group }}" {% if group in server.grp_authorized %}checked{% endif %}
+                    >
+                    {{ group }}
+                </label>
+                {% endfor %}
+            </div>
+        </form>
+
+        {% if server.uuid %}
+        <form
+            method="post"
+            id="delete-form"
+            action="/admin/servers/{{ server.uuid }}/delete"
+            onsubmit="return pytreConfirmSubmit(event, 'Delete server {{ server.id }}?')"
+        ></form>
+        {% endif %}
+
+        <div class="form-actions">
+            <button type="submit" form="server-form">Save</button>
+            {% if server.uuid %}
+            <button type="submit" form="delete-form" class="danger">Delete</button>
+            {% endif %}
+            <button type="button" class="secondary" onclick="cancelFormDialog('/admin/servers')">Cancel</button>
+        </div>
+
+        <script>
+        (function () {
+            var trustCheckbox = document.getElementById("trust_server_certificate");
+            var trustStateText = document.getElementById("trust-state-text");
+            
+            function syncTrustState() {
+                trustStateText.textContent = trustCheckbox.checked ? "trusted" : "untrusted";
+            }
+            trustCheckbox.addEventListener("change", syncTrustState);
+
+            var serverForm = document.getElementById("server-form");
+
+            serverForm.addEventListener("keydown", function (e) {
+                if (e.key === "Enter" && e.target.tagName !== "TEXTAREA") {
+                    e.preventDefault();
+                }
+            });
+            setupInlineGroupCreate("groups-grid");
+        })();
+        </script>
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,268 @@
+{% extends "admin/base.html" %}
+{% block title %}Users — Pytre Server{% endblock %}
+{% block main_class %}main-flush{% endblock %}
+{% block content %}
+<form method="post" id="bulk-form" class="users-page">
+    <div class="toolbar users-toolbar">
+        <button type="button" class="btn" onclick="openFormModal('/admin/users/new')">New user</button>
+        <button type="button" class="btn" onclick="openFormModal('/admin/users/import')">Import CSV</button>
+        <a class="btn" href="/admin/users/export">Export CSV</a>
+        <button type="submit" formaction="/admin/users/reload">Reload</button>
+        <input type="text" id="filter" placeholder="Filter...">
+        <button type="button" class="btn" onclick="openFormModal('/admin/users/attributes')">
+            Manage attributes
+        </button>
+        <button type="button" onclick="openGroupsModal('add')">Assign groups...</button>
+        <button type="button" onclick="openGroupsModal('remove')">Remove groups...</button>
+        <button
+            type="submit"
+            formaction="/admin/users/delete"
+            formmethod="post"
+            class="danger"
+            onclick="return confirmBulkDelete(event)"
+        >Delete selected</button>
+    </div>
+
+    <div class="users-banner" id="users-banner"{% if not (msg or error) %} hidden{% endif %}>
+        {% if msg %}<p class="result" style="margin-top: 0;">{{ msg }}</p>{% endif %}
+        {% if error %}<p class="error form-error" style="margin-top: 0;">{{ error }}</p>{% endif %}
+    </div>
+
+    <div class="users-table-wrap">
+        <table id="users-table">
+            <thead>
+                <tr>
+                    <th></th>
+                    <th class="sortable"><input type="checkbox" id="select-all" title="Select all" onclick="event.stopPropagation()"><span class="sort-indicator"></span></th>
+                    <th class="sortable">Id<span class="sort-indicator"></span></th>
+                    <th class="sortable">Title<span class="sort-indicator"></span></th>
+                    <th class="sortable">Admin<span class="sort-indicator"></span></th>
+                    <th class="sortable">Groups<span class="sort-indicator"></span></th>
+                    <th class="sortable">Login Message<span class="sort-indicator"></span></th>
+                    {% for attrib in attribs %}
+                    <th class="sortable">{{ attrib }}<span class="sort-indicator"></span></th>
+                    {% endfor %}
+                </tr>
+            </thead>
+            <tbody>
+                {% for user in users | sort(attribute="title") %}
+                <tr>
+                    <td><a href="#" class="edit-icon" title="Edit" onclick="openFormModal('/admin/users/{{ user.uuid }}/edit'); return false;"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M11.5 20A.5.5 0 1011.5 21 .5.5 0 1011.5 20zM14.5 20A.5.5 0 1014.5 21 .5.5 0 1014.5 20zM17.5 20A.5.5 0 1017.5 21 .5.5 0 1017.5 20zM12.586 4.838L4.256 16.998c-.052.075-.082.164-.087.256L4 20.474c-.009.176.075.343.22.441C4.305 20.972 4.402 21 4.5 21c.072 0 .145-.016.212-.047l2.92-1.366c.081-.038.15-.097.201-.171L16.168 7.25 12.586 4.838zM16.733 6.424l1.222-1.784c.086-.125.11-.283.065-.429-.013-.041-.32-1.017-1.266-1.654-.945-.636-1.963-.553-2.008-.551-.149.013-.284.092-.369.216l-1.227 1.79L16.733 6.424z"></path></svg></a></td>
+                    <td><input type="checkbox" name="uuids" value="{{ user.uuid }}"><span class="sort-indicator"></span></td>
+                    <td>{{ user.username }}</td>
+                    <td>{{ user.title }}</td>
+                    <td>{{ "Yes" if user.admin else "" }}</td>
+                    <td>{{ (user.groups | reject("equalto", "all") | list) | join(", ") }}</td>
+                    <td>{{ user.msg_login }}</td>
+                    {% for attrib in attribs %}
+                    <td>{{ user.attribs_cust.get(attrib, "") }}</td>
+                    {% endfor %}
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</form>
+
+<script>
+(function () {
+    var filterInput = document.getElementById("filter");
+    var table = document.getElementById("users-table");
+    var tbody = table.tBodies[0];
+    var selectAll = document.getElementById("select-all");
+    var lastClickedIndex = null;
+    var FILTER_KEY = "pytre-users-filter";
+
+    function applyFilter() {
+        var q = filterInput.value.toLowerCase();
+        Array.prototype.forEach.call(tbody.rows, function (row) {
+            var text = row.textContent.toLowerCase();
+            row.style.display = q === "" || text.indexOf(q) !== -1 ? "" : "none";
+        });
+    }
+
+    // Filter survives a reload/refresh of the tab (sessionStorage), not closing it.
+    try {
+        var savedFilter = sessionStorage.getItem(FILTER_KEY);
+        if (savedFilter) {
+            filterInput.value = savedFilter;
+            applyFilter();
+        }
+    } catch (e) {}
+
+    filterInput.addEventListener("input", function () {
+        applyFilter();
+        try {
+            if (filterInput.value) {
+                sessionStorage.setItem(FILTER_KEY, filterInput.value);
+            } else {
+                sessionStorage.removeItem(FILTER_KEY);
+            }
+        } catch (e) {}
+    });
+
+    function rowCheckbox(row) {
+        return row.querySelector('input[name="uuids"]');
+    }
+
+    function setRowSelected(row, selected) {
+        rowCheckbox(row).checked = selected;
+        row.classList.toggle("row-selected", selected);
+    }
+
+    function updateSelectAllState() {
+        var rows = Array.prototype.slice.call(tbody.rows);
+        var checked = rows.filter(function (row) { return rowCheckbox(row).checked; });
+        selectAll.checked = rows.length > 0 && checked.length === rows.length;
+        selectAll.indeterminate = checked.length > 0 && checked.length < rows.length;
+    }
+
+    selectAll.addEventListener("change", function () {
+        Array.prototype.forEach.call(tbody.rows, function (row) {
+            setRowSelected(row, selectAll.checked);
+        });
+        lastClickedIndex = null;
+        updateSelectAllState();
+    });
+
+    // On a page reload, the browser can restore checkboxes' checked state on its own (form
+    // state restoration) without firing any click event - sync the highlight class to match
+    // whatever state the checkboxes actually come back with.
+    Array.prototype.forEach.call(tbody.rows, function (row) {
+        row.classList.toggle("row-selected", rowCheckbox(row).checked);
+    });
+    updateSelectAllState();
+
+    Array.prototype.forEach.call(tbody.rows, function (row, index) {
+        row.addEventListener("click", function (e) {
+            if (e.target.tagName === "A") return; // let the Edit link open its modal normally
+
+            if (e.target === rowCheckbox(row)) {
+                // native checkbox toggle already happened - just track it as the new anchor
+                lastClickedIndex = index;
+                row.classList.toggle("row-selected", rowCheckbox(row).checked);
+                updateSelectAllState();
+                return;
+            }
+
+            e.preventDefault();
+            var rows = Array.prototype.slice.call(tbody.rows);
+
+            if (e.shiftKey && lastClickedIndex !== null) {
+                var start = Math.min(lastClickedIndex, index);
+                var end = Math.max(lastClickedIndex, index);
+                for (var i = start; i <= end; i++) {
+                    setRowSelected(rows[i], true);
+                }
+            } else {
+                // plain click and ctrl/cmd+click both just toggle this one row - a row is only
+                // ever deselected by clicking it again, never as a side effect of another click
+                setRowSelected(row, !rowCheckbox(row).checked);
+                lastClickedIndex = index;
+            }
+
+            updateSelectAllState();
+        });
+
+        row.addEventListener("dblclick", function (e) {
+            if (e.target.tagName === "A") return;
+            openFormModal("/admin/users/" + rowCheckbox(row).value + "/edit");
+        });
+    });
+
+    document.addEventListener("keydown", function (e) {
+        var active = document.activeElement;
+        if (active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA")) return;
+
+        var wrap = document.querySelector(".users-table-wrap");
+        if (!wrap) return;
+
+        if (e.key === "Home") {
+            e.preventDefault();
+            wrap.scrollTop = 0;
+        } else if (e.key === "End") {
+            e.preventDefault();
+            wrap.scrollTop = wrap.scrollHeight;
+        } else if (e.key === "PageDown") {
+            e.preventDefault();
+            wrap.scrollTop += wrap.clientHeight;
+        } else if (e.key === "PageUp") {
+            e.preventDefault();
+            wrap.scrollTop -= wrap.clientHeight;
+        }
+    });
+
+    // Column 1 holds the select-all checkbox, not text (column 0 is the unsortable Edit icon) -
+    // sort by each row's checked state instead of cell text there. The sort indicator lives in
+    // its own <span> (not spliced into the header's textContent) specifically so this column's
+    // checkbox is never clobbered.
+    var sortState = { col: null, asc: true };
+    Array.prototype.forEach.call(table.tHead.rows[0].cells, function (th, colIndex) {
+        if (!th.classList.contains("sortable")) return;
+
+        th.addEventListener("click", function () {
+            var asc = sortState.col === colIndex ? !sortState.asc : true;
+            sortState = { col: colIndex, asc: asc };
+
+            var rows = Array.prototype.slice.call(tbody.rows);
+            rows.sort(function (a, b) {
+                var av, bv;
+                if (colIndex === 1) {
+                    av = rowCheckbox(a).checked ? 1 : 0;
+                    bv = rowCheckbox(b).checked ? 1 : 0;
+                } else {
+                    av = a.cells[colIndex].textContent.trim().toLowerCase();
+                    bv = b.cells[colIndex].textContent.trim().toLowerCase();
+                }
+                if (av < bv) return asc ? -1 : 1;
+                if (av > bv) return asc ? 1 : -1;
+                return 0;
+            });
+            rows.forEach(function (row) { tbody.appendChild(row); });
+
+            Array.prototype.forEach.call(table.tHead.querySelectorAll(".sort-indicator"), function (s) {
+                s.textContent = "";
+            });
+            var indicator = th.querySelector(".sort-indicator");
+            if (indicator) indicator.textContent = asc ? " ▲" : " ▼";
+        });
+    });
+})();
+
+function showClientError(message) {
+    var banner = document.getElementById("users-banner");
+    banner.innerHTML = '<p class="error form-error" style="margin-top: 0;">' + message + '</p>';
+    banner.hidden = false;
+}
+
+function openGroupsModal(action) {
+    var uuids = Array.prototype.map.call(
+        document.querySelectorAll('input[name="uuids"]:checked'),
+        function (cb) { return cb.value; }
+    );
+    if (uuids.length === 0) {
+        showClientError("No user selected");
+        return;
+    }
+    var qs = uuids.map(function (u) { return "uuids=" + encodeURIComponent(u); }).join("&");
+    openFormModal("/admin/users/groups/" + action + "?" + qs);
+}
+
+function confirmBulkDelete(event) {
+    var n = document.querySelectorAll('input[name="uuids"]:checked').length;
+    if (n === 0) {
+        showClientError("No user selected");
+        return false;
+    }
+
+    event.preventDefault();
+    var button = event.target;
+    pytreConfirm("Delete " + n + " selected user(s)?").then(function (ok) {
+        if (ok) {
+            button.form.requestSubmit(button); // keeps this button's formaction/formmethod
+        }
+    });
+    return false;
+}
+</script>
+{% endblock %}

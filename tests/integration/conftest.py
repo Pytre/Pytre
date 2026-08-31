@@ -51,12 +51,34 @@ def isolated_client(monkeypatch, tmp_path):
 
 
 @pytest.fixture
+def admin_client(monkeypatch) -> TestClient:
+    """Like `client`, but already logged in as the test admin user - use this (instead of
+    `client`) for admin route tests that aren't specifically testing the login/session
+    mechanism itself (that's covered by test_admin_login_route.py)."""
+    monkeypatch.setattr(kee_module, "KEE_FILE", TEST_DB_PATH)
+    test_client = TestClient(create_app(master_key=TEST_DB_PASSWORD))
+    test_client.post("/admin/login", data={"username": TEST_USERNAME, "password": TEST_USER_PASSWORD})
+    return test_client
+
+
+@pytest.fixture
+def isolated_admin_client(monkeypatch, tmp_path) -> TestClient:
+    """Like `isolated_client`, but already logged in as the test admin user - see `admin_client`."""
+    db_copy = tmp_path / "Pytre_test.db"
+    shutil.copy(TEST_DB_PATH, db_copy)
+    monkeypatch.setattr(kee_module, "KEE_FILE", db_copy)
+    test_client = TestClient(create_app(master_key=TEST_DB_PASSWORD))
+    test_client.post("/admin/login", data={"username": TEST_USERNAME, "password": TEST_USER_PASSWORD})
+    return test_client
+
+
+@pytest.fixture
 def auth_headers(client) -> dict[str, str]:
     """Bearer token headers for TEST_USERNAME, obtained via a real /login call against
     `client` - every protected route (/servers, /queries, /execute, /change-password) needs
     this instead of the old `username` query param/body field."""
     response = client.post("/login", json={"username": TEST_USERNAME, "password": TEST_USER_PASSWORD})
-    token = response.json()["token"]
+    token = response.json()["access_token"]
     return {"Authorization": f"Bearer {token}"}
 
 

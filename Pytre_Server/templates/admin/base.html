@@ -1,0 +1,899 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <script>
+        // Applied before first paint to avoid a flash of the wrong theme.
+        (function () {
+            try {
+                if (localStorage.getItem("pytre-theme") === "dark") {
+                    document.documentElement.dataset.theme = "dark";
+                }
+            } catch (e) {}
+        })();
+    </script>
+    <title>{% block title %}Pytre Server — Administration Interface{% endblock %}</title>
+    <link rel="icon" href="/admin/favicon.ico">
+    <style>
+        :root {
+            --accent: #0078d4;
+            --border: #d9d9d9;
+            --bg: #f3f3f3;
+            --surface: #ffffff;
+            --table-header-bg: #e4e4e4;
+            --text: #1a1a1a;
+            --text-secondary: #555;
+            --text-muted: #999;
+            --nav-hover-bg: #f5faff;
+            --row-hover: #e6ebf0;
+            --row-selected: #bcd9f7;
+            --row-selected-hover: #aacdf3;
+            --error-text: #c0392b;
+            --error-bg: #fdf0ef;
+            --error-border: #c0392b;
+            --result-bg: #f5faff;
+            --btn-secondary-bg: #eee;
+            --btn-secondary-text: #333;
+            --btn-secondary-hover-bg: #e0e0e0;
+
+            /* The sidebar intentionally always stays dark, regardless of the main theme - not
+            redefined under :root[data-theme="dark"], so it never changes with the toggle. */
+            --sidebar-bg: #262626;
+            --sidebar-border: #444;
+            --sidebar-text: #e8e8e8;
+            --sidebar-text-muted: #adaaaa;
+            --sidebar-text-hover: #ffffff;
+            --sidebar-btn-bg: #3a3a3a;
+            --sidebar-btn-hover-bg: #454545;
+            --sidebar-switch-knob: #262626;
+        }
+        :root[data-theme="dark"] {
+            --border: #444;
+            --bg: #1b1b1b;
+            --surface: #262626;
+            --table-header-bg: #333333;
+            --text: #e8e8e8;
+            --text-secondary: #b0b0b0;
+            --text-muted: #888;
+            --nav-hover-bg: #2c3947;
+            --row-hover: #333333;
+            --row-selected: #29455c;
+            --row-selected-hover: #345a78;
+            --error-bg: #3a2424;
+            --error-border: #e57368;
+            --error-text: #ff8a80;
+            --result-bg: #1f3446;
+            --btn-secondary-bg: #3a3a3a;
+            --btn-secondary-text: #e8e8e8;
+            --btn-secondary-hover-bg: #454545;
+        }
+        * { box-sizing: border-box; }
+        /* An author `display` rule (e.g. .form-actions { display: flex }) always beats the UA
+        default [hidden] { display: none } when both apply to the same element - without this,
+        toggling `.hidden = true` via JS on an element that also has its own `display` rule
+        silently fails to actually hide it. Global rather than per-selector (already patched
+        once for .pytre-confirm-overlay/.pytre-modal-overlay below) so this can't recur. */
+        [hidden] { display: none !important; }
+        html, body { height: 100%; }
+        body {
+            margin: 0;
+            overflow: hidden;
+            font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+        }
+        .layout { height: 100%; display: flex; min-height: 0; }
+        .sidebar {
+            position: relative;
+            width: 220px;
+            flex-shrink: 0;
+            background: var(--sidebar-bg);
+            border-right: 1px solid var(--sidebar-border);
+            padding: 0 0 12px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+        }
+        .sidebar-brand {
+            display: flex;
+            flex-direction: row;
+            align-items: center;
+            gap: 10px;
+            padding: 16px 20px;
+            margin-bottom: 8px;
+            text-decoration: none;
+            cursor: pointer;
+        }
+        .sidebar-brand img { width: 48px; height: 48px; }
+        .sidebar-brand span { font-size: 18px; font-weight: 600; color: var(--sidebar-text); align-items: center;}
+        .nav-link {
+            display: block;
+            padding: 10px 20px;
+            color: var(--sidebar-text);
+            text-decoration: none;
+            font-size: 14px;
+        }
+        .nav-link:hover { color: var(--sidebar-text-hover); font-weight: 700; }
+        .nav-link.active { color: var(--sidebar-text); font-weight:700; background-color: var(--sidebar-btn-bg);}
+        .nav-link-disabled { color: var(--sidebar-text-muted); cursor: default; }
+        .nav-link-disabled:hover { background: none; color: var(--sidebar-text-muted); }
+        .sidebar-logout { display: flex; align-items: center; justify-content: flex-end; padding: 10px 14px 0; margin: 0; margin-top: 24px;}
+        .sidebar-logout-form { display: flex; align-items: center; margin: 0; margin-right: 4px; }
+        .sidebar-logout .sidebar-logout-text {
+            background: none;
+            border: none;
+            font: inherit;
+            padding: 0;
+            margin: 0;
+            margin-top: -2px;
+            margin-right: 4px;
+            cursor: pointer;
+            color: var(--sidebar-text-muted);
+            font-size: 13px;
+        }
+        .sidebar-logout:hover .sidebar-logout-text { color: var(--sidebar-text-hover); font-weight: 700; }
+        .sidebar-logout button {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: none;
+            border: none;
+            color: var(--sidebar-text-muted);
+            cursor: pointer;
+            padding: 5px;
+            border-radius: 4px;
+            margin: 0;
+        }
+        .sidebar-logout:hover button { color: var(--sidebar-text-hover); }
+        
+        /* The whole footer row is itself the <label> for the checkbox - one single flex
+        container with the caption and the switch as its only two children, so align-items:
+        center has exactly one thing to center them against, nothing external to line up. */
+        .sidebar-footer {
+            margin-top: auto;
+            padding: 10px 20px 8px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            cursor: pointer;
+        }
+        .sidebar-footer-label {
+            font-size: 13px;
+            line-height: 1;
+            letter-spacing: 0.04em;
+            color: var(--sidebar-text-muted);
+            font-weight: 600;
+        }
+        .theme-switch { position: relative; display: inline-block; width: 38px; height: 21px; flex-shrink: 0; }
+        .theme-switch input { position: absolute; opacity: 0; width: 0; height: 0; }
+        .theme-switch-slider {
+            position: absolute;
+            inset: 0;
+            background: var(--sidebar-btn-bg);
+            border: 1px solid var(--sidebar-border);
+            border-radius: 22px;
+            transition: background 0.15s;
+        }
+        .theme-switch-slider::before {
+            content: "";
+            position: absolute;
+            height: 15px;
+            width: 15px;
+            left: 2px;
+            top: 2px;
+            background: var(--sidebar-switch-knob);
+            border-radius: 50%;
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+            transition: transform 0.15s;
+        }
+        .theme-switch input:checked + .theme-switch-slider { background: var(--accent); }
+        .theme-switch input:checked + .theme-switch-slider::before { transform: translateX(17px); }
+        main {
+            flex: 1;
+            padding: 40px 32px;
+            overflow-y: auto;
+            min-width: 0;
+        }
+        main.main-flush {
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        .card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+            padding: 24px 28px;
+            max-width: 640px;
+            margin: 0 auto;
+        }
+        .card + .card { margin-top: 16px; }
+        h2 { font-size: 16px; margin: 0 0 8px; }
+        p.description { color: var(--text-secondary); font-size: 13px; margin: 0 0 14px; }
+        a.tool, .tool-disabled {
+            display: block;
+            padding: 12px 14px;
+            border-radius: 6px;
+            text-decoration: none;
+            border: 1px solid var(--border);
+        }
+        a.tool { color: var(--text); }
+        a.tool:hover { border-color: var(--accent); background: var(--nav-hover-bg); }
+        .tool-disabled { color: var(--text-muted); background: var(--bg); }
+        .tool-name { font-weight: 600; font-size: 14px; }
+        .tool-note { font-size: 12px; margin-top: 2px; }
+        label { display: block; font-size: 13px; margin: 14px 0 4px; font-weight: 600; }
+        input[type="password"], input[type="text"], input[type="file"], select {
+            width: 100%;
+            padding: 8px 10px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            font-size: 14px;
+            font-family: inherit;
+            background: var(--surface);
+            color: var(--text);
+        }
+        /* Two (or more) fields sharing one row - each .form-col takes an inline flex value
+        (style="flex: ...") set per-template, since the ratio varies row by row. */
+        .form-row { display: flex; gap: 12px; }
+        .form-row .form-col { flex: 1; min-width: 0; }
+        .password-field { position: relative; }
+        .password-field input { padding-right: 36px; }
+        /* Hides the browser's own built-in reveal icon (Edge/IE) so it can't overlap or
+        conflict with our custom .password-toggle button below. */
+        .password-field input::-ms-reveal, .password-field input::-ms-clear { display: none; }
+        .password-field .password-toggle {
+            position: absolute;
+            z-index: 1;
+            right: 2px;
+            top: 50%;
+            transform: translateY(-50%);
+            margin: 0;
+            padding: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: transparent;
+            color: var(--text-secondary);
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            line-height: 1;
+        }
+        .password-field .password-toggle svg { pointer-events: none; }
+        .password-field .password-toggle:hover { opacity: 1; color: var(--text); background: var(--btn-secondary-bg); }
+        button, a.btn {
+            display: inline-block;
+            margin-top: 18px;
+            padding: 9px 18px;
+            background: var(--accent);
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-size: 14px;
+            cursor: pointer;
+            text-decoration: none;
+            line-height: 1.2;
+        }
+        button:hover, a.btn:hover { opacity: 0.92; }
+        button.danger { background: #c0392b; }
+        .toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+        .toolbar button, .toolbar a.btn, .toolbar input[type="checkbox"] { margin-top: 0; }
+        #filter { flex: 1 1 160px; min-width: 120px; }
+        .checkbox-grid { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 18px; margin: 4px 0 14px; }
+        .checkbox-item {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            font-size: 13px;
+            font-weight: 400;
+            margin: 0;
+        }
+        .add-chip-btn {
+            display: inline-flex;
+            align-items: center;
+            padding: 3px 12px;
+            font-size: 13px;
+            border: 1px dashed var(--border);
+            border-radius: 14px;
+            background: transparent;
+            color: var(--accent);
+            cursor: pointer;
+            margin: 0;
+        }
+        .add-chip-btn:hover { background: var(--nav-hover-bg); opacity: 1; }
+        table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 13px; }
+        th, td { padding: 8px 10px; }
+        td { text-align: left; }
+        th { text-align: center; color: var(--text-secondary); font-weight: 700; border-bottom: 1px solid var(--border); }
+        th.sortable { cursor: pointer; user-select: none; }
+        th.sortable:hover { color: var(--accent); }
+        tbody tr:hover { background: var(--row-hover); }
+
+        /* Full-bleed list pages (main.main-flush) */
+        .users-page { height: 100%; display: flex; flex-direction: column; background: var(--surface); }
+        .users-toolbar {
+            padding: 14px 24px;
+            background: var(--surface);
+            flex-shrink: 0;
+            margin-bottom: 0;
+        }
+        .users-banner { padding: 8px 24px 0; flex-shrink: 0; }
+        .users-table-wrap { flex: 1; overflow-y: auto; min-height: 0; padding: 0 24px; }
+        .users-table-wrap table { margin-top: 0; }
+        .users-table-wrap th, .users-table-wrap td { white-space: nowrap; }
+        .users-table-wrap th:first-child, .users-table-wrap td:first-child,
+        .users-table-wrap th:nth-child(2), .users-table-wrap td:nth-child(2) { text-align: center; }
+        .users-table-wrap th:first-child, .users-table-wrap td:first-child { width: 1%; padding-left: 10px; padding-right: 2px; }
+        .edit-icon { display: inline-flex; align-items: center; justify-content: center; padding: 2px; position: relative; top: 3px; }
+        .users-table-wrap thead th {
+            position: sticky;
+            top: 0;
+            background: var(--table-header-bg);
+            z-index: 1;
+            border-bottom: none;
+        }
+        .users-table-wrap input[type="checkbox"] { vertical-align: middle; accent-color: var(--accent); }
+        .users-table-wrap tbody tr { cursor: pointer; user-select: none; }
+        .users-table-wrap tbody tr:hover { background: var(--row-hover); }
+        .users-table-wrap tbody tr.row-selected { background: var(--row-selected); }
+        .users-table-wrap tbody tr.row-selected:hover { background: var(--row-selected-hover); }
+        .users-table-wrap tbody td a { cursor: pointer; color: var(--accent); text-decoration: none; font-weight: 600; }
+        .users-table-wrap tbody td a:hover { text-decoration: underline; }
+
+        /* Full-bleed pages whose content should stay centered rather than fill the space, with
+        no card chrome (border/shadow) - the whole area is plain, not a box on a gray ground */
+        .center-page { height: 100%; display: flex; align-items: center; justify-content: center; background: var(--surface); }
+        /* For pages whose content grows/shrinks (a reveal box, a collapsible form...) - anchors
+        near the top instead of true vertical centering, so expanding content pushes down rather
+        than re-centering the whole panel and shifting everything above it. */
+        .center-page.top-anchored { align-items: flex-start; padding-top: 8vh; }
+        /* Splits the free vertical space around the panel 30/70 (above/below) instead of a
+        plain 50/50 center - two flex-grow spacers (ratio 3:7) placed before/after the panel
+        via generated content, so it holds regardless of viewport height. */
+        .login-center-page { flex-direction: column; justify-content: flex-start; }
+        .login-center-page::before { content: ""; flex: 3 0 0; }
+        .login-center-page::after { content: ""; flex: 7 0 0; }
+        .form-panel { width: 100%; max-width: 640px; padding: 32px; margin: 0 auto; }
+        .form-panel.wide { max-width: 760px; }
+        .login-brand { display: flex; align-items: center; justify-content: center; gap: 18px; margin-left: -8px; margin-bottom: 28px; }
+        .login-brand-logo { width: 64px; height: 64px; margin-top: -4px; }
+        .login-brand-text { text-align: left; }
+        .login-brand-title { font-size: 22px; font-weight: 700; color: var(--text); }
+        .login-brand-subtitle {
+            font-size: 18px;
+            font-weight: 600;
+            color: var(--text-muted);
+            letter-spacing: 0.04em;
+            margin-top: 4px;
+        }
+        .login-form label {
+            width: 50%;
+            margin-left: auto;
+            margin-right: auto;
+            text-align: left;
+        }
+        .login-form input[type="text"], .login-form .password-field {
+            display: block;
+            width: 50%;
+            margin: 0 auto;
+        }
+        .login-form .password-field input[type="password"], .login-form .password-field input[type="text"] {
+            width: 100%;
+        }
+        .login-form .form-actions {
+            justify-content: center;
+            margin-top: 36px; /* label + input's usual combined height, for a harmonious gap */
+        }
+        .login-form .form-actions button { width: 50%; padding-top: 12px; padding-bottom: 12px; }
+        .form-actions { display: flex; align-items: center; gap: 8px; margin-top: 18px; }
+        .form-actions button { margin-top: 0; min-width: 90px; text-align: center; }
+        .error { color: var(--error-text); font-size: 13px; margin-top: 12px; }
+        /* Boxed variant for an error shown as its own banner (top of a form, or a client-side
+        "nothing selected" message) rather than inline next to the field it concerns. */
+        .form-error {
+            background: var(--error-bg);
+            border: 1px solid var(--error-border);
+            border-radius: 6px;
+            padding: 10px 12px;
+        }
+        /* Matches the login form fields' width (50%, centered) instead of the .form-panel's
+        full width - only scoped to the login page, other pages' boxed errors stay full-width. */
+        .login-panel .form-error, .login-panel .result {
+            width: 50%;
+            margin-left: auto;
+            margin-right: auto;
+        }
+        .result {
+            margin-top: 16px;
+            padding: 10px 12px;
+            background: var(--result-bg);
+            border: 1px solid var(--accent);
+            border-radius: 6px;
+            font-family: ui-monospace, Consolas, monospace;
+            font-size: 12px;
+            word-break: break-all;
+        }
+        a.back { display: inline-block; margin-top: 20px; font-size: 13px; color: var(--accent); text-decoration: none; }
+        a.back:hover { text-decoration: underline; }
+
+        .pytre-confirm-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.35);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+        }
+        /* An author-stylesheet `display` always beats the UA default [hidden]{display:none} -
+        without this, `display: flex` above wins and the overlay never actually hides. */
+        .pytre-confirm-overlay[hidden] { display: none; }
+        .pytre-confirm-box {
+            background: var(--surface);
+            border-radius: 8px;
+            box-shadow: 0 4px 24px rgba(0, 0, 0, 0.2);
+            width: 360px;
+            max-width: 90vw;
+            overflow: hidden;
+        }
+        .pytre-confirm-title {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 12px 16px;
+            font-weight: 600;
+            font-size: 14px;
+        }
+        .pytre-confirm-title img { width: 18px; height: 18px; }
+        .pytre-confirm-message { padding: 20px 16px; margin: 0; font-size: 14px; line-height: 1.4; white-space: pre-line; }
+        .pytre-confirm-message label { margin: 0 0 6px; }
+        .pytre-confirm-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 8px;
+            padding: 12px 16px;
+        }
+        .pytre-confirm-actions button { margin-top: 0; min-width: 90px; text-align: center; }
+        button.secondary { background: var(--btn-secondary-bg); color: var(--btn-secondary-text); }
+        button.secondary:hover { background: var(--btn-secondary-hover-bg); }
+
+        .pytre-modal-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.35);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 900;
+        }
+        .pytre-modal-overlay[hidden] { display: none; }
+        .pytre-modal-box {
+            background: var(--surface);
+            border-radius: 8px;
+            box-shadow: 0 4px 24px rgba(0, 0, 0, 0.25);
+            width: 100%;
+            max-width: 760px;
+            max-height: 90vh;
+            overflow-y: auto;
+            position: relative;
+        }
+        .pytre-modal-close {
+            position: absolute;
+            top: 8px;
+            right: 12px;
+            background: none;
+            border: none;
+            font-size: 22px;
+            line-height: 1;
+            cursor: pointer;
+            color: var(--text-secondary);
+            padding: 4px;
+            margin: 0;
+            z-index: 1;
+        }
+        .pytre-modal-close:hover { color: var(--text); opacity: 1; }
+        #pytre-modal-content { padding: 32px; }
+        .sort-indicator { margin-left: 2px; }
+    </style>
+</head>
+<body>
+    <div class="layout">
+        {% if not bare %}
+        <aside class="sidebar">
+            <a class="sidebar-brand" href="/admin">
+                <img src="/admin/static/logo.png" alt="Pytre">
+                <span>
+                    <span>Pytre Server</span>
+                    <span>WebAdmin</span>
+                </span>
+            </a>
+            <a class="nav-link{% if request.url.path.startswith('/admin/queries') %} active{% endif %}" href="/admin/queries">Queries management</a>
+            <a class="nav-link{% if request.url.path.startswith('/admin/users') %} active{% endif %}" href="/admin/users">Users management</a>
+            <a class="nav-link{% if request.url.path.startswith('/admin/servers') %} active{% endif %}" href="/admin/servers">Servers management</a>
+            <a class="nav-link{% if request.url.path.startswith('/admin/settings') %} active{% endif %}" href="/admin/settings">General settings</a>
+            <a class="nav-link{% if request.url.path.startswith('/admin/master-key') %} active{% endif %}" href="/admin/master-key">Master key management</a>
+            {% if request.state.admin_username is defined and request.state.admin_username != "local" %}
+            <div class="sidebar-logout">
+                <button type="submit" form="admin-logout-form" class="sidebar-logout-text" title="Connected as {{ request.state.admin_username }}">Log out</button>
+                <form method="post" action="/admin/logout" id="admin-logout-form" class="sidebar-logout-form">
+                    <button type="submit" title="Connected as {{ request.state.admin_username }}" aria-label="Log out">
+                        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+                            <polyline points="16 17 21 12 16 7"/>
+                            <line x1="21" y1="12" x2="9" y2="12"/>
+                        </svg>
+                    </button>
+                </form>
+            </div>
+            {% endif %}
+            <label class="sidebar-footer" title="Toggle dark theme">
+                <span class="sidebar-footer-label">Theme ☀️/🌙</span>
+                <span class="theme-switch">
+                    <input type="checkbox" id="theme-toggle">
+                    <span class="theme-switch-slider"></span>
+                </span>
+            </label>
+        </aside>
+        {% endif %}
+        <main class="{% block main_class %}{% endblock %}">
+            {% block content %}{% endblock %}
+        </main>
+    </div>
+
+    <div id="pytre-confirm-overlay" class="pytre-confirm-overlay" hidden>
+        <div class="pytre-confirm-box">
+            <div class="pytre-confirm-title">
+                <img src="/admin/static/logo.png" alt="">
+                <span>Pytre</span>
+            </div>
+            <p class="pytre-confirm-message" id="pytre-confirm-message"></p>
+            <div class="pytre-confirm-actions">
+                <button type="button" id="pytre-confirm-ok">OK</button>
+                <button type="button" id="pytre-confirm-cancel" class="secondary">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="pytre-prompt-overlay" class="pytre-confirm-overlay" hidden>
+        <div class="pytre-confirm-box">
+            <div class="pytre-confirm-title">
+                <img src="/admin/static/logo.png" alt="">
+                <span>Pytre</span>
+            </div>
+            <div class="pytre-confirm-message">
+                <label for="pytre-prompt-input" id="pytre-prompt-label"></label>
+                <input type="text" id="pytre-prompt-input">
+            </div>
+            <div class="pytre-confirm-actions">
+                <button type="button" id="pytre-prompt-ok">OK</button>
+                <button type="button" id="pytre-prompt-cancel" class="secondary">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="pytre-alert-overlay" class="pytre-confirm-overlay" hidden>
+        <div class="pytre-confirm-box">
+            <div class="pytre-confirm-title">
+                <img src="/admin/static/logo.png" alt="">
+                <span>Pytre</span>
+            </div>
+            <p class="pytre-confirm-message" id="pytre-alert-message"></p>
+            <div class="pytre-confirm-actions">
+                <button type="button" id="pytre-alert-ok">OK</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="pytre-modal-overlay" class="pytre-modal-overlay" hidden>
+        <div class="pytre-modal-box">
+            <button type="button" class="pytre-modal-close" onclick="closeFormModal()">&times;</button>
+            <div id="pytre-modal-content"></div>
+        </div>
+    </div>
+
+    <script>
+        // Shared confirmation modal, replacing window.confirm() everywhere in the admin UI - a
+        // native confirm() can't be restyled (browser chrome: button order, generic globe+URL
+        // title), this one is fully ours (Pytre-branded title, OK on the left).
+        function pytreConfirm(message) {
+            return new Promise(function (resolve) {
+                var overlay = document.getElementById("pytre-confirm-overlay");
+                var messageEl = document.getElementById("pytre-confirm-message");
+                var okBtn = document.getElementById("pytre-confirm-ok");
+                var cancelBtn = document.getElementById("pytre-confirm-cancel");
+
+                messageEl.textContent = message;
+                overlay.hidden = false;
+                okBtn.focus();
+
+                function cleanup(result) {
+                    overlay.hidden = true;
+                    okBtn.removeEventListener("click", onOk);
+                    cancelBtn.removeEventListener("click", onCancel);
+                    document.removeEventListener("keydown", onKeydown);
+                    resolve(result);
+                }
+                function onOk() { cleanup(true); }
+                function onCancel() { cleanup(false); }
+                function onKeydown(e) {
+                    if (e.key === "Enter") { e.preventDefault(); cleanup(true); }
+                    else if (e.key === "Escape") { e.preventDefault(); cleanup(false); }
+                }
+
+                okBtn.addEventListener("click", onOk);
+                cancelBtn.addEventListener("click", onCancel);
+                document.addEventListener("keydown", onKeydown);
+            });
+        }
+
+        // Plain info dialog, OK-only - for showing something (a revealed value, a "not yet
+        // implemented" notice...) rather than asking for a yes/no decision like pytreConfirm().
+        // Clears the message text on close so a revealed secret doesn't linger in the DOM.
+        function pytreAlert(message) {
+            return new Promise(function (resolve) {
+                var overlay = document.getElementById("pytre-alert-overlay");
+                var messageEl = document.getElementById("pytre-alert-message");
+                var okBtn = document.getElementById("pytre-alert-ok");
+
+                messageEl.textContent = message;
+                overlay.hidden = false;
+                okBtn.focus();
+
+                function cleanup() {
+                    overlay.hidden = true;
+                    messageEl.textContent = "";
+                    okBtn.removeEventListener("click", onOk);
+                    document.removeEventListener("keydown", onKeydown);
+                    resolve();
+                }
+                function onOk() { cleanup(); }
+                function onKeydown(e) {
+                    if (e.key === "Enter" || e.key === "Escape") { e.preventDefault(); cleanup(); }
+                }
+
+                okBtn.addEventListener("click", onOk);
+                document.addEventListener("keydown", onKeydown);
+            });
+        }
+
+        // For <form onsubmit="return pytreConfirmSubmit(event, '...')"> - shows the modal, and
+        // if confirmed, re-submits for real (fires 'submit' again, so a one-shot flag avoids
+        // re-showing the modal on that second pass). Inside a modal, that real submission goes
+        // through submitFormInModal() instead of a native requestSubmit() - see there for why.
+        function pytreConfirmSubmit(event, message) {
+            var form = event.target;
+            if (form.dataset.pytreConfirmed === "1") {
+                delete form.dataset.pytreConfirmed;
+                if (isInsideModal()) {
+                    submitFormInModal(form);
+                    return false;
+                }
+                return true;
+            }
+            event.preventDefault();
+            pytreConfirm(message).then(function (ok) {
+                if (ok) {
+                    form.dataset.pytreConfirmed = "1";
+                    form.requestSubmit();
+                }
+            });
+            return false;
+        }
+
+        // Text-input counterpart to pytreConfirm() - same modal chrome, with an input field
+        // instead of a plain message. Resolves to the trimmed value, or null on cancel/empty.
+        function pytrePrompt(message) {
+            return new Promise(function (resolve) {
+                var overlay = document.getElementById("pytre-prompt-overlay");
+                var label = document.getElementById("pytre-prompt-label");
+                var input = document.getElementById("pytre-prompt-input");
+                var okBtn = document.getElementById("pytre-prompt-ok");
+                var cancelBtn = document.getElementById("pytre-prompt-cancel");
+
+                label.textContent = message;
+                input.value = "";
+                overlay.hidden = false;
+                input.focus();
+
+                function cleanup(result) {
+                    overlay.hidden = true;
+                    okBtn.removeEventListener("click", onOk);
+                    cancelBtn.removeEventListener("click", onCancel);
+                    input.removeEventListener("keydown", onKeydown);
+                    resolve(result);
+                }
+                function onOk() { cleanup(input.value.trim() || null); }
+                function onCancel() { cleanup(null); }
+                function onKeydown(e) {
+                    if (e.key === "Enter") { e.preventDefault(); cleanup(input.value.trim() || null); }
+                    else if (e.key === "Escape") { e.preventDefault(); cleanup(null); }
+                }
+
+                okBtn.addEventListener("click", onOk);
+                cancelBtn.addEventListener("click", onCancel);
+                input.addEventListener("keydown", onKeydown);
+            });
+        }
+
+        // Dark/light theme toggle, persisted per-browser via localStorage. The actual class
+        // switch on first paint happens in the blocking <head> script above, to avoid a flash
+        // of the wrong theme - this just keeps the switch and storage in sync afterward.
+        (function () {
+            var toggleInput = document.getElementById("theme-toggle");
+            if (!toggleInput) return; // no sidebar on "bare" pages (e.g. the login page)
+
+            function currentTheme() {
+                return document.documentElement.dataset.theme === "dark" ? "dark" : "light";
+            }
+
+            toggleInput.addEventListener("change", function () {
+                var next = toggleInput.checked ? "dark" : "light";
+                if (next === "dark") {
+                    document.documentElement.dataset.theme = "dark";
+                } else {
+                    delete document.documentElement.dataset.theme;
+                }
+                try { localStorage.setItem("pytre-theme", next); } catch (e) {}
+            });
+
+            toggleInput.checked = currentTheme() === "dark";
+        })();
+
+        // Going to a page through the sidebar starts it from scratch: forget the filters that
+        // the list pages keep across a reload/refresh (see their "pytre-*-filter" keys).
+        (function () {
+            Array.prototype.forEach.call(document.querySelectorAll(".nav-link"), function (link) {
+                link.addEventListener("click", function () {
+                    try {
+                        for (var i = sessionStorage.length - 1; i >= 0; i--) {
+                            var key = sessionStorage.key(i);
+                            if (key && /^pytre-.+-filter$/.test(key)) sessionStorage.removeItem(key);
+                        }
+                    } catch (e) {}
+                });
+            });
+        })();
+
+        // innerHTML doesn't execute <script> tags - recreate them so they actually run. Shared by
+        // openFormModal() (initial load) and submitFormInModal() (re-render after a POST error).
+        function _executeInjectedScripts(container) {
+            Array.prototype.forEach.call(container.querySelectorAll("script"), function (oldScript) {
+                var newScript = document.createElement("script");
+                newScript.textContent = oldScript.textContent;
+                oldScript.parentNode.replaceChild(newScript, oldScript);
+            });
+        }
+
+        // Replaces the modal's content with the #modal-root fragment of a fetched/rendered page
+        // (or the raw html if that id isn't present), and (re-)runs its inline <script>s.
+        function _renderIntoModal(html) {
+            var doc = new DOMParser().parseFromString(html, "text/html");
+            var source = doc.getElementById("modal-root");
+            var content = document.getElementById("pytre-modal-content");
+            content.innerHTML = source ? source.innerHTML : html;
+            _executeInjectedScripts(content);
+        }
+
+        // Loads a form page (create/edit user, manage attributes...) into an overlay instead of
+        // navigating to it - the fetched page still works as a normal standalone page too, only
+        // the element with id="modal-root" is lifted out and shown here.
+        function openFormModal(url) {
+            fetch(url).then(function (resp) { return resp.text(); }).then(function (html) {
+                _renderIntoModal(html);
+                document.getElementById("pytre-modal-overlay").hidden = false;
+            });
+        }
+
+        function closeFormModal() {
+            document.getElementById("pytre-modal-overlay").hidden = true;
+            document.getElementById("pytre-modal-content").innerHTML = "";
+        }
+
+        // True while the current document is the modal's injected fragment rather than a real
+        // standalone page - #modal-root only exists in the latter (openFormModal only lifts its
+        // innerHTML into the modal, never the element itself).
+        function isInsideModal() {
+            return !document.getElementById("modal-root");
+        }
+
+        // Submits `form` via fetch instead of a real navigation. A redirect response (the route's
+        // real success path) still navigates the whole page, so the browser lands on the list
+        // with its banner. Otherwise the route re-rendered the same form with a validation error -
+        // that HTML replaces the modal's content in place, instead of a native submission's whole-
+        // page navigation breaking out of the modal to show it as a standalone page.
+        function submitFormInModal(form) {
+            var formData = new FormData(form);
+            fetch(form.action, { method: form.method, body: formData }).then(function (response) {
+                if (response.redirected) {
+                    window.location.href = response.url;
+                    return;
+                }
+                return response.text().then(_renderIntoModal);
+            });
+        }
+
+        // onsubmit handler for a plain form (no pytreConfirm) that also needs this treatment,
+        // e.g. CSV import - falls back to a normal submission when not shown inside a modal.
+        function submitFormPossiblyInModal(event) {
+            if (!isInsideModal()) return true;
+            event.preventDefault();
+            submitFormInModal(event.target);
+            return false;
+        }
+
+        // Cancel button for a form dialog (user/server form, groups form, attributes, import) -
+        // the same template is used both as a full standalone page and as a modal fragment. When
+        // loaded as a modal, only #modal-root's innerHTML was copied in, so that id no longer
+        // exists in the live document - that's how this tells the two cases apart. `fallbackUrl`
+        // is where a standalone page navigates back to (e.g. "/admin/users", "/admin/servers").
+        function cancelFormDialog(fallbackUrl) {
+            if (document.getElementById("modal-root")) {
+                window.location.href = fallbackUrl;
+            } else {
+                closeFormModal();
+            }
+        }
+
+        document.addEventListener("keydown", function (e) {
+            if (e.key !== "Escape") return;
+            var overlay = document.getElementById("pytre-modal-overlay");
+            if (!overlay.hidden) closeFormModal();
+        });
+
+        // Reveal/hide toggle for a password field - the field is write-only (blank until the
+        // user types a new value, existing stored value never sent to the browser at all), so
+        // revealing it just shows whatever the user is currently typing - no existing secret to
+        // leak the length of.
+        var _EYE_ICON = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>';
+        var _EYE_SLASH_ICON = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.94 10.94 0 0112 19c-7 0-11-7-11-7a20.28 20.28 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 7 11 7a20.27 20.27 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>';
+
+        function togglePasswordField(btn) {
+            var input = btn.closest(".password-field").querySelector("input");
+            var revealing = input.type === "password";
+            input.type = revealing ? "text" : "password";
+            btn.innerHTML = revealing ? _EYE_SLASH_ICON : _EYE_ICON;
+        }
+
+        // Shared "add a new group" widget (a "+ Create" chip appended after the last checkbox
+        // in a checkbox-grid, opening a pytrePrompt() dialog for the name) - used identically by
+        // user_form.html and users_groups_form.html. Adding a group here only creates a local,
+        // checked checkbox - it's not persisted until the surrounding <form> itself is submitted.
+        function setupInlineGroupCreate(gridId) {
+            var grid = document.getElementById(gridId);
+            if (!grid) return;
+
+            var addBtn = document.createElement("button");
+            addBtn.type = "button";
+            addBtn.className = "add-chip-btn";
+            addBtn.textContent = "+ Create";
+            grid.appendChild(addBtn);
+
+            addBtn.addEventListener("click", function () {
+                pytrePrompt("New group name").then(function (name) {
+                    if (!name) return;
+                    var exists = Array.prototype.some.call(grid.querySelectorAll('input[name="groups"]'), function (cb) {
+                        return cb.value.toLowerCase() === name.toLowerCase();
+                    });
+                    if (exists) return;
+                    var label = document.createElement("label");
+                    label.className = "checkbox-item";
+                    var cb = document.createElement("input");
+                    cb.type = "checkbox";
+                    cb.name = "groups";
+                    cb.value = name;
+                    cb.checked = true;
+                    label.appendChild(cb);
+                    label.appendChild(document.createTextNode(" " + name));
+                    grid.insertBefore(label, addBtn);
+                });
+            });
+        }
+    </script>
+</body>
+</html>

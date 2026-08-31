@@ -1,0 +1,102 @@
+{% extends "admin/base.html" %}
+{% block title %}{% if user.uuid %}Edit user{% else %}New user{% endif %} — Pytre Server{% endblock %}
+{% block main_class %}main-flush{% endblock %}
+{% block content %}
+<div class="center-page">
+    <div class="form-panel wide" id="modal-root">
+        {% if error %}<p class="error form-error">{{ error }}</p>{% endif %}
+
+        <form
+            method="post"
+            id="user-form"
+            action="{% if user.uuid %}/admin/users/{{ user.uuid }}/edit{% else %}/admin/users/new{% endif %}"
+            onsubmit="return pytreConfirmSubmit(event, '{% if user.uuid %}Save changes to this user?{% else %}Create this new user?{% endif %}')"
+        >
+            <label for="username">Id</label>
+            <input type="text" id="username" name="username" value="{{ user.username }}" required>
+
+            <label for="title">Title</label>
+            <input type="text" id="title" name="title" value="{{ user.title }}">
+
+            <label class="checkbox-item" for="admin" style="margin-top: 14px;">
+                <input type="checkbox" id="admin" name="admin" value="1" {% if user.admin %}checked{% endif %}>
+                Admin
+            </label>
+
+            <label for="msg_login">Login Message</label>
+            <input type="text" id="msg_login" name="msg_login" value="{{ user.msg_login }}">
+
+            <div class="form-row">
+                <div class="form-col" style="flex: 1;">
+                    <label for="auth_type">Auth type</label>
+                    <select id="auth_type" name="auth_type">
+                        {% for at in auth_types %}
+                        <option value="{{ at.value }}" {% if user.auth_type == at %}selected{% endif %}>{{ at }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="form-col" style="flex: 3;">
+                    <label for="password">
+                        {% if user.uuid %}Password (leave blank to keep the current one){% else %}Password{% endif %}
+                    </label>
+                    <input type="password" id="password" name="password" autocomplete="new-password">
+                </div>
+            </div>
+
+            <label>Groups</label>
+            <div class="checkbox-grid" id="groups-grid">
+                {% for group in all_groups %}
+                <label class="checkbox-item">
+                    <input
+                        type="checkbox" name="groups" value="{{ group }}" {% if group in user.groups %}checked{% endif %}
+                    >
+                    {{ group }}
+                </label>
+                {% endfor %}
+            </div>
+
+            {% if all_attribs %}
+            <label style="margin-top: 20px;">Custom attributes</label>
+            {% for attrib in all_attribs %}
+            <label for="attrib__{{ attrib }}">{{ attrib }}</label>
+            <input
+                type="text"
+                id="attrib__{{ attrib }}"
+                name="attrib__{{ attrib }}"
+                value="{{ user.attribs_cust.get(attrib, '') }}"
+            >
+            {% endfor %}
+            {% endif %}
+        </form>
+
+        {% if user.uuid %}
+        <form
+            method="post"
+            id="delete-form"
+            action="/admin/users/{{ user.uuid }}/delete"
+            onsubmit="return pytreConfirmSubmit(event, 'Delete user {{ user.username }}?')"
+        ></form>
+        {% endif %}
+
+        <div class="form-actions">
+            <button type="submit" form="user-form">Save</button>
+            {% if user.uuid %}
+            <button type="submit" form="delete-form" class="danger">Delete</button>
+            {% endif %}
+            <button type="button" class="secondary" onclick="cancelFormDialog('/admin/users')">Cancel</button>
+        </div>
+
+        <script>
+        (function () {
+            var userForm = document.getElementById("user-form");
+            userForm.addEventListener("keydown", function (e) {
+                if (e.key === "Enter" && e.target.tagName !== "TEXTAREA") {
+                    e.preventDefault();
+                }
+            });
+            setupInlineGroupCreate("groups-grid");
+        })();
+        </script>
+    </div>
+</div>
+{% endblock %}

@@ -34,6 +34,7 @@ class ServerField(Enum):
     SERVER = ("server", _DbKind.CUSTOM, "server")
     LOGIN_TIMEOUT = ("login_timeout", _DbKind.CUSTOM, "login_timeout")
     TIMEOUT = ("timeout", _DbKind.CUSTOM, "timeout")
+    TRUST_CERTIFICATE = ("trust_server_certificate", _DbKind.CUSTOM, "trust_server_certificate")
     GROUPS = ("grp_authorized", _DbKind.TAGS, "")
 
     def __init__(self, csv_header: str, db_kind: _DbKind, db_key: str):
@@ -309,6 +310,7 @@ class Server:
         self.server: str = ""
         self.login_timeout: int = 60
         self.timeout: int = 300
+        self.trust_server_certificate: bool = False
         self.grp_authorized: list[str] = []
 
         if entry:
@@ -329,6 +331,7 @@ class Server:
             "server": self.server,
             "login_timeout": self.login_timeout,
             "timeout": self.timeout,
+            "trust_server_certificate": self.trust_server_certificate,
             "grp_authorized": self.grp_authorized,
         }
 
@@ -358,6 +361,9 @@ class Server:
 
         timeout = s_entry.get_custom_property(ServerField.TIMEOUT.db_key) or ""
         self.timeout = int(timeout) if timeout.isdigit() else self.timeout  # must be a number
+
+        trust_cert = s_entry.get_custom_property(ServerField.TRUST_CERTIFICATE.db_key) or ""
+        self.trust_server_certificate = trust_cert.lower() == "true"
 
         # Retrieve groups from keepass entry tags
         tags = s_entry.tags if s_entry.tags else []
@@ -419,6 +425,9 @@ class Server:
         entry.set_custom_property(ServerField.SERVER.db_key, self.server)
         entry.set_custom_property(ServerField.LOGIN_TIMEOUT.db_key, str(self.login_timeout))
         entry.set_custom_property(ServerField.TIMEOUT.db_key, str(self.timeout))
+        entry.set_custom_property(
+            ServerField.TRUST_CERTIFICATE.db_key, "true" if self.trust_server_certificate else "false"
+        )
 
         # Sanitize grp, keepass tags forbid colon and semi colon
         entry.tags = [grp.replace(",", "_").replace(";", "_") for grp in self.grp_authorized]

@@ -1,0 +1,63 @@
+{% extends "admin/base.html" %}
+{% block title %}Master key — Pytre Server{% endblock %}
+{% block main_class %}main-flush{% endblock %}
+{% block content %}
+<div class="center-page top-anchored">
+    <div class="form-panel">
+        <h2>System keyring: master key</h2>
+        <p class="description">Manage the server's database access password stored in the system keyring.</p>
+
+        <p class="error form-error" style="margin-bottom: 20px;">
+            ⚠️ Use with caution. The server <strong>won't be able to start</strong> if a wrong value is set.
+        </p>
+
+        <p>Status: <strong>{{ "a master key is stored" if key_exists else "no master key stored" }}</strong></p>
+
+        <div class="form-actions" id="master-key-actions">
+            {% if key_exists %}
+            <button type="button" class="secondary" id="reveal-btn">Reveal</button>
+            {% endif %}
+
+            <button type="button" id="show-set-form-btn">Set</button>
+
+            {% if key_exists %}
+            <form
+                method="post"
+                action="/admin/master-key/delete"
+                style="display:inline;"
+                onsubmit="return pytreConfirmSubmit(event, 'Delete the stored master key? The server won\'t be able to open its database on next restart unless a matching value is set again.')"
+            >
+                <button type="submit" class="danger" id="delete-btn">Delete</button>
+            </form>
+            {% endif %}
+        </div>
+
+        {% if msg %}<p class="result">{{ msg }}</p>{% endif %}
+        {% if error %}<p class="error form-error">{{ error }}</p>{% endif %}
+
+        <script>
+        (function () {
+            var showBtn = document.getElementById("show-set-form-btn");
+            var revealBtn = document.getElementById("reveal-btn");
+
+            showBtn.addEventListener("click", function () {
+                openFormModal("/admin/master-key/set-form");
+            });
+
+            // Shows the value in a dismissible dialog (pytreAlert) instead of leaving it sitting
+            // inline on the page - it's only ever in the DOM while that dialog is open, gone as
+            // soon as it's dismissed, no separate "Hide" step needed.
+            if (revealBtn) {
+                revealBtn.addEventListener("click", function () {
+                    fetch("/admin/master-key/reveal", { method: "POST" })
+                        .then(function (r) { return r.json(); })
+                        .then(function (data) {
+                            pytreAlert("Stored value:\n" + (data.value || "(none)"));
+                        });
+                });
+            }
+        })();
+        </script>
+    </div>
+</div>
+{% endblock %}

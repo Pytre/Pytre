@@ -1,0 +1,64 @@
+{% extends "admin/base.html" %}
+{% block title %}Edit query — {{ row.name }} — Pytre Server{% endblock %}
+{% block main_class %}main-flush{% endblock %}
+{% block content %}
+<div class="center-page">
+    <div class="form-panel wide" id="modal-root">
+        {% if error %}<p class="error form-error">{{ error }}</p>{% endif %}
+
+        <label for="code">Code</label>
+        <input type="text" id="code" value="{{ row.name }}" readonly style="background: var(--bg); color: var(--text-muted);">
+
+        <label for="description">Description</label>
+        <input type="text" id="description" value="{{ row.description }}" readonly style="background: var(--bg); color: var(--text-muted);">
+
+        <label class="checkbox-item" for="hidden" style="margin-top: 14px;">
+            <input type="checkbox" id="hidden" {% if row.hidden %}checked{% endif %} disabled>
+            Hidden
+        </label>
+
+        <div class="form-row">
+            <div class="form-col">
+                <label for="servers">Servers Restriction</label>
+                <input type="text" id="servers" value="{{ row.servers | join(', ') }}" readonly style="background: var(--bg); color: var(--text-muted);">
+            </div>
+            <div class="form-col">
+                <label for="groups">Groups Restriction</label>
+                <input type="text" id="groups" value="{{ row.groups | join(', ') }}" readonly style="background: var(--bg); color: var(--text-muted);">
+            </div>
+        </div>
+
+        <form
+            method="post"
+            id="hash-form"
+            action="/admin/queries/{{ row.file_id }}/ignore-hash"
+            onsubmit="return pytreConfirmSubmit(event, 'Ignore the template hash check for this query until the chosen date?')"
+        >
+            <label for="until" style="margin-top: 14px;">Ignore hash check until</label>
+            <input
+                type="date" id="until" name="until"
+                value="{{ row.exempt_until.isoformat() if row.exempt_until else '' }}"
+                min="{{ today.isoformat() }}" required
+            >
+        </form>
+
+        {% if row.exempt_until %}
+        <form
+            method="post"
+            id="clear-form"
+            action="/admin/queries/{{ row.file_id }}/clear-hash-exemption"
+            onsubmit="return pytreConfirmSubmit(event, 'Clear the hash exemption for this query?')"
+        ></form>
+        {% endif %}
+
+        <div class="form-actions">
+            <button type="submit" form="hash-form">Save</button>
+            {% if row.exempt_until %}
+            <button type="submit" form="clear-form" class="danger">Clear</button>
+            {% endif %}
+            <button type="button" class="danger" onclick="pytreConfirm('Not yet implemented')">Delete</button>
+            <button type="button" class="secondary" onclick="cancelFormDialog('/admin/queries')">Cancel</button>
+        </div>
+    </div>
+</div>
+{% endblock %}

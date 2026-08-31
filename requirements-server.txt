@@ -2,7 +2,10 @@ argon2-cffi>=25.1.0
 fastapi>=0.140.0
 fastmssql>=0.7.7
 httpx2>=2.9.1      # pour TestClient (tests de routes)
+jinja2>=3.1.6      # server-rendered admin pages
 keyring>=25.7.0
 pyjwt>=2.10.1
+pykeepass>=4.0.6
+python-multipart>=0.0.20  # required by FastAPI to parse the hash-password form
 uvicorn>=0.51.0
 

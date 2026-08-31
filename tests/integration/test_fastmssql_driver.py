@@ -27,6 +27,7 @@ async def driver():
         database=TEST_SQL_SERVER["database"],
         username=TEST_SQL_SERVER["user"],
         password=TEST_SQL_SERVER["password"],
+        trust_certificate=True,  # mssql-test docker uses a self-signed certificate
     )
     await d.connect()
     yield d

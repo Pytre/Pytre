@@ -1,0 +1,76 @@
+{% extends "admin/base.html" %}
+{% block title %}Set master key — Pytre Server{% endblock %}
+{% block main_class %}main-flush{% endblock %}
+{% block content %}
+<div class="center-page">
+    <div class="form-panel" id="modal-root">
+        {% if error %}<p class="error form-error">{{ error }}</p>{% endif %}
+
+        <form
+            method="post"
+            action="/admin/master-key/set"
+            id="set-form"
+            onsubmit="return pytreConfirmSubmit(event, 'Set a new master key?\nThis only takes effect after the server is restarted.')"
+        >
+            <p class="error form-error" style="margin-top: 20px;">
+                <strong>Set only changes what the server will try to use on its next restart</strong>.
+                <br>If the new value doesn't match what actually protects the database, <strong>the server will
+                fail to start</strong> until this is corrected.<br>
+                <strong>⚠️ Change re-encrypts the database immediately</strong> and updates
+                its stored value to match.
+            </p>
+            
+            <label for="password">New master key</label>
+            <div class="password-field">
+                <input type="password" id="password" name="password" autocomplete="new-password">
+                <button type="button" class="password-toggle" onclick="togglePasswordField(this)" title="Show/hide password">
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>
+                </button>
+            </div>
+
+            <label for="confirm_password">Confirm master key</label>
+            <div class="password-field">
+                <input type="password" id="confirm_password" name="confirm_password" autocomplete="new-password">
+                <button type="button" class="password-toggle" onclick="togglePasswordField(this)" title="Show/hide password">
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>
+                </button>
+            </div>
+
+            <div class="form-actions">
+                <button type="submit">Set</button>
+                <button type="button" class="danger" id="change-db-btn" title="Re-encrypt the database with this password now">Change</button>
+                <button type="button" class="secondary" onclick="cancelFormDialog('/admin/master-key')">Cancel</button>
+            </div>
+        </form>
+
+        <script>
+        (function () {
+            var setForm = document.getElementById("set-form");
+            var changeDbBtn = document.getElementById("change-db-btn");
+
+            // "Change" reuses the same password/confirm_password fields as "Set", just posted to a
+            // different URL. Handled as its own plain click (not another type="submit" button with
+            // formaction on the same form) to avoid pytreConfirmSubmit()'s confirm-then-resubmit
+            // dance: its second-pass form.requestSubmit() (no argument) always falls back to the
+            // form's own `action`, silently discarding any button-specific formaction. Mirrors
+            // pytreConfirmSubmit()'s own isInsideModal() branch, since this page is used both
+            // standalone and as a modal fragment (see cancelFormDialog above).
+            changeDbBtn.addEventListener("click", function () {
+                pytreConfirm(
+                    "Change the actual database password now?\nThis re-encrypts the database " +
+                    "immediately and updates the stored keyring value to match.\n\nThis cannot be undone."
+                ).then(function (ok) {
+                    if (!ok) return;
+                    setForm.action = "/admin/master-key/change-db-password";
+                    if (isInsideModal()) {
+                        submitFormInModal(setForm);
+                    } else {
+                        setForm.requestSubmit();
+                    }
+                });
+            });
+        })();
+        </script>
+    </div>
+</div>
+{% endblock %}

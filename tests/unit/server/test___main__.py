@@ -4,6 +4,8 @@ Tests for Pytre_Server/__main__.py
 
 from unittest.mock import Mock
 
+import logging
+
 import pytest
 
 from Pytre_Server.__main__ import (
@@ -54,6 +56,19 @@ def test_hash_password_flag_is_mutually_exclusive_with_master_key_flags():
 
     with pytest.raises(SystemExit):
         parser.parse_args(["--hash-password", "--show-master-key"])
+
+
+@pytest.mark.unit
+def test_forwarded_allow_ips_defaults_to_none():
+    """None = leave uvicorn's own default ($FORWARDED_ALLOW_IPS or 127.0.0.1) untouched."""
+    assert create_parser().parse_args([]).forwarded_allow_ips is None
+
+
+@pytest.mark.unit
+def test_forwarded_allow_ips_is_parsed():
+    args = create_parser().parse_args(["--forwarded-allow-ips", "10.0.0.5"])
+
+    assert args.forwarded_allow_ips == "10.0.0.5"
 
 
 @pytest.mark.unit
@@ -172,7 +187,50 @@ def test_start_server_runs_uvicorn_with_resolved_master_key(monkeypatch):
     start_server(args)
 
     create_app_mock.assert_called_once_with(master_key="s3cret", chunk_size=2000, max_concurrency_per_user=4)
-    run.assert_called_once_with("app", host="0.0.0.0", port=9000)
+    run.assert_called_once_with("app", host="0.0.0.0", port=9000, forwarded_allow_ips=None)
+
+
+@pytest.mark.unit
+def test_start_server_forwards_forwarded_allow_ips_to_uvicorn(monkeypatch):
+    monkeypatch.setattr("Pytre_Server.__main__.get_master_key_interactive", Mock(return_value="s3cret"))
+    monkeypatch.setattr("Pytre_Server.__main__.create_app", Mock(return_value="app"))
+    run = Mock()
+    monkeypatch.setattr("Pytre_Server.__main__.uvicorn.run", run)
+    args = create_parser().parse_args(["--forwarded-allow-ips", "10.0.0.5,10.0.0.6"])
+
+    start_server(args)
+
+    assert run.call_args.kwargs["forwarded_allow_ips"] == "10.0.0.5,10.0.0.6"
+
+
+@pytest.mark.unit
+def test_start_server_warns_on_wildcard_forwarded_allow_ips(monkeypatch):
+    monkeypatch.setattr("Pytre_Server.__main__.get_master_key_interactive", Mock(return_value="s3cret"))
+    monkeypatch.setattr("Pytre_Server.__main__.create_app", Mock(return_value="app"))
+    monkeypatch.setattr("Pytre_Server.__main__.uvicorn.run", Mock())
+    log_mock = Mock()
+    monkeypatch.setattr("Pytre_Server.__main__.log", log_mock)
+    args = create_parser().parse_args(["--forwarded-allow-ips", "*"])
+
+    start_server(args)
+
+    assert log_mock.called
+    assert log_mock.call_args.args[1] == logging.WARNING
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("cli_args", [[], ["--forwarded-allow-ips", "10.0.0.5"]])
+def test_start_server_does_not_warn_without_wildcard(monkeypatch, cli_args):
+    monkeypatch.setattr("Pytre_Server.__main__.get_master_key_interactive", Mock(return_value="s3cret"))
+    monkeypatch.setattr("Pytre_Server.__main__.create_app", Mock(return_value="app"))
+    monkeypatch.setattr("Pytre_Server.__main__.uvicorn.run", Mock())
+    log_mock = Mock()
+    monkeypatch.setattr("Pytre_Server.__main__.log", log_mock)
+    args = create_parser().parse_args(cli_args)
+
+    start_server(args)
+
+    assert not log_mock.called
 
 
 @pytest.mark.unit

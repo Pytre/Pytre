@@ -2,8 +2,9 @@
 
 from typing import Any, cast
 
-from fastmssql import Connection, PoolConfig
+from fastmssql import ApplicationIntent, Connection, PoolConfig, SslConfig
 
+from Pytre_Core.about import APP_NAME, APP_VERSION
 from Pytre_Server.execution.protocol import AsyncSqlResult
 
 # Standard recommended set for connection properties plus an explicit DATEFORMAT
@@ -24,19 +25,29 @@ _RECOMPILE = "\nOPTION (RECOMPILE);"
 
 
 class FastMssqlDriver:
-    """AsyncSqlDriver implementation using fastmssql.
-
-    TrustServerCertificate is hardcoded to true for now - needed for local/dev
-    SQL Server instances with self-signed certificates. Must become configurable
-    before any real deployment: as-is, this disables certificate validation."""
+    """AsyncSqlDriver implementation using fastmssql."""
 
     def __init__(
-        self, host: str, port: int, database: str, username: str, password: str, pool_config: PoolConfig | None = None
+        self,
+        host: str,
+        port: int,
+        database: str,
+        username: str,
+        password: str,
+        trust_certificate: bool = False,
+        pool_config: PoolConfig | None = None,
     ) -> None:
+
         self._connection = Connection(
-            f"Server={host},{port};Database={database};User Id={username};Password={password};"
-            + f"TrustServerCertificate=true",
+            server=host,
+            port=port,
+            database=database,
+            username=username,
+            password=password,
             pool_config=pool_config,
+            ssl_config=SslConfig(trust_server_certificate=trust_certificate),
+            application_name=f"{APP_NAME}_Server_{APP_VERSION}",
+            application_intent=ApplicationIntent.READ_ONLY,
         )
 
     async def connect(self) -> None:

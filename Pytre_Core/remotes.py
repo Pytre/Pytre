@@ -1,10 +1,11 @@
 import csv
 import ipaddress
 import json
+import jwt
 import logging
 from contextlib import contextmanager
 from collections.abc import Generator, Iterator
-from datetime import datetime, date
+from datetime import datetime, date, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import Self, Any
@@ -12,6 +13,7 @@ from urllib.parse import urlparse
 from uuid import uuid4
 
 import httpx2
+from jwt import DecodeError
 
 from Pytre_Core.keyring import KeyringCatalog
 from Pytre_Core.user_prefs import CONFIG_FOLDER
@@ -262,9 +264,47 @@ class Remote:
 
     @property
     def auth_headers(self) -> dict[str, str]:
-        if not self.address.token:
+        if not self.address.access_token:
             return {}
-        return {"Authorization": f"Bearer {self.address.token}"}
+        return {"Authorization": f"Bearer {self.address.access_token}"}
+
+    def login(self) -> bool:
+        """Authenticates and store token on `address`. Returns whether it succeeded. Errors are logged, not raised.
+        Refuses to send credentials over plain HTTP if not on localhost or on a private network."""
+
+        if not self.address.channel_is_secure:
+            msg = f"Login to a non-local remote is not allowed over plain HTTP: {self.id}"
+            log(msg, logging.ERROR)
+            return False
+
+        # try to get an access token only if refresh_token still valid
+        if self.address.refresh_token_is_valid:
+            try:
+                url_route = self.address.build_url("/refresh")
+                body = {"refresh_token": self.address.refresh_token}
+                response = httpx2.post(url=url_route, json=body, timeout=_REQUEST_TIMEOUT)
+                response.raise_for_status()
+                self.address.access_token = response.json()["access_token"]
+                return True
+            except (httpx2.RequestError, httpx2.HTTPStatusError) as e:
+                log(f"Failed to retrieve an acces token for {self.id} : {e}", logging.DEBUG)
+                self.address.access_token = ""
+
+        # if retrieving access token failed then renew refresh token
+        try:
+            url_route = self.address.build_url("/login")
+            body = {"username": self.address.username, "password": self.address.password}
+            response = httpx2.post(url=url_route, json=body, timeout=_REQUEST_TIMEOUT)
+            response.raise_for_status()
+            self.address.refresh_token = response.json()["refresh_token"]
+            self.address.access_token = response.json()["access_token"]
+        except (httpx2.RequestError, httpx2.HTTPStatusError) as e:
+            log(f"Login failed for {self.id} : {e}", logging.WARNING)
+            self.address.refresh_token = ""
+            self.address.access_token = ""
+            return False
+
+        return True
 
     def get_authenticated(self, url: str, params: dict | None = None) -> httpx2.Response:
         """GETs `url` using a valid Bearer token - logs in and retries once if the token is
@@ -272,35 +312,17 @@ class Remote:
         httpx2.RequestError on a login failure or network-level issue; a non-401 error status is
         returned as-is, for the caller to raise_for_status() itself."""
 
-        response = httpx2.get(url=url, params=params, headers=self.auth_headers, timeout=_REQUEST_TIMEOUT)
-        if response.status_code == 401:
+        response = None
+
+        if self.address.access_token_is_valid:
+            response = httpx2.get(url=url, params=params, headers=self.auth_headers, timeout=_REQUEST_TIMEOUT)
+
+        if response is None or response.status_code == 401:
             if not self.login():
                 raise httpx2.RequestError(f"Login failed for {self.id}")
             response = httpx2.get(url=url, params=params, headers=self.auth_headers, timeout=_REQUEST_TIMEOUT)
 
         return response
-
-    def login(self) -> bool:
-        """Authenticates and store token on `address`. Returns whether it succeeded. Errors are logged, not raised.
-        Refuses to send credentials over plain HTTP if not on localhost or on a private network."""
-        if not self.address.channel_is_secure:
-            msg = f"Login to a non-local remote is not allowed over plain HTTP: {self.id}"
-            log(msg, logging.ERROR)
-            self.address.token = ""
-            return False
-
-        try:
-            url_route = self.address.build_url("/login")
-            body = {"username": self.address.username, "password": self.address.password}
-            response = httpx2.post(url=url_route, json=body, timeout=_REQUEST_TIMEOUT)
-            response.raise_for_status()
-            self.address.token = response.json()["token"]
-        except (httpx2.RequestError, httpx2.HTTPStatusError) as e:
-            log(f"Login failed for {self.id} : {e}", logging.WARNING)
-            self.address.token = ""
-            return False
-
-        return True
 
     def refresh_servers(self) -> list[RemoteServer]:
         """Fetches exposed SQL servers. On failure, logs a warning, sets last_error and keeps the previous list."""
@@ -373,14 +395,24 @@ class Remote:
 class RemoteAddress:
     """Handles a remote definition infos"""
 
-    def __init__(self, url: str, port: int, username: str, password: str = "", uuid: str = "", description: str = ""):
+    def __init__(
+        self,
+        url: str,
+        port: int,
+        username: str,
+        password: str = "",
+        uuid: str = "",
+        description: str = "",
+        refresh_token: str = "",
+    ):
         self.uuid: str = uuid if not uuid == "" else str(uuid4())
         self.url: str = url
         self.port: int = port
         self.username: str = username
         self.password: str = password
         self.description: str = description
-        self.token: str = ""  # in memory only, to_dict / from_dict don't use it
+        self.refresh_token: str = refresh_token
+        self.access_token: str = ""  # in memory only, to_dict / from_dict don't use it
 
     @property
     def id(self) -> str:
@@ -411,6 +443,27 @@ class RemoteAddress:
         """Return `description` if not empty else fallback to `id`"""
         return self.description or self.id
 
+    @property
+    def refresh_token_is_valid(self) -> bool:
+        """Return whether the refresh token exists, well-formed and not expired."""
+        return self._token_is_valid(self.refresh_token)
+
+    @property
+    def access_token_is_valid(self) -> bool:
+        """Return whether the access token exists, well-formed and not expired."""
+        return self._token_is_valid(self.access_token)
+
+    def _token_is_valid(self, token: str, min_remaining: timedelta = timedelta(seconds=5)) -> bool:
+        """Return whether the token exists, well-formed, and won't expire within `min_remaining`."""
+        try:
+            decoded = jwt.decode(token, options={"verify_signature": False, "verify_exp": True})
+        except jwt.InvalidTokenError:
+            return False
+
+        exp = datetime.fromtimestamp(decoded.get("exp", 0), tz=timezone.utc)
+
+        return datetime.now(timezone.utc) < exp - min_remaining
+
     def build_url(self, route: str = "") -> str:
         """Builds the URL to access a Remote. Returns the base URL if `route` is empty."""
         return f"{self.url}:{self.port}{route}"
@@ -423,6 +476,7 @@ class RemoteAddress:
             "username": self.username,
             "encrypted_pwd": REMOTES_CIPHER.encrypt(self.password),
             "description": self.description,
+            "token": REMOTES_CIPHER.encrypt(self.refresh_token),
         }
 
     @classmethod
@@ -450,6 +504,7 @@ class RemoteAddress:
             "username": None,
             "password": pwd_key,
             "description": None,
+            "refresh_token": "token",
         }
 
         # loop kwargs to set args for init with value from dict_attr
@@ -457,7 +512,7 @@ class RemoteAddress:
             val = dict_attr.get(dict_key or key)
 
             # control required attributes are not None
-            if val is None and not key in ("uuid", "password", "description"):
+            if val is None and key in ("url", "port", "username"):
                 msg = f"{key} is required to create a RemoteAddress"
                 log(msg, logging.ERROR)
                 raise ValueError(msg)
@@ -483,6 +538,8 @@ class RemoteAddress:
             elif key == "password":
                 if pwd_key is not None:
                     val = REMOTES_CIPHER.decrypt(str(val))
+            elif key == "refresh_token":
+                val = REMOTES_CIPHER.decrypt(str(val))
 
             kwargs[key] = val
 

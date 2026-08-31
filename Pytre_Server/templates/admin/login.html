@@ -1,0 +1,74 @@
+{% extends "admin/base.html" %}
+{% set bare = True %}
+{% block title %}Log in — Pytre Server{% endblock %}
+{% block main_class %}main-flush{% endblock %}
+{% block content %}
+<div class="center-page login-center-page">
+    <div class="form-panel login-panel">
+        <div class="login-brand">
+            <img src="/admin/static/logo.png" alt="Pytre" class="login-brand-logo">
+            <div class="login-brand-text">
+                <div class="login-brand-title">Pytre Server</div>
+                <div class="login-brand-subtitle">WebAdmin</div>
+            </div>
+        </div>
+
+        {% if error %}<p class="error form-error">{{ error }}</p>{% endif %}
+
+        {% if show_bootstrap_form %}
+        <p class="result">No administrator account exists yet - create the first one below.</p>
+
+        <form method="post" action="/admin/bootstrap" class="login-form">
+            <label for="username">Login</label>
+            <input type="text" id="username" name="username" autofocus required>
+
+            <label for="password">Password</label>
+            <div class="password-field">
+                <input type="password" id="password" name="password" required>
+                <button type="button" class="password-toggle" onclick="togglePasswordField(this)" title="Show/hide password">
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>
+                </button>
+            </div>
+
+            <label for="confirm_password">Confirm password</label>
+            <div class="password-field">
+                <input type="password" id="confirm_password" name="confirm_password" required>
+                <button type="button" class="password-toggle" onclick="togglePasswordField(this)" title="Show/hide password">
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>
+                </button>
+            </div>
+
+            <input type="hidden" name="next" value="{{ next or '' }}">
+
+            <div class="form-actions">
+                <button type="submit">Create admin account</button>
+            </div>
+        </form>
+        {% elif no_admin_yet %}
+        <p class="error form-error">
+            No administrator account exists yet. Initial setup must be completed from the server's
+            local console.
+        </p>
+        {% else %}
+        <form method="post" action="/admin/login" class="login-form">
+            <label for="username">Login</label>
+            <input type="text" id="username" name="username" autofocus required>
+
+            <label for="password">Password</label>
+            <div class="password-field">
+                <input type="password" id="password" name="password" required>
+                <button type="button" class="password-toggle" onclick="togglePasswordField(this)" title="Show/hide password">
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>
+                </button>
+            </div>
+
+            <input type="hidden" name="next" value="{{ next or '' }}">
+
+            <div class="form-actions">
+                <button type="submit">Log in</button>
+            </div>
+        </form>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

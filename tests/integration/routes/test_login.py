@@ -11,11 +11,12 @@ from tests.integration.conftest import TEST_USER_PASSWORD, TEST_USERNAME
 pytestmark = pytest.mark.integration
 
 
-def test_login_returns_a_token_on_correct_credentials(client):
+def test_login_returns_a_refresh_and_access_token_on_correct_credentials(client):
     response = client.post("/login", json={"username": TEST_USERNAME, "password": TEST_USER_PASSWORD})
 
     assert response.status_code == 200
-    assert response.json()["token"]
+    assert response.json()["refresh_token"]
+    assert response.json()["access_token"]
 
 
 def test_login_rejects_wrong_password(client):

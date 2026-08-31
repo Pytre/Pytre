@@ -51,6 +51,30 @@ def test_execute_returns_rows_with_correct_hash(client, auth_headers):
     assert set(rows[0].keys()) == {"id", "label", "filter_date"}
 
 
+def test_execute_only_builds_the_requested_query(client, auth_headers, monkeypatch):
+    """Regression: /execute used to build every query in the catalog (and re-log errors for
+    every unrelated broken one) on every call, just to use one of them - it must only build
+    the requested query_id."""
+    from Pytre_Server.routes import client as client_routes
+
+    original = client_routes.build_queries_from_parsers
+    captured_parser_counts = []
+
+    def spy(app_ctx, user_ctx, parsers):
+        captured_parser_counts.append(len(parsers))
+        return original(app_ctx, user_ctx, parsers)
+
+    monkeypatch.setattr(client_routes, "build_queries_from_parsers", spy)
+
+    client.post(
+        "/execute",
+        json={"server_id": TEST_SERVER_ID, "query_id": TEST_QUERY_ID, "template_hash": "x", "parameters": {"@1": ""}},
+        headers=auth_headers,
+    )
+
+    assert captured_parser_counts == [1]
+
+
 def test_execute_rejects_unknown_query_id(client, auth_headers):
     response = client.post(
         "/execute",

@@ -66,6 +66,7 @@ def main() -> None:
     server.user = TEST_SQL_SERVER["user"]
     server.password = TEST_SQL_SERVER["password"]
     server.type = TEST_SQL_SERVER["type"]
+    server.trust_server_certificate = True  # mssql-test docker uses a self-signed certificate
     server.save()
 
     users = Users(kee)

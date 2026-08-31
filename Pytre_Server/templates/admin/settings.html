@@ -1,0 +1,56 @@
+{% extends "admin/base.html" %}
+{% block title %}Settings — Pytre Server{% endblock %}
+{% block main_class %}main-flush{% endblock %}
+{% block content %}
+<div class="center-page top-anchored">
+    <div class="form-panel">
+        <h2>General settings</h2>
+        <p class="description"></p>
+
+        {% if msg %}<p class="result">{{ msg }}</p>{% endif %}
+        {% if error %}<p class="error form-error">{{ error }}</p>{% endif %}
+
+        <form
+            method="post"
+            action="/admin/settings"
+            id="settings-form"
+        >
+            <p class="error form-error" style="margin-top: 14px;">
+                <strong>Queries folder</strong> takes effect on the next reload click on the queries page.<br>
+                <strong>Logs are on</strong> and <strong>Logs folder</strong> takes effect on the next restart.
+            </p>
+
+            <label for="queries_folder">Queries folder</label>
+            <input type="text" id="queries_folder" name="queries_folder" value="{{ values.queries_folder }}">
+
+            <label class="checkbox-item" for="logs_are_on" style="margin-top: 14px;">
+                <input type="checkbox" id="logs_are_on" name="logs_are_on" value="1" {% if values.logs_are_on %}checked{% endif %}>
+                Logs are <span id="logs-state-text">{{ "on" if values.logs_are_on else "off" }}</span>
+            </label>
+
+            <label for="logs_folder">Logs folder</label>
+            <input type="text" id="logs_folder" name="logs_folder" value="{{ values.logs_folder }}" {% if not values.logs_are_on %}disabled{% endif %}>
+
+            <div class="form-actions">
+                <button type="submit">Save</button>
+                <button type="button" class="secondary" onclick="window.location.href='/admin/settings'">Cancel</button>
+            </div>
+        </form>
+
+        <script>
+        (function () {
+            var logsOnCheckbox = document.getElementById("logs_are_on");
+            var logsFolderInput = document.getElementById("logs_folder");
+            var logsStateText = document.getElementById("logs-state-text");
+
+            function syncLogsState() {
+                logsFolderInput.disabled = !logsOnCheckbox.checked;
+                logsStateText.textContent = logsOnCheckbox.checked ? "on" : "off";
+            }
+
+            logsOnCheckbox.addEventListener("change", syncLogsState);
+        })();
+        </script>
+    </div>
+</div>
+{% endblock %}

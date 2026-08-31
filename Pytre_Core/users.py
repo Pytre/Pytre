@@ -529,7 +529,9 @@ class User:
             return
 
         self._pwd_hash = password_hash
-        self._pwd_changed_at = datetime.now(timezone.utc)
+
+        changed_at = datetime.now(timezone.utc)
+        self._pwd_changed_at = changed_at.replace(microsecond=0)  # match JWT "iat" encoding as integer epoch second
 
     @property
     def password_changed_at(self) -> datetime | None:

@@ -1,0 +1,23 @@
+{% extends "admin/base.html" %}
+{% block title %}Import servers — Pytre Server{% endblock %}
+{% block main_class %}main-flush{% endblock %}
+{% block content %}
+<div class="center-page">
+    <div class="form-panel" id="modal-root">
+        <h2>Import servers from CSV</h2>
+        <p class="description">Existing servers (matched by Id) are updated, new ones are created.</p>
+
+        {% if error %}<p class="error form-error">{{ error }}</p>{% endif %}
+
+        <form method="post" action="/admin/servers/import" enctype="multipart/form-data" onsubmit="return submitFormPossiblyInModal(event)">
+            <label for="file">CSV file</label>
+            <input type="file" id="file" name="file" accept=".csv" required>
+
+            <div class="form-actions">
+                <button type="submit">Import</button>
+                <button type="button" class="secondary" onclick="cancelFormDialog('/admin/servers')">Cancel</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}

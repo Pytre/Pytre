@@ -3,11 +3,12 @@ Tests for Pytre_Core/remotes.py
 """
 
 import json
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
 
 import httpx2
+import jwt
 import pytest
 
 from Pytre_Core.remotes import (
@@ -78,6 +79,39 @@ class _FakeResponse:
 
     def json(self):
         return self._json_data
+
+
+def _make_token() -> str:
+    """A well-formed JWT string, comfortably far from expiry (well outside
+    _token_is_valid()'s near-expiry margin) - enough to make RemoteAddress._token_is_valid()
+    treat it as present/well-formed/valid, regardless of its actual content (the client never
+    verifies its own token's signature)."""
+    payload = {"sub": "alice", "exp": datetime.now(timezone.utc) + timedelta(minutes=30)}
+    return jwt.encode(payload, "test-secret-at-least-32-bytes-long", algorithm="HS256")
+
+
+def _make_expired_token() -> str:
+    """A well-formed but already-expired JWT - used to confirm _token_is_valid() actually
+    checks expiry (regression: verify_signature=False silently disables verify_exp too,
+    unless it's explicitly re-enabled)."""
+    payload = {"sub": "alice", "exp": datetime.now(timezone.utc) - timedelta(minutes=5)}
+    return jwt.encode(payload, "test-secret-at-least-32-bytes-long", algorithm="HS256")
+
+
+def _make_soon_to_expire_token() -> str:
+    """A well-formed JWT that hasn't technically expired yet, but expires within
+    _token_is_valid()'s default 5-second margin - used to confirm the token is treated as
+    invalid well before it actually expires, not just at the exact expiry instant."""
+    payload = {"sub": "alice", "exp": datetime.now(timezone.utc) + timedelta(seconds=2)}
+    return jwt.encode(payload, "test-secret-at-least-32-bytes-long", algorithm="HS256")
+
+
+@pytest.fixture
+def auto_login_ok(monkeypatch):
+    """Makes any Remote.login() call succeed via a full /login round trip, without caring
+    about the two-tier refresh/login mechanics themselves (covered separately near
+    Remote.login()) - lets tests focus on what happens once a Remote is authenticated."""
+    monkeypatch.setattr(httpx2, "post", lambda **kwargs: _FakeResponse({"refresh_token": "r1", "access_token": "a1"}))
 
 
 @pytest.fixture
@@ -189,7 +223,7 @@ def test_remote_address_to_dict_round_trips():
 
     remote = RemoteAddress.from_dict(original)
 
-    assert remote.to_dict() == original | {"encrypted_pwd": ""}
+    assert remote.to_dict() == original | {"encrypted_pwd": "", "token": ""}
 
 
 @pytest.mark.unit
@@ -269,26 +303,128 @@ def test_remote_address_id_raises_if_any_value_blank(url, port, username):
 
 
 @pytest.mark.unit
-def test_remote_address_token_defaults_to_empty():
+def test_remote_address_tokens_default_to_empty():
     remote = RemoteAddress(url="http://a", port=8000, username="alice")
 
-    assert remote.token == ""
+    assert remote.access_token == ""
+    assert remote.refresh_token == ""
 
 
 @pytest.mark.unit
-def test_remote_address_token_is_excluded_from_to_dict():
-    """token is in-memory only, deliberately never persisted to Pytre_Remotes.json."""
+def test_remote_address_access_token_is_excluded_from_to_dict():
+    """access_token is in-memory only, deliberately never persisted to Pytre_Remotes.json -
+    only the refresh_token (as encrypted "token") is."""
     remote = RemoteAddress(url="http://a", port=8000, username="alice")
-    remote.token = "some-token"
+    remote.access_token = "some-access-token"
 
-    assert "token" not in remote.to_dict()
+    assert "access_token" not in remote.to_dict()
 
 
 @pytest.mark.unit
-def test_remote_address_from_dict_never_sets_token():
+def test_remote_address_to_dict_encrypts_refresh_token():
+    remote = RemoteAddress(url="http://a", port=8000, username="alice")
+    remote.refresh_token = "some-refresh-token"
+
+    assert remote.to_dict()["token"] != "some-refresh-token"
+    assert remote.to_dict()["token"] != ""
+
+
+@pytest.mark.unit
+def test_remote_address_from_dict_never_sets_access_token():
     remote = RemoteAddress.from_dict({"url": "http://a", "port": 8000, "username": "alice"})
 
-    assert remote.token == ""
+    assert remote.access_token == ""
+
+
+@pytest.mark.unit
+def test_remote_address_from_dict_decrypts_refresh_token_round_trip():
+    original = RemoteAddress(url="http://a", port=8000, username="alice")
+    original.refresh_token = "some-refresh-token"
+
+    rebuilt = RemoteAddress.from_dict(original.to_dict())
+
+    assert rebuilt.refresh_token == "some-refresh-token"
+
+
+# ================================================================================
+# RemoteAddress.refresh_token_is_valid / access_token_is_valid
+# ================================================================================
+
+
+@pytest.mark.unit
+def test_refresh_token_is_valid_false_when_empty():
+    remote = RemoteAddress(url="http://a", port=8000, username="alice")
+
+    assert remote.refresh_token_is_valid is False
+
+
+@pytest.mark.unit
+def test_refresh_token_is_valid_false_when_malformed():
+    remote = RemoteAddress(url="http://a", port=8000, username="alice")
+    remote.refresh_token = "not-a-real-token"
+
+    assert remote.refresh_token_is_valid is False
+
+
+@pytest.mark.unit
+def test_refresh_token_is_valid_true_for_a_well_formed_unexpired_token():
+    remote = RemoteAddress(url="http://a", port=8000, username="alice")
+    remote.refresh_token = _make_token()
+
+    assert remote.refresh_token_is_valid is True
+
+
+@pytest.mark.unit
+def test_refresh_token_is_valid_false_when_expired():
+    """Regression: jwt.decode(token, options={"verify_signature": False}) silently disables
+    expiry checking too unless verify_exp is explicitly re-enabled - a token past its exp
+    claim used to be reported as valid."""
+    remote = RemoteAddress(url="http://a", port=8000, username="alice")
+    remote.refresh_token = _make_expired_token()
+
+    assert remote.refresh_token_is_valid is False
+
+
+@pytest.mark.unit
+def test_refresh_token_is_valid_false_when_expiring_within_margin():
+    """A token that hasn't technically hit its exp claim yet, but expires soon enough that it
+    might not survive the round trip to the server, must still be treated as unusable - not
+    just tokens that are already fully expired."""
+    remote = RemoteAddress(url="http://a", port=8000, username="alice")
+    remote.refresh_token = _make_soon_to_expire_token()
+
+    assert remote.refresh_token_is_valid is False
+
+
+@pytest.mark.unit
+def test_access_token_is_valid_false_when_empty():
+    remote = RemoteAddress(url="http://a", port=8000, username="alice")
+
+    assert remote.access_token_is_valid is False
+
+
+@pytest.mark.unit
+def test_access_token_is_valid_true_for_a_well_formed_unexpired_token():
+    remote = RemoteAddress(url="http://a", port=8000, username="alice")
+    remote.access_token = _make_token()
+
+    assert remote.access_token_is_valid is True
+
+
+@pytest.mark.unit
+def test_access_token_is_valid_false_when_expired():
+    remote = RemoteAddress(url="http://a", port=8000, username="alice")
+    remote.access_token = _make_expired_token()
+
+    assert remote.access_token_is_valid is False
+
+
+@pytest.mark.unit
+def test_access_token_is_valid_false_when_expiring_within_margin():
+    remote = RemoteAddress(url="http://a", port=8000, username="alice")
+    remote.access_token = _make_soon_to_expire_token()
+
+    assert remote.access_token_is_valid is False
 
 
 # ================================================================================
@@ -297,13 +433,16 @@ def test_remote_address_from_dict_never_sets_token():
 
 
 @pytest.mark.unit
-def test_login_success_stores_token(address, remotes, monkeypatch):
-    monkeypatch.setattr(httpx2, "post", lambda **kwargs: _FakeResponse({"token": "abc123"}))
+def test_login_success_stores_both_tokens(address, remotes, monkeypatch):
+    """No refresh_token stored yet, so login() must go straight to a full /login and store
+    both the new refresh_token and access_token it returns."""
+    monkeypatch.setattr(httpx2, "post", lambda **kwargs: _FakeResponse({"refresh_token": "r1", "access_token": "a1"}))
 
     result = Remote(remotes, address).login()
 
     assert result is True
-    assert address.token == "abc123"
+    assert address.refresh_token == "r1"
+    assert address.access_token == "a1"
 
 
 @pytest.mark.unit
@@ -314,7 +453,7 @@ def test_login_sends_url_username_and_password(address, remotes, monkeypatch):
     def fake_post(url, json, timeout):
         captured["url"] = url
         captured["json"] = json
-        return _FakeResponse({"token": "abc123"})
+        return _FakeResponse({"refresh_token": "r1", "access_token": "a1"})
 
     monkeypatch.setattr(httpx2, "post", fake_post)
 
@@ -325,8 +464,74 @@ def test_login_sends_url_username_and_password(address, remotes, monkeypatch):
 
 
 @pytest.mark.unit
-def test_login_returns_false_and_clears_token_on_request_error(address, remotes, monkeypatch):
-    address.token = "stale-token"
+def test_login_uses_valid_refresh_token_and_skips_full_login(address, remotes, monkeypatch):
+    """The cheap path: a still-valid refresh_token gets a fresh access_token via /refresh,
+    without ever sending the username/password again."""
+    address.refresh_token = _make_token()
+    captured = {}
+
+    def fake_post(url, json, timeout):
+        captured["url"] = url
+        captured["json"] = json
+        return _FakeResponse({"access_token": "new-access"})
+
+    monkeypatch.setattr(httpx2, "post", fake_post)
+
+    result = Remote(remotes, address).login()
+
+    assert result is True
+    assert captured["url"] == "http://127.0.0.1:8000/refresh"
+    assert captured["json"] == {"refresh_token": address.refresh_token}
+    assert address.access_token == "new-access"
+
+
+@pytest.mark.unit
+def test_login_skips_refresh_call_when_refresh_token_is_expired(address, remotes, monkeypatch):
+    """Regression: an expired refresh_token used to be reported as valid (see
+    test_refresh_token_is_valid_false_when_expired) - login() would then waste a POST /refresh
+    round trip guaranteed to fail server-side before falling back to a full /login. It must
+    now go straight to /login."""
+    address.refresh_token = _make_expired_token()
+    address.password = "s3cret"
+    captured = {}
+
+    def fake_post(url, json, timeout):
+        captured["url"] = url
+        return _FakeResponse({"refresh_token": "new-refresh", "access_token": "new-access"})
+
+    monkeypatch.setattr(httpx2, "post", fake_post)
+
+    result = Remote(remotes, address).login()
+
+    assert result is True
+    assert captured["url"] == "http://127.0.0.1:8000/login"  # never called /refresh
+
+
+@pytest.mark.unit
+def test_login_falls_back_to_full_login_when_refresh_request_fails(address, remotes, monkeypatch):
+    """Regression: a valid-looking but server-rejected refresh_token must fall through to a
+    full username/password /login, not give up immediately (an early `return False` here was
+    a real bug found in review - it skipped this fallback entirely)."""
+    address.refresh_token = _make_token()
+    address.password = "s3cret"
+
+    def fake_post(url, json, timeout):
+        if url.endswith("/refresh"):
+            raise httpx2.ConnectError("boom")
+        return _FakeResponse({"refresh_token": "new-refresh", "access_token": "new-access"})
+
+    monkeypatch.setattr(httpx2, "post", fake_post)
+
+    result = Remote(remotes, address).login()
+
+    assert result is True
+    assert address.refresh_token == "new-refresh"
+    assert address.access_token == "new-access"
+
+
+@pytest.mark.unit
+def test_login_returns_false_and_clears_tokens_on_request_error(address, remotes, monkeypatch):
+    address.access_token = "stale-access-token"
 
     def fake_post(**kwargs):
         raise httpx2.ConnectError("boom")
@@ -336,19 +541,21 @@ def test_login_returns_false_and_clears_token_on_request_error(address, remotes,
     result = Remote(remotes, address).login()
 
     assert result is False
-    assert address.token == ""
+    assert address.access_token == ""
+    assert address.refresh_token == ""
 
 
 @pytest.mark.unit
-def test_login_returns_false_and_clears_token_on_http_status_error(address, remotes, monkeypatch):
-    address.token = "stale-token"
+def test_login_returns_false_and_clears_tokens_on_http_status_error(address, remotes, monkeypatch):
+    address.access_token = "stale-access-token"
     error = httpx2.HTTPStatusError("401", request=None, response=None)  # type: ignore
     monkeypatch.setattr(httpx2, "post", lambda **kwargs: _FakeResponse(status_error=error))
 
     result = Remote(remotes, address).login()
 
     assert result is False
-    assert address.token == ""
+    assert address.access_token == ""
+    assert address.refresh_token == ""
 
 
 @pytest.mark.unit
@@ -357,7 +564,6 @@ def test_login_refuses_plain_http_to_a_non_local_remote(address, remotes, monkey
     expose it in cleartext on the network - login() must refuse before ever attempting the
     request, not just log a warning after the fact."""
     address.url = "http://example.com"
-    address.token = "stale-token"
 
     def fake_post(**kwargs):
         pytest.fail("httpx2.post should not be called")
@@ -367,24 +573,24 @@ def test_login_refuses_plain_http_to_a_non_local_remote(address, remotes, monkey
     result = Remote(remotes, address).login()
 
     assert result is False
-    assert address.token == ""
 
 
 @pytest.mark.unit
 def test_login_allows_https_to_a_non_local_remote(address, remotes, monkeypatch):
     address.url = "https://example.com"
-    monkeypatch.setattr(httpx2, "post", lambda **kwargs: _FakeResponse({"token": "abc123"}))
+    monkeypatch.setattr(httpx2, "post", lambda **kwargs: _FakeResponse({"refresh_token": "r1", "access_token": "a1"}))
 
     result = Remote(remotes, address).login()
 
     assert result is True
-    assert address.token == "abc123"
+    assert address.refresh_token == "r1"
+    assert address.access_token == "a1"
 
 
 @pytest.mark.unit
 def test_login_allows_plain_http_to_localhost(address, remotes, monkeypatch):
     address.url = "http://localhost"
-    monkeypatch.setattr(httpx2, "post", lambda **kwargs: _FakeResponse({"token": "abc123"}))
+    monkeypatch.setattr(httpx2, "post", lambda **kwargs: _FakeResponse({"refresh_token": "r1", "access_token": "a1"}))
 
     result = Remote(remotes, address).login()
 
@@ -396,7 +602,7 @@ def test_login_allows_plain_http_to_a_private_network_address(address, remotes, 
     """Not just localhost/127.0.0.1 - any RFC 1918 private-network address is exempt, since
     Pytre_Server is expected to run on an internal network, not just on the same machine."""
     address.url = "http://192.168.1.10"
-    monkeypatch.setattr(httpx2, "post", lambda **kwargs: _FakeResponse({"token": "abc123"}))
+    monkeypatch.setattr(httpx2, "post", lambda **kwargs: _FakeResponse({"refresh_token": "r1", "access_token": "a1"}))
 
     result = Remote(remotes, address).login()
 
@@ -424,7 +630,7 @@ def test_login_refuses_plain_http_to_a_public_ip(address, remotes, monkeypatch):
 
 @pytest.mark.unit
 def test_auth_headers_includes_bearer_token(address, remotes):
-    address.token = "abc123"
+    address.access_token = "abc123"
 
     assert Remote(remotes, address).auth_headers == {"Authorization": "Bearer abc123"}
 
@@ -447,6 +653,9 @@ def test_auth_headers_with_no_token_omits_authorization_header(address, remotes)
 
 @pytest.mark.unit
 def test_get_authenticated_returns_response_without_retry_on_success(address, remotes, monkeypatch):
+    """A valid access_token already in hand: get_authenticated() does exactly one GET, no
+    login, no retry."""
+    address.access_token = _make_token()
     calls = []
 
     def fake_get(**kwargs):
@@ -463,7 +672,7 @@ def test_get_authenticated_returns_response_without_retry_on_success(address, re
 
 @pytest.mark.unit
 def test_get_authenticated_sends_bearer_header_and_params(address, remotes, monkeypatch):
-    address.token = "abc123"
+    address.access_token = _make_token()
     captured = {}
 
     def fake_get(url, params, headers, timeout):
@@ -478,36 +687,41 @@ def test_get_authenticated_sends_bearer_header_and_params(address, remotes, monk
 
     assert captured["url"] == "http://example.com:8000/queries"
     assert captured["params"] == {"server_id": "s1"}
-    assert captured["headers"] == {"Authorization": "Bearer abc123"}
+    assert captured["headers"] == {"Authorization": f"Bearer {address.access_token}"}
 
 
 @pytest.mark.unit
-def test_get_authenticated_sends_no_header_when_token_is_missing(address, remotes, monkeypatch):
-    """Regression: the very first call, before any token has ever been obtained, must not
-    send `Authorization: Bearer ` - httpx2/h11 rejects that as an illegal header value."""
-    captured = {}
+def test_get_authenticated_logs_in_first_when_no_valid_token_yet(address, remotes, monkeypatch, auto_login_ok):
+    """Regression: the very first call, before any access_token has ever been obtained, must
+    not attempt a GET with an empty/invalid Bearer header - get_authenticated() must log in
+    first and only then GET, with the freshly obtained token."""
+    get_calls = []
 
     def fake_get(url, params, headers, timeout):
-        captured["headers"] = headers
-        return _FakeResponse(status_code=200)
+        get_calls.append(headers)
+        return _FakeResponse({"ok": True}, status_code=200)
 
     monkeypatch.setattr(httpx2, "get", fake_get)
 
     Remote(remotes, address).get_authenticated("http://example.com:8000/servers")
 
-    assert captured["headers"] == {}
+    assert len(get_calls) == 1
+    assert get_calls[0] == {"Authorization": "Bearer a1"}
 
 
 @pytest.mark.unit
 def test_get_authenticated_relogs_in_and_retries_once_on_401(address, remotes, monkeypatch):
+    address.access_token = _make_token()
     get_responses = iter([_FakeResponse(status_code=401), _FakeResponse({"ok": True}, status_code=200)])
     monkeypatch.setattr(httpx2, "get", lambda **kwargs: next(get_responses))
-    monkeypatch.setattr(httpx2, "post", lambda **kwargs: _FakeResponse({"token": "new-token"}))
+    monkeypatch.setattr(
+        httpx2, "post", lambda **kwargs: _FakeResponse({"refresh_token": "r1", "access_token": "new-token"})
+    )
 
     response = Remote(remotes, address).get_authenticated("http://example.com:8000/servers")
 
     assert response.json() == {"ok": True}
-    assert address.token == "new-token"
+    assert address.access_token == "new-token"
 
 
 @pytest.mark.unit
@@ -529,7 +743,7 @@ def test_get_authenticated_raises_request_error_if_login_fails_after_401(address
 
 
 @pytest.mark.unit
-def test_refresh_servers_populates_servers_on_success(address, remotes, monkeypatch):
+def test_refresh_servers_populates_servers_on_success(address, remotes, monkeypatch, auto_login_ok):
     servers_data = [{"id": "s1", "description": "Server 1"}, {"id": "s2", "description": "Server 2"}]
     monkeypatch.setattr(httpx2, "get", lambda **kwargs: _FakeResponse(servers_data, status_code=200))
 
@@ -544,7 +758,7 @@ def test_refresh_servers_populates_servers_on_success(address, remotes, monkeypa
 
 @pytest.mark.unit
 def test_refresh_servers_sends_correct_url_and_auth_header(address, remotes, monkeypatch):
-    address.token = "abc123"
+    address.access_token = _make_token()
     captured = {}
 
     def fake_get(url, params, headers, timeout):
@@ -557,7 +771,7 @@ def test_refresh_servers_sends_correct_url_and_auth_header(address, remotes, mon
     Remote(remotes, address=address).refresh_servers()
 
     assert captured["url"] == "http://127.0.0.1:8000/servers"
-    assert captured["headers"] == {"Authorization": "Bearer abc123"}
+    assert captured["headers"] == {"Authorization": f"Bearer {address.access_token}"}
 
 
 @pytest.mark.unit
@@ -592,7 +806,7 @@ def test_refresh_servers_keeps_previous_list_on_http_status_error(address, remot
 
 
 @pytest.mark.unit
-def test_refresh_servers_success_clears_last_error(address, remotes, monkeypatch):
+def test_refresh_servers_success_clears_last_error(address, remotes, monkeypatch, auto_login_ok):
     remote = Remote(remotes, address=address)
     remote.last_error = "previous failure"
 
@@ -614,7 +828,7 @@ def remote_server(address, remotes) -> RemoteServer:
 
 
 @pytest.mark.unit
-def test_get_serialized_queries_populates_on_success(remote_server, monkeypatch):
+def test_get_serialized_queries_populates_on_success(remote_server, monkeypatch, auto_login_ok):
     queries_data = [{"name": "Q1"}, {"name": "Q2"}]
     monkeypatch.setattr(httpx2, "get", lambda **kwargs: _FakeResponse(queries_data, status_code=200))
 
@@ -627,7 +841,7 @@ def test_get_serialized_queries_populates_on_success(remote_server, monkeypatch)
 
 @pytest.mark.unit
 def test_get_serialized_queries_sends_server_id_and_auth_header(remote_server, monkeypatch):
-    remote_server.address.token = "abc123"
+    remote_server.address.access_token = _make_token()
     captured = {}
 
     def fake_get(url, params, headers, timeout):
@@ -642,7 +856,7 @@ def test_get_serialized_queries_sends_server_id_and_auth_header(remote_server, m
 
     assert captured["url"] == "http://127.0.0.1:8000/queries"
     assert captured["params"] == {"server_id": "SRV1"}
-    assert captured["headers"] == {"Authorization": "Bearer abc123"}
+    assert captured["headers"] == {"Authorization": f"Bearer {remote_server.address.access_token}"}
 
 
 @pytest.mark.unit
@@ -686,7 +900,7 @@ def test_remote_init_does_not_call_http_when_load_is_false(address, remotes, mon
 
 
 @pytest.mark.unit
-def test_remote_init_with_load_true_fetches_servers(address, remotes, monkeypatch):
+def test_remote_init_with_load_true_fetches_servers(address, remotes, monkeypatch, auto_login_ok):
     monkeypatch.setattr(
         httpx2, "get", lambda **kwargs: _FakeResponse([{"id": "s1", "description": "Server 1"}], status_code=200)
     )
@@ -761,9 +975,9 @@ def test_remotes_init_does_not_fetch_servers(monkeypatch, remotes_file):
 
 
 @pytest.mark.unit
-def test_get_all_servers_reload_refreshes_every_remote_and_merges_them(monkeypatch, remotes_file):
-    addr1 = RemoteAddress(url="http://a", port=8000, username="alice")
-    addr2 = RemoteAddress(url="http://b", port=8001, username="bob")
+def test_get_all_servers_reload_refreshes_every_remote_and_merges_them(monkeypatch, remotes_file, auto_login_ok):
+    addr1 = RemoteAddress(url="http://127.0.0.1", port=8000, username="alice")
+    addr2 = RemoteAddress(url="http://127.0.0.1", port=8001, username="bob")
     _write_remotes_file(remotes_file, [addr1, addr2])
     monkeypatch.setattr(httpx2, "get", lambda **kwargs: _FakeResponse([{"id": "s1", "description": "Server 1"}]))
 
@@ -775,10 +989,10 @@ def test_get_all_servers_reload_refreshes_every_remote_and_merges_them(monkeypat
 
 
 @pytest.mark.unit
-def test_get_all_servers_without_reload_assembles_from_current_state(monkeypatch, remotes_file):
+def test_get_all_servers_without_reload_assembles_from_current_state(monkeypatch, remotes_file, auto_login_ok):
     """No network call: assembles servers_dict from whatever each remote already holds in
     memory, rather than returning a possibly-empty separately-tracked cache."""
-    addr = RemoteAddress(url="http://a", port=8000, username="alice")
+    addr = RemoteAddress(url="http://127.0.0.1", port=8000, username="alice")
     _write_remotes_file(remotes_file, [addr])
     monkeypatch.setattr(httpx2, "get", lambda **kwargs: _FakeResponse([{"id": "s1", "description": "Server 1"}]))
     remotes = Remotes(remotes_file)
@@ -1099,7 +1313,7 @@ def test_remote_server_address_property_delegates_to_remote(address, remotes):
 
 @pytest.mark.unit
 def test_remote_server_auth_headers_delegates_to_remote(address, remotes):
-    address.token = "abc123"
+    address.access_token = "abc123"
     remote = Remote(remotes, address)
     server = RemoteServer(id="SRV1", description="Server 1", remote=remote)
 
@@ -1381,13 +1595,15 @@ def test_execute_relogs_in_and_retries_once_on_401(remote_server, monkeypatch):
         ]
     )
     monkeypatch.setattr(httpx2, "stream", lambda *a, **k: next(stream_contexts))
-    monkeypatch.setattr(httpx2, "post", lambda **kwargs: _FakeResponse({"token": "new-token"}))
+    monkeypatch.setattr(
+        httpx2, "post", lambda **kwargs: _FakeResponse({"refresh_token": "r1", "access_token": "new-token"})
+    )
 
     with remote_server.execute("Q1", "hash1", {}) as rows:
         result = list(rows)
 
     assert result == [("1",)]
-    assert remote_server.address.token == "new-token"
+    assert remote_server.address.access_token == "new-token"
 
 
 @pytest.mark.unit
@@ -1403,7 +1619,9 @@ def test_execute_raises_http_status_error_if_still_401_after_relogin(remote_serv
         ]
     )
     monkeypatch.setattr(httpx2, "stream", lambda *a, **k: next(stream_contexts))
-    monkeypatch.setattr(httpx2, "post", lambda **kwargs: _FakeResponse({"token": "new-token"}))
+    monkeypatch.setattr(
+        httpx2, "post", lambda **kwargs: _FakeResponse({"refresh_token": "r1", "access_token": "new-token"})
+    )
 
     with pytest.raises(httpx2.HTTPStatusError):
         with remote_server.execute("Q1", "hash1", {}):

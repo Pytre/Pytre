@@ -124,6 +124,7 @@ def test_csv_import_uses_generator_for_search(tmp_path, mock_kee):
     existing_entry.tags = []
     existing_entry.custom_properties = []
     existing_entry.set_custom_property = Mock()
+    existing_entry.get_custom_property = Mock(return_value=None)
 
     mock_kee.grp_servers.entries = [existing_entry]
 
@@ -245,6 +246,65 @@ def test_csv_import_creates_new_entries(tmp_path, mock_kee):
     # Verify: Entry properties were set
     assert new_entry.title == "NEW_SERVER"
     assert new_entry.username == "admin"
+
+
+@pytest.mark.unit
+def test_csv_import_preserves_password_when_column_blank(tmp_path, mock_kee):
+    """Regression: csv_import() used to unconditionally overwrite the password from the CSV row,
+    so re-importing an existing server with a blank password column silently blanked out a real,
+    already-configured password - mirrors the same fix already applied to Remotes/Users csv_import."""
+    existing_entry = Mock()
+    existing_entry.title = "EXISTING_SERVER"
+    existing_entry.username = "admin"
+    existing_entry.password = "old_secret"
+    existing_entry.notes = ""
+    existing_entry.tags = []
+    existing_entry.get_custom_property = Mock(return_value=None)
+    existing_entry.set_custom_property = Mock()
+    mock_kee.grp_servers.entries = [existing_entry]
+
+    servers = Servers(mock_kee)
+
+    csv_file = tmp_path / "update.csv"
+    headers = [
+        "id",
+        "description",
+        "user",
+        "password",
+        "grp_authorized",
+        "type",
+        "charset",
+        "database",
+        "host",
+        "port",
+        "server",
+        "login_timeout",
+        "timeout",
+    ]
+    row = [
+        "EXISTING_SERVER",
+        "Updated description",
+        "admin",
+        "",  # blank password column - existing password must be preserved
+        "",
+        "MSSQL",
+        "utf8",
+        "db",
+        "host",
+        "1433",
+        "srv",
+        "5",
+        "30",
+    ]
+
+    with open(csv_file, "w", encoding="latin-1", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=headers, delimiter=";")
+        writer.writeheader()
+        writer.writerow(dict(zip(headers, row)))
+
+    servers.csv_import(csv_file)
+
+    assert existing_entry.password == "old_secret"
 
 
 @pytest.mark.unit
@@ -442,6 +502,7 @@ def test_get_all_servers_returns_dict(mock_kee):
     entry1.notes = "Server 1"
     entry1.tags = ["admin"]
     entry1.custom_properties = []
+    entry1.get_custom_property = Mock(return_value=None)
 
     entry2 = Mock()
     entry2.uuid = "uuid-2"
@@ -451,6 +512,7 @@ def test_get_all_servers_returns_dict(mock_kee):
     entry2.notes = "Server 2"
     entry2.tags = ["users"]
     entry2.custom_properties = []
+    entry2.get_custom_property = Mock(return_value=None)
 
     mock_kee.grp_servers.entries = [entry1, entry2]
 
@@ -476,6 +538,7 @@ def test_get_all_servers_with_group_filter(mock_kee):
     entry1.notes = "Server 1"
     entry1.tags = ["admin"]
     entry1.custom_properties = []
+    entry1.get_custom_property = Mock(return_value=None)
 
     entry2 = Mock()
     entry2.uuid = "uuid-2"
@@ -485,6 +548,7 @@ def test_get_all_servers_with_group_filter(mock_kee):
     entry2.notes = "Server 2"
     entry2.tags = ["users"]
     entry2.custom_properties = []
+    entry2.get_custom_property = Mock(return_value=None)
 
     mock_kee.grp_servers.entries = [entry1, entry2]
 
@@ -504,8 +568,10 @@ def test_get_all_servers_caches_filtered_result_on_attribute(mock_kee):
     the return value of get_all_servers()."""
     entry1 = Mock(uuid="uuid-1", title="SERVER1", username="u1", password="p1", notes="", tags=["admin"])
     entry1.custom_properties = []
+    entry1.get_custom_property = Mock(return_value=None)
     entry2 = Mock(uuid="uuid-2", title="SERVER2", username="u2", password="p2", notes="", tags=["users"])
     entry2.custom_properties = []
+    entry2.get_custom_property = Mock(return_value=None)
     mock_kee.grp_servers.entries = [entry1, entry2]
 
     servers = Servers(mock_kee)
@@ -520,8 +586,10 @@ def test_get_all_servers_without_filter_keeps_full_list_on_attribute(mock_kee):
     this is what Pytre_Server relies on to keep its shared instance always unfiltered."""
     entry1 = Mock(uuid="uuid-1", title="SERVER1", username="u1", password="p1", notes="", tags=["admin"])
     entry1.custom_properties = []
+    entry1.get_custom_property = Mock(return_value=None)
     entry2 = Mock(uuid="uuid-2", title="SERVER2", username="u2", password="p2", notes="", tags=["users"])
     entry2.custom_properties = []
+    entry2.get_custom_property = Mock(return_value=None)
     mock_kee.grp_servers.entries = [entry1, entry2]
 
     servers = Servers(mock_kee)
@@ -601,11 +669,13 @@ def test_get_all_groups_returns_set(mock_kee):
     entry1.uuid = "uuid-1"
     entry1.tags = ["admin", "users"]
     entry1.custom_properties = []
+    entry1.get_custom_property = Mock(return_value=None)
 
     entry2 = Mock()
     entry2.uuid = "uuid-2"
     entry2.tags = ["power-users"]
     entry2.custom_properties = []
+    entry2.get_custom_property = Mock(return_value=None)
 
     mock_kee.grp_servers.entries = [entry1, entry2]
     mock_kee.grp_users.entries = []
@@ -627,6 +697,7 @@ def test_get_all_groups_handles_empty_tags(mock_kee):
     entry.uuid = "uuid-1"
     entry.tags = None
     entry.custom_properties = []
+    entry.get_custom_property = Mock(return_value=None)
 
     mock_kee.grp_servers.entries = [entry]
     mock_kee.grp_users.entries = []
@@ -931,6 +1002,7 @@ def test_server_reload_updates_from_entry(mock_kee):
     entry.password = "pwd"
     entry.tags = []
     entry.custom_properties = []
+    entry.get_custom_property = Mock(return_value=None)
 
     server = Server(servers)
     server.uuid = "12345678-1234-1234-1234-123456789012"
@@ -984,6 +1056,7 @@ def test_server_save_rejects_duplicate_id(mock_kee):
     existing_entry.password = ""
     existing_entry.tags = []
     existing_entry.custom_properties = []
+    existing_entry.get_custom_property = Mock(return_value=None)
     mock_kee.grp_servers.entries = [existing_entry]
 
     servers = Servers(mock_kee)
@@ -1176,7 +1249,7 @@ def test_load_from_entry_parses_custom_properties(mock_kee):
     entry.custom_properties = ["charset", "login_timeout", "timeout", "database"]
 
     def get_prop(name):
-        return {"charset": "utf8", "login_timeout": "5", "timeout": "30", "database": "mydb"}[name]
+        return {"charset": "utf8", "login_timeout": "5", "timeout": "30", "database": "mydb"}.get(name)
 
     entry.get_custom_property = Mock(side_effect=get_prop)
 
@@ -1221,7 +1294,7 @@ def test_load_from_entry_defaults_charset_for_mssql(mock_kee):
     entry.notes = ""
     entry.tags = []
     entry.custom_properties = ["type"]
-    entry.get_custom_property = Mock(return_value="mssql")
+    entry.get_custom_property = Mock(side_effect=lambda key: "mssql" if key == "type" else None)
 
     mock_kee.grp_servers.entries = [entry]
     servers = Servers(mock_kee)
@@ -1241,7 +1314,7 @@ def test_load_from_entry_defaults_charset_for_postgre(mock_kee):
     entry.notes = ""
     entry.tags = []
     entry.custom_properties = ["type"]
-    entry.get_custom_property = Mock(return_value="postgre")
+    entry.get_custom_property = Mock(side_effect=lambda key: "postgre" if key == "type" else None)
 
     mock_kee.grp_servers.entries = [entry]
     servers = Servers(mock_kee)

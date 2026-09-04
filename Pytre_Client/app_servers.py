@@ -2,6 +2,7 @@ import tkinter as tk
 from dataclasses import dataclass
 from tkinter import ttk, Event, filedialog, messagebox
 from collections.abc import Iterator
+from typing import cast
 
 from Pytre_Core import utils
 from Pytre_Core.kee import Kee
@@ -16,9 +17,10 @@ from Pytre_Client.ui_utils_csv import CsvTaskConfig, csv_process_async
 
 @dataclass(frozen=True)
 class WidgetGroup:
+    caption: str
     w_label: ttk.Label
     w_entry: ttk.Widget
-    var: tk.StringVar
+    var: tk.Variable
 
 
 class ServersWindow(tk.Toplevel):
@@ -136,7 +138,7 @@ class ServersWindow(tk.Toplevel):
         self.tree_frame.columnconfigure(0, weight=1)
 
     def _setup_type(self):
-        my_label = ttk.Label(self.entries_frame, text="type : ")
+        my_label = ttk.Label(self.entries_frame, text="Type : ")
         self.type_box = ttk.Combobox(self.entries_frame, state="readonly", values=self.type_server)
         if len(self.type_server) <= 1:
             self.type_box["state"] = "disable"
@@ -145,26 +147,39 @@ class ServersWindow(tk.Toplevel):
         self.type_box.grid(row=0, column=1, columnspan=2, padx=2, pady=2, sticky="nswe")
 
     def _setup_entries(self):
+        entries_caption: dict[str, str] = {
+            "id": "Id",
+            "description": "Libellé",
+            "user": "Login",
+            "password": "Mot de passe",
+            "charset": "Charset",
+            "database": "Database",
+            "host": "Host",
+            "port": "Port",
+            "server": "Server",
+            "login_timeout": "Login Timeout",
+            "timeout": "Timeout",
+        }
+
         self.entries: dict[str, WidgetGroup] = {}
         num_row = 1
-        for key in self.servers.cols_std + self.servers.cols_cust:
-            if key in ("uuid", "type", "grp_authorized"):
-                continue
-
-            my_label = ttk.Label(self.entries_frame, text=key + " : ")
+        for key, caption in entries_caption.items():
+            my_label = ttk.Label(self.entries_frame, text=caption + " : ")
             my_tk_var = tk.StringVar()
             my_entry = ttk.Entry(self.entries_frame, textvariable=my_tk_var)
 
-            self.entries[key] = WidgetGroup(w_label=my_label, w_entry=my_entry, var=my_tk_var)
+            self.entries[key] = WidgetGroup(caption=caption, w_label=my_label, w_entry=my_entry, var=my_tk_var)
 
             my_label.grid(row=num_row, column=0, padx=2, pady=2, sticky="nswe")
 
-            if key == "password":
-                my_entry["width"] = 40
-                my_entry.grid(row=num_row, column=1, padx=2, pady=2, sticky="nswe")
+            if key == "password" and isinstance(my_entry, ttk.Entry):
+                my_entry.configure(width=40)
+                # create a toggle show password button
                 reveal_button = ttk.Button(self.entries_frame, width=8)
                 reveal_button.config(command=lambda wc=reveal_button, wt=my_entry: self.toggle_password(wc, wt))
                 self.toggle_password(reveal_button, my_entry)
+                # grid entry and reveal button on the same row
+                my_entry.grid(row=num_row, column=1, columnspan=1, padx=2, pady=2, sticky="nswe")
                 reveal_button.grid(row=num_row, column=2, padx=2, pady=2, sticky="nswe")
             else:
                 my_entry.grid(row=num_row, column=1, columnspan=2, padx=2, pady=2, sticky="nswe")

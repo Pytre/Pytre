@@ -27,7 +27,7 @@ def mock_kee():
     mock.db = Mock()
     mock.db.find_entries = Mock(return_value=None)
     mock.grp_settings = Mock()
-    mock._open_db = Mock(return_value=True)
+    mock.open_db = Mock(return_value=True)
     mock.save_db = Mock()
     return mock
 

@@ -1,10 +1,10 @@
 import logging
+from enum import Enum
 from pathlib import Path
 from typing import cast
 
 from pykeepass import PyKeePass
 from pykeepass.exceptions import CredentialsError
-from pykeepass.entry import Entry
 from pykeepass.group import Group
 
 from Pytre_Core.utils import get_app_path, log as _log
@@ -16,6 +16,12 @@ BLANK_FILE: str = "res/blank.db"  # relative path for blank db
 BLANK_PWD: str = "password"  # password for blank db
 
 
+class KeeGroup(Enum):
+    SETTINGS = "Paramètres"
+    SERVERS = "Serveurs"
+    USERS = "Utilisateurs"
+
+
 def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__) -> None:
     _log(msg, level=level, sublogger=sublogger)
 
@@ -23,40 +29,36 @@ def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__)
 class Kee:
     def __init__(self, password: str = ""):
         """`password` also serve, instead of `BLANK_PWD`, to set a new base if it's needed"""
-        self._init_pwd: str = password or BLANK_PWD  # will be used to create db if it doesn't exists
+        self._init_password: str = password or BLANK_PWD  # will be used to create db if it doesn't exists
 
         self.file: str | Path = KEE_FILE
-        self.pwd: str = password
+        self.password: str = password
         self.db: PyKeePass | None = None
         self.is_open: bool = False
         self.is_ko: bool = False
         self.access_count: int = 0
 
-        self.grp_name_settings: str = "Paramètres"
         self.grp_settings: Group | None = None
-        self.grp_name_servers: str = "Serveurs"
         self.grp_servers: Group | None = None
-        self.grp_name_users: str = "Utilisateurs"
         self.grp_users: Group | None = None
 
-        if not self.pwd:
-            self.pwd = self.pwd_get()
+        if not self.password:
+            self.password = self.pwd_get()
         if not self.is_open and not self.is_ko:
-            self._open_db()
+            self.open_db()
 
-    def _open_db(self, reload: bool = False):
-        """A utiliser uniquement par la méthode open_db des classes User, Server et Settings"""
+    def open_db(self, reload: bool = False):
         if not self.is_open:
             try:
-                self.db = PyKeePass(self.file, password=self.pwd)
+                self.db = PyKeePass(self.file, password=self.password)
             except FileNotFoundError:
-                log(f"Base des paramètres introuvable : '{self.file}'", logging.WARNING)
-                self.create_db(password=self._init_pwd)
-            except CredentialsError:  # si erreur mot de passe, tentative avec les précédents
+                log(f"Settings database not found: '{self.file}'", logging.WARNING)
+                self.create_db(password=self._init_password)
+            except CredentialsError:  # when password is invalid retry with previous passwords
                 self.is_ko = True
                 db_unlocked = self.pwd_try()
                 if not db_unlocked:
-                    log("Accès base des paramètres impossible : mot de passe invalide.", logging.ERROR)
+                    log("Failed to access settings database: invalid password.", logging.ERROR)
                     return
 
             self.is_open = True
@@ -67,65 +69,32 @@ class Kee:
             self.access_count += 1
             log(f"Database reloaded, access count : {self.access_count}", logging.DEBUG)
 
-        assert self.db is not None
-        self.grp_settings = cast(Group | None, self.db.find_groups(name=self.grp_name_settings, first=True))
-        self.grp_servers = cast(Group | None, self.db.find_groups(name=self.grp_name_servers, first=True))
-        self.grp_users = cast(Group | None, self.db.find_groups(name=self.grp_name_users, first=True))
+        self.grp_settings = self._get_group(KeeGroup.SETTINGS.value)
+        self.grp_servers = self._get_group(KeeGroup.SERVERS.value)
+        self.grp_users = self._get_group(KeeGroup.USERS.value)
 
     def save_db(self):
         if self.db is None:
-            raise RuntimeError("Base non ouverte, impossible de sauvegarder")
+            raise RuntimeError("Can't save a closed database.")
 
         try:
             self.db.save()
         except PermissionError:
-            msg = (
-                "Vous n'avez les droits d'accès à la base des paramètres !\n"
-                + "Vos modifications n'ont pas pu être enregistées.\n\n"
-                + "Merci d'alerter les administateurs."
-            )
+            msg = "Failed to save settings database."
             log(msg, logging.ERROR)
 
     def create_db(self, password: str = BLANK_PWD):
         self.is_ko = True
 
-        log("Création d'une nouvelle base en cours...")
+        log("Creating new settings database...")
 
         self.db = PyKeePass(get_app_path() / BLANK_FILE, password=BLANK_PWD)
         self.db.filename = self.file
         self.pwd_change(password, True)
-        self._create_db_set_default()
 
-        log("Nouvelle base créée ! Mettez à jour les paramètres et changer le mot de passe à l'aide du menu admin.")
+        log("New settings database created. Update parameters and change its password via admin menu.")
 
         self.is_ko = False
-
-    def _create_db_set_default(self, queries_folder: str = "./queries"):
-        assert self.db is not None and isinstance(self.db.root_group, Group)
-        self.db.root_group.name = "settings"
-
-        grps: dict[str, Group | None] = {"Paramètres": None, "Serveurs": None, "Utilisateurs": None}
-        for grp in grps.keys():
-            grps[grp] = self.db.add_group(self.db.root_group, grp)
-
-        Path(queries_folder).mkdir(parents=True, exist_ok=True)
-
-        params = {
-            "DATE_FORMAT": "%d/%m/%Y",
-            "DECIMAL_SEPARATOR": ",",
-            "FIELD_SEPARATOR": ";",
-            "QUERIES_FOLDER": queries_folder,
-            "SETTINGS_VERSION": "2",
-        }
-        for k, v in params.items():
-            self.db.add_entry(grps["Paramètres"], title=k, username=v, password="")
-
-        server_cfg = ["charset", "database", "host", "login_timeout", "port", "server", "timeout"]
-        s_entry: Entry = self.db.add_entry(grps["Serveurs"], title="Default", username="", password="")
-        for item in server_cfg:
-            s_entry.set_custom_property(item, "")
-
-        self.save_db()
 
     def pwd_try(self, pwds_list: list[str] | None = None) -> bool:
         if not pwds_list:
@@ -136,7 +105,7 @@ class Kee:
                 self.db = PyKeePass(self.file, password=pwd)
                 self.pwd_change(pwd, True)
                 self.is_ko = False
-                log("Accès à la base restauré")
+                log("Database access restored.")
                 return True
             except CredentialsError:
                 pass
@@ -151,16 +120,31 @@ class Kee:
         history = crypted_file_pwd_history()
         return history
 
-    def pwd_change(self, new_pwd: str, force_save: bool = False):
-        if self.db is None:
-            raise RuntimeError("Changement du mot de passe impossible si base non ouverte")
+    def pwd_change(self, new_password: str, force_save: bool = False):
+        """With `force_save` set to True, the database will always be saved
+        regardless if the password actually changed or not."""
 
-        if new_pwd == self.pwd:
+        if self.db is None:
+            raise RuntimeError("Failed to change the password. Settings database not open.")
+
+        if not force_save and new_password == self.password:
             return
 
-        self.pwd = new_pwd
-        self.db.password = new_pwd
-        crypted_file_pwd_change(new_pwd)
+        self.password = new_password
+        self.db.password = new_password
+        crypted_file_pwd_change(new_password)
 
         if force_save:
             self.save_db()
+
+    def _get_group(self, name: str) -> Group:
+        """Return database group. If it doesn't exist it will be created."""
+
+        if self.db is None:
+            raise ValueError("Can't retrieve a group without an opened database.")
+
+        group = cast(Group | None, self.db.find_groups(name=name, first=True))
+        if not group:
+            group = self.db.add_group(self.db.root_group, name)
+
+        return group

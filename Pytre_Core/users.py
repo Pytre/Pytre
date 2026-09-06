@@ -95,7 +95,7 @@ class Users:
         self.get_all_groups()
 
     def open_db(self, reload: bool = False) -> bool:
-        self.kee._open_db(reload)
+        self.kee.open_db(reload)
         if self.kee.is_ko:
             return False
         self.kee_grp = self.kee.grp_users

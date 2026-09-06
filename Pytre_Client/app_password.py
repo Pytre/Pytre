@@ -22,7 +22,7 @@ class PasswordWindow(tk.Toplevel):
             self.transient(self.parent)
 
         self.kee: Kee = kee
-        self.kee._open_db(True)
+        self.kee.open_db(True)
         self.history: list[str] = self.kee.pwd_history()
 
         set_theme(self)

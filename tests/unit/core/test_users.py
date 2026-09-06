@@ -55,7 +55,7 @@ def mock_kee():
     mock.grp_users.entries = []
     mock.grp_servers = Mock()
     mock.grp_servers.entries = []
-    mock._open_db = Mock(return_value=True)
+    mock.open_db = Mock(return_value=True)
     mock.save_db = Mock()
     return mock
 
@@ -1164,19 +1164,19 @@ def test_user_save_reloads_before_a_standalone_save(mock_kee):
     new_entry = Mock()
     new_entry.uuid = "new-uuid"
     mock_kee.db.add_entry = Mock(return_value=new_entry)
-    mock_kee._open_db.reset_mock()
+    mock_kee.open_db.reset_mock()
 
     user.save(save_db=True)
 
     # save() also calls get_all_groups(reload=False) at the end, so check the *first* call -
     # the one save() itself makes before doing anything else
-    assert mock_kee._open_db.call_args_list[0] == call(True)
+    assert mock_kee.open_db.call_args_list[0] == call(True)
 
 
 @pytest.mark.unit
 def test_user_save_does_not_reload_during_a_batched_save(mock_kee):
     """Regression: save(save_db=False) - used by users_add_groups()/users_remove_groups() to
-    batch several users' changes before one final save_db() - must NOT reload. Kee._open_db(True)
+    batch several users' changes before one final save_db() - must NOT reload. Kee.open_db(True)
     calls db.reload(), which discards any sibling user's still-uncommitted change made earlier
     in the same batch - exactly the bug found via a real multi-user integration test (Mocks
     can't reproduce reload()'s destructive effect, which is why this needs pinning explicitly)."""
@@ -1187,11 +1187,11 @@ def test_user_save_does_not_reload_during_a_batched_save(mock_kee):
     new_entry = Mock()
     new_entry.uuid = "new-uuid"
     mock_kee.db.add_entry = Mock(return_value=new_entry)
-    mock_kee._open_db.reset_mock()
+    mock_kee.open_db.reset_mock()
 
     user.save(save_db=False)
 
-    assert mock_kee._open_db.call_args_list[0] == call(False)
+    assert mock_kee.open_db.call_args_list[0] == call(False)
 
 
 @pytest.mark.unit

@@ -29,7 +29,7 @@ def mock_kee():
     mock.grp_servers.entries = []
     mock.grp_users = Mock()
     mock.grp_users.entries = []
-    mock._open_db = Mock(return_value=True)
+    mock.open_db = Mock(return_value=True)
     mock.save_db = Mock()
     return mock
 

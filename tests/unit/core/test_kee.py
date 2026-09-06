@@ -39,9 +39,11 @@ def mock_pykeepass():
 @pytest.fixture
 def mock_credentials():
     """Mock credentials functions"""
-    with patch("Pytre_Core.kee.crypted_file_pwd_get", return_value="test_password"), patch(
-        "Pytre_Core.kee.crypted_file_pwd_history", return_value=["current", "old1", "old2"]
-    ), patch("Pytre_Core.kee.crypted_file_pwd_change"):
+    with (
+        patch("Pytre_Core.kee.crypted_file_pwd_get", return_value="test_password"),
+        patch("Pytre_Core.kee.crypted_file_pwd_history", return_value=["current", "old1", "old2"]),
+        patch("Pytre_Core.kee.crypted_file_pwd_change"),
+    ):
         yield
 
 
@@ -72,8 +74,9 @@ def test_kee_lazy_initialization():
     Database should be opened automatically during instantiation.
     """
 
-    with patch("Pytre_Core.kee.PyKeePass") as MockPyKeePass, patch(
-        "Pytre_Core.kee.crypted_file_pwd_get", return_value="test"
+    with (
+        patch("Pytre_Core.kee.PyKeePass") as MockPyKeePass,
+        patch("Pytre_Core.kee.crypted_file_pwd_get", return_value="test"),
     ):
         mock_db = Mock()
         mock_db.find_groups = Mock(return_value=None)
@@ -110,7 +113,6 @@ def test_open_db_creates_database_if_missing(mock_pykeepass, mock_credentials):
     """_open_db should create new database if file not found"""
     from pykeepass.exceptions import CredentialsError
 
-
     with patch("Pytre_Core.kee.PyKeePass") as MockPyKeePass:
         # First call raises FileNotFoundError, second call succeeds
         MockPyKeePass.side_effect = [FileNotFoundError, mock_pykeepass]
@@ -127,7 +129,7 @@ def test_init_pwd_defaults_to_blank_pwd_when_password_empty(mock_pykeepass, mock
     with patch("Pytre_Core.kee.PyKeePass", return_value=mock_pykeepass):
         kee = Kee(password="")
 
-        assert kee._init_pwd == BLANK_PWD
+        assert kee._init_password == BLANK_PWD
 
 
 @pytest.mark.unit
@@ -135,7 +137,7 @@ def test_init_pwd_uses_given_password_when_provided(mock_pykeepass, mock_credent
     with patch("Pytre_Core.kee.PyKeePass", return_value=mock_pykeepass):
         kee = Kee(password="custom-master-key")
 
-        assert kee._init_pwd == "custom-master-key"
+        assert kee._init_password == "custom-master-key"
 
 
 @pytest.mark.unit
@@ -145,7 +147,7 @@ def test_open_db_creates_database_with_password_from_init(mock_credentials):
     actually protects a freshly created database."""
     with patch("Pytre_Core.kee.PyKeePass", side_effect=FileNotFoundError):
         with patch.object(Kee, "create_db") as mock_create_db:
-            with pytest.raises(AssertionError):  # create_db is mocked out, self.db stays None
+            with pytest.raises(ValueError):  # create_db is mocked out, self.db stays None
                 Kee(password="custom-master-key")
 
     mock_create_db.assert_called_once_with(password="custom-master-key")
@@ -155,7 +157,6 @@ def test_open_db_creates_database_with_password_from_init(mock_credentials):
 def test_open_db_handles_credentials_error(mock_pykeepass, mock_credentials):
     """_open_db should handle invalid password gracefully"""
     from pykeepass.exceptions import CredentialsError
-
 
     with patch("Pytre_Core.kee.PyKeePass") as MockPyKeePass:
         # Raise credentials error
@@ -174,7 +175,6 @@ def test_open_db_handles_credentials_error(mock_pykeepass, mock_credentials):
 def test_open_db_tries_password_history_on_failure(mock_pykeepass, mock_credentials):
     """_open_db should try password history if main password fails"""
     from pykeepass.exceptions import CredentialsError
-
 
     with patch("Pytre_Core.kee.PyKeePass") as MockPyKeePass:
         # First call fails, second succeeds (from history)
@@ -197,7 +197,7 @@ def test_open_db_reload_reloads_database(mock_pykeepass, mock_credentials):
         initial_count = kee.access_count
 
         # Reload
-        kee._open_db(reload=True)
+        kee.open_db(reload=True)
 
         # Verify: reload was called and count incremented
         assert mock_pykeepass.reload.called
@@ -275,67 +275,107 @@ def test_save_db_handles_permission_error(mock_pykeepass, mock_credentials):
 
 
 @pytest.mark.unit
-def test_create_db_creates_new_database(mock_pykeepass, mock_credentials):
-    """create_db should create new database with default structure"""
+def test_create_db_opens_blank_template_and_redirects_filename(mock_pykeepass, mock_credentials):
+    """create_db should open the bundled blank template (with BLANK_PWD) and retarget it to
+    save at the real database path - it no longer seeds any default groups/entries/folder
+    itself, that's now handled lazily by open_db()/_get_group()."""
 
-    with patch("Pytre_Core.kee.PyKeePass", return_value=mock_pykeepass):
+    with patch("Pytre_Core.kee.PyKeePass", return_value=mock_pykeepass) as MockPyKeePass:
         kee = Kee(password="test_password")
+        MockPyKeePass.reset_mock()
 
-        # Mock add_group to return mock groups
-        mock_grp = Mock()
-        mock_pykeepass.add_group.return_value = mock_grp
+        kee.create_db(password="new_password")
 
-        # Mock add_entry to return mock entry
-        mock_entry = Mock()
-        mock_entry.set_custom_property = Mock()
-        mock_pykeepass.add_entry.return_value = mock_entry
+        # Verify: opened the blank template with BLANK_PWD, not the target password
+        MockPyKeePass.assert_called_once_with(get_app_path() / BLANK_FILE, password=BLANK_PWD)
 
-        with patch("Pytre_Core.kee.Path.mkdir"):
-            kee.create_db(password="new_password")
+        # Verify: save target redirected to the real database file
+        assert mock_pykeepass.filename == kee.file
 
-            # Verify: Groups were created
-            assert mock_pykeepass.add_group.call_count >= 3  # Settings, Servers, Users
-
-            # Verify: Entries were created
-            assert mock_pykeepass.add_entry.called
+        # Verify: no default groups/entries/folder created directly by create_db anymore
+        assert not mock_pykeepass.add_group.called
+        assert not mock_pykeepass.add_entry.called
 
 
 @pytest.mark.unit
-def test_create_db_sets_root_group_name(mock_pykeepass, mock_credentials):
-    """create_db should set root group name to 'settings'"""
+def test_create_db_toggles_is_ko_during_creation(mock_pykeepass, mock_credentials):
+    """create_db should clear is_ko once creation succeeds"""
 
     with patch("Pytre_Core.kee.PyKeePass", return_value=mock_pykeepass):
         kee = Kee(password="test_password")
 
-        mock_pykeepass.add_group.return_value = Mock()
-        mock_entry = Mock()
-        mock_entry.set_custom_property = Mock()
-        mock_pykeepass.add_entry.return_value = mock_entry
+        kee.create_db(password="new_password")
 
-        with patch("Pytre_Core.kee.Path.mkdir"):
-            kee.create_db()
+        assert kee.is_ko is False
 
-            # Verify: Root group name set
-            assert mock_pykeepass.root_group.name == "settings"
+
+# ================================================================================
+# Group Lookup Functionality
+# ================================================================================
 
 
 @pytest.mark.unit
-def test_create_db_creates_queries_folder(mock_pykeepass, mock_credentials):
-    """create_db should create queries folder"""
+def test_get_group_returns_existing_group(mock_pykeepass, mock_credentials):
+    """_get_group should return the group as-is if it already exists"""
+
+    existing_grp = Mock()
+    mock_pykeepass.find_groups = Mock(return_value=existing_grp)
 
     with patch("Pytre_Core.kee.PyKeePass", return_value=mock_pykeepass):
         kee = Kee(password="test_password")
 
-        mock_pykeepass.add_group.return_value = Mock()
-        mock_entry = Mock()
-        mock_entry.set_custom_property = Mock()
-        mock_pykeepass.add_entry.return_value = mock_entry
+        group = kee._get_group("Paramètres")
 
-        with patch("Pytre_Core.kee.Path.mkdir") as mock_mkdir:
-            kee.create_db()
+        assert group is existing_grp
+        assert not mock_pykeepass.add_group.called
 
-            # Verify: mkdir was called
-            assert mock_mkdir.called
+
+@pytest.mark.unit
+def test_get_group_creates_missing_group(mock_pykeepass, mock_credentials):
+    """_get_group should create the group under root_group if it doesn't exist yet"""
+
+    mock_pykeepass.find_groups = Mock(return_value=None)
+    new_grp = Mock()
+    mock_pykeepass.add_group = Mock(return_value=new_grp)
+
+    with patch("Pytre_Core.kee.PyKeePass", return_value=mock_pykeepass):
+        kee = Kee(password="test_password")
+        mock_pykeepass.add_group.reset_mock()
+
+        group = kee._get_group("Utilisateurs")
+
+        mock_pykeepass.add_group.assert_called_once_with(mock_pykeepass.root_group, "Utilisateurs")
+        assert group is new_grp
+
+
+@pytest.mark.unit
+def test_get_group_raises_if_database_not_open(mock_pykeepass, mock_credentials):
+    """_get_group should raise ValueError rather than operate on a None database"""
+
+    with patch("Pytre_Core.kee.PyKeePass", return_value=mock_pykeepass):
+        kee = Kee(password="test_password")
+        kee.db = None
+
+        with pytest.raises(ValueError):
+            kee._get_group("Paramètres")
+
+
+@pytest.mark.unit
+def test_open_db_creates_all_three_default_groups_on_a_fresh_database(mock_credentials):
+    """open_db (called from __init__) should lazily create the 3 standard groups via
+    _get_group() when they don't exist yet - this is what replaces the old eager
+    _create_db_set_default() group creation."""
+
+    mock_db = Mock()
+    mock_db.root_group = Mock(spec=Group)
+    mock_db.find_groups = Mock(return_value=None)
+    mock_db.add_group = Mock(side_effect=lambda root, name: Mock())
+
+    with patch("Pytre_Core.kee.PyKeePass", return_value=mock_db):
+        Kee(password="test_password")
+
+        created_names = [call.args[1] for call in mock_db.add_group.call_args_list]
+        assert created_names == ["Paramètres", "Serveurs", "Utilisateurs"]
 
 
 # ================================================================================
@@ -347,7 +387,6 @@ def test_create_db_creates_queries_folder(mock_pykeepass, mock_credentials):
 def test_pwd_try_tries_password_list(mock_pykeepass, mock_credentials):
     """pwd_try should try passwords from list"""
     from pykeepass.exceptions import CredentialsError
-
 
     with patch("Pytre_Core.kee.PyKeePass") as MockPyKeePass:
         # First two fail, third succeeds
@@ -371,7 +410,6 @@ def test_pwd_try_tries_password_list(mock_pykeepass, mock_credentials):
 def test_pwd_try_returns_false_if_all_fail(mock_pykeepass, mock_credentials):
     """pwd_try should return False if all passwords fail"""
     from pykeepass.exceptions import CredentialsError
-
 
     with patch("Pytre_Core.kee.PyKeePass") as MockPyKeePass:
         # Initial open succeeds, all pwd_try attempts fail
@@ -415,15 +453,16 @@ def test_pwd_history_retrieves_history(mock_credentials):
 def test_pwd_change_updates_password(mock_pykeepass, mock_credentials):
     """pwd_change should update database password"""
 
-    with patch("Pytre_Core.kee.PyKeePass", return_value=mock_pykeepass), patch(
-        "Pytre_Core.kee.crypted_file_pwd_change"
-    ) as mock_pwd_change:
+    with (
+        patch("Pytre_Core.kee.PyKeePass", return_value=mock_pykeepass),
+        patch("Pytre_Core.kee.crypted_file_pwd_change") as mock_pwd_change,
+    ):
         kee = Kee(password="old_password")
 
         kee.pwd_change("new_password")
 
         # Verify: Password updated
-        assert kee.pwd == "new_password"
+        assert kee.password == "new_password"
         assert mock_pykeepass.password == "new_password"
         assert mock_pwd_change.called
 
@@ -445,9 +484,10 @@ def test_pwd_change_saves_if_forced(mock_pykeepass, mock_credentials):
 def test_pwd_change_does_nothing_if_same_password(mock_pykeepass, mock_credentials):
     """pwd_change should do nothing if password unchanged"""
 
-    with patch("Pytre_Core.kee.PyKeePass", return_value=mock_pykeepass), patch(
-        "Pytre_Core.kee.crypted_file_pwd_change"
-    ) as mock_pwd_change:
+    with (
+        patch("Pytre_Core.kee.PyKeePass", return_value=mock_pykeepass),
+        patch("Pytre_Core.kee.crypted_file_pwd_change") as mock_pwd_change,
+    ):
         kee = Kee(password="test_password")
 
         kee.pwd_change("test_password")
@@ -455,7 +495,32 @@ def test_pwd_change_does_nothing_if_same_password(mock_pykeepass, mock_credentia
         # Verify: crypted_file_pwd_change was NOT called
         # (It would be called during __init__, so we can't check call_count == 0)
         # Just verify password didn't change
-        assert kee.pwd == "test_password"
+        assert kee.password == "test_password"
+
+
+@pytest.mark.unit
+def test_pwd_change_rekeys_and_saves_even_if_password_looks_unchanged_when_forced(
+    mock_pykeepass, mock_credentials
+):
+    """Regression: create_db() opens the blank template (real password BLANK_PWD) then calls
+    pwd_change(target_password, force_save=True) - self.password may already equal
+    target_password at that point (e.g. an explicit master key passed to Kee()), even though
+    self.db itself is still keyed with BLANK_PWD. force_save=True must not let the "password
+    looks unchanged" shortcut skip the actual rekey/save - otherwise the freshly created
+    database silently stays protected by BLANK_PWD instead of the intended password."""
+
+    with patch("Pytre_Core.kee.PyKeePass", return_value=mock_pykeepass):
+        kee = Kee(password="mysecret")
+
+        # self.password already equals the value we're about to pass to pwd_change - simulates
+        # the create_db() situation where this coincidence must not be mistaken for a no-op
+        assert kee.password == "mysecret"
+        mock_pykeepass.password = "password"  # what the db is actually keyed with right now
+
+        kee.pwd_change("mysecret", force_save=True)
+
+        assert mock_pykeepass.password == "mysecret"
+        assert mock_pykeepass.save.called
 
 
 # ================================================================================

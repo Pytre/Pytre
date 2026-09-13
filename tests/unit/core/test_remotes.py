@@ -14,7 +14,12 @@ import pytest
 from Pytre_Core.remotes import (
     Remote,
     RemoteAddress,
+    RemoteAuthError,
+    RemoteError,
     RemoteExecutionError,
+    RemoteHTTPStatusError,
+    RemoteInsecureChannelError,
+    RemoteRequestError,
     RemoteServer,
     Remotes,
     decode_row_value,
@@ -530,7 +535,7 @@ def test_login_falls_back_to_full_login_when_refresh_request_fails(address, remo
 
 
 @pytest.mark.unit
-def test_login_returns_false_and_clears_tokens_on_request_error(address, remotes, monkeypatch):
+def test_login_raises_remote_request_error_and_clears_tokens_on_request_error(address, remotes, monkeypatch):
     address.access_token = "stale-access-token"
 
     def fake_post(**kwargs):
@@ -538,24 +543,30 @@ def test_login_returns_false_and_clears_tokens_on_request_error(address, remotes
 
     monkeypatch.setattr(httpx2, "post", fake_post)
 
-    result = Remote(remotes, address).login()
+    remote = Remote(remotes, address)
+    with pytest.raises(RemoteRequestError):
+        remote.login()
 
-    assert result is False
     assert address.access_token == ""
     assert address.refresh_token == ""
+    assert isinstance(remote.last_error, RemoteRequestError)
 
 
 @pytest.mark.unit
-def test_login_returns_false_and_clears_tokens_on_http_status_error(address, remotes, monkeypatch):
+def test_login_raises_remote_auth_error_and_clears_tokens_on_http_status_error(address, remotes, monkeypatch):
+    """A HTTPStatusError on /login is always a credentials problem - the API has no other
+    reason to reject a login attempt with a non-2xx status."""
     address.access_token = "stale-access-token"
     error = httpx2.HTTPStatusError("401", request=None, response=None)  # type: ignore
     monkeypatch.setattr(httpx2, "post", lambda **kwargs: _FakeResponse(status_error=error))
 
-    result = Remote(remotes, address).login()
+    remote = Remote(remotes, address)
+    with pytest.raises(RemoteAuthError):
+        remote.login()
 
-    assert result is False
     assert address.access_token == ""
     assert address.refresh_token == ""
+    assert isinstance(remote.last_error, RemoteAuthError)
 
 
 @pytest.mark.unit
@@ -570,9 +581,11 @@ def test_login_refuses_plain_http_to_a_non_local_remote(address, remotes, monkey
 
     monkeypatch.setattr(httpx2, "post", fake_post)
 
-    result = Remote(remotes, address).login()
+    remote = Remote(remotes, address)
+    with pytest.raises(RemoteInsecureChannelError):
+        remote.login()
 
-    assert result is False
+    assert isinstance(remote.last_error, RemoteInsecureChannelError)
 
 
 @pytest.mark.unit
@@ -618,9 +631,9 @@ def test_login_refuses_plain_http_to_a_public_ip(address, remotes, monkeypatch):
 
     monkeypatch.setattr(httpx2, "post", fake_post)
 
-    result = Remote(remotes, address).login()
-
-    assert result is False
+    remote = Remote(remotes, address)
+    with pytest.raises(RemoteInsecureChannelError):
+        remote.login()
 
 
 # ================================================================================
@@ -725,7 +738,7 @@ def test_get_authenticated_relogs_in_and_retries_once_on_401(address, remotes, m
 
 
 @pytest.mark.unit
-def test_get_authenticated_raises_request_error_if_login_fails_after_401(address, remotes, monkeypatch):
+def test_get_authenticated_raises_remote_request_error_if_login_fails_after_401(address, remotes, monkeypatch):
     monkeypatch.setattr(httpx2, "get", lambda **kwargs: _FakeResponse(status_code=401))
 
     def fake_post(**kwargs):
@@ -733,7 +746,21 @@ def test_get_authenticated_raises_request_error_if_login_fails_after_401(address
 
     monkeypatch.setattr(httpx2, "post", fake_post)
 
-    with pytest.raises(httpx2.RequestError):
+    with pytest.raises(RemoteRequestError):
+        Remote(remotes, address).get_authenticated("http://example.com:8000/servers")
+
+
+@pytest.mark.unit
+def test_get_authenticated_raises_remote_auth_error_if_login_fails_with_bad_credentials_after_401(
+    address, remotes, monkeypatch
+):
+    """Distinct from the network-failure case above - a 401 on /login itself means the
+    credentials are wrong, not that the remote is unreachable."""
+    monkeypatch.setattr(httpx2, "get", lambda **kwargs: _FakeResponse(status_code=401))
+    error = httpx2.HTTPStatusError("401", request=None, response=None)  # type: ignore
+    monkeypatch.setattr(httpx2, "post", lambda **kwargs: _FakeResponse(status_error=error))
+
+    with pytest.raises(RemoteAuthError):
         Remote(remotes, address).get_authenticated("http://example.com:8000/servers")
 
 
@@ -776,6 +803,10 @@ def test_refresh_servers_sends_correct_url_and_auth_header(address, remotes, mon
 
 @pytest.mark.unit
 def test_refresh_servers_keeps_previous_list_on_request_error(address, remotes, monkeypatch):
+    """A valid access_token is required here so get_authenticated() GETs directly instead of
+    calling login() first - otherwise the failure below would never actually be reached."""
+    address.access_token = _make_token()
+
     def fake_get(**kwargs):
         raise httpx2.ConnectError("boom")
 
@@ -788,11 +819,12 @@ def test_refresh_servers_keeps_previous_list_on_request_error(address, remotes, 
 
     assert result == remote.servers
     assert [s.id_on_remote for s in remote.servers] == ["old"]
-    assert remote.last_error is not None
+    assert isinstance(remote.last_error, RemoteRequestError)
 
 
 @pytest.mark.unit
 def test_refresh_servers_keeps_previous_list_on_http_status_error(address, remotes, monkeypatch):
+    address.access_token = _make_token()
     error = httpx2.HTTPStatusError("500", request=None, response=None)  # type: ignore
     monkeypatch.setattr(httpx2, "get", lambda **kwargs: _FakeResponse(status_code=200, status_error=error))
 
@@ -802,13 +834,35 @@ def test_refresh_servers_keeps_previous_list_on_http_status_error(address, remot
     result = remote.refresh_servers()
 
     assert [s.id_on_remote for s in remote.servers] == ["old"]
-    assert remote.last_error is not None
+    assert isinstance(remote.last_error, RemoteHTTPStatusError)
+
+
+@pytest.mark.unit
+def test_refresh_servers_keeps_previous_list_and_sets_remote_auth_error_on_relogin_failure(
+    address, remotes, monkeypatch
+):
+    """A 401 on /servers triggers a relogin - if that relogin fails because credentials are
+    invalid, refresh_servers() must surface it as RemoteAuthError (caught via the base
+    RemoteError branch), not misreport it as a generic connectivity failure."""
+    address.access_token = _make_token()
+    monkeypatch.setattr(httpx2, "get", lambda **kwargs: _FakeResponse(status_code=401))
+    error = httpx2.HTTPStatusError("401", request=None, response=None)  # type: ignore
+    monkeypatch.setattr(httpx2, "post", lambda **kwargs: _FakeResponse(status_error=error))
+
+    remote = Remote(remotes, address=address)
+    remote.servers = [RemoteServer(id="old", description="Old", remote=remote)]
+
+    result = remote.refresh_servers()
+
+    assert result == remote.servers
+    assert [s.id_on_remote for s in remote.servers] == ["old"]
+    assert isinstance(remote.last_error, RemoteAuthError)
 
 
 @pytest.mark.unit
 def test_refresh_servers_success_clears_last_error(address, remotes, monkeypatch, auto_login_ok):
     remote = Remote(remotes, address=address)
-    remote.last_error = "previous failure"
+    remote.last_error = RemoteError("previous failure")
 
     monkeypatch.setattr(httpx2, "get", lambda **kwargs: _FakeResponse([], status_code=200))
     remote.refresh_servers()
@@ -861,6 +915,10 @@ def test_get_serialized_queries_sends_server_id_and_auth_header(remote_server, m
 
 @pytest.mark.unit
 def test_get_serialized_queries_keeps_previous_list_on_request_error(remote_server, monkeypatch):
+    """A valid access_token is required here so get_authenticated() GETs directly instead of
+    calling login() first - otherwise the failure below would never actually be reached."""
+    remote_server.address.access_token = _make_token()
+
     def fake_get(**kwargs):
         raise httpx2.ConnectError("boom")
 
@@ -870,11 +928,12 @@ def test_get_serialized_queries_keeps_previous_list_on_request_error(remote_serv
     result = remote_server.get_serialized_queries()
 
     assert result == [{"name": "old"}]
-    assert remote_server.last_error is not None
+    assert isinstance(remote_server.last_error, RemoteRequestError)
 
 
 @pytest.mark.unit
 def test_get_serialized_queries_keeps_previous_list_on_http_status_error(remote_server, monkeypatch):
+    remote_server.address.access_token = _make_token()
     error = httpx2.HTTPStatusError("500", request=None, response=None)  # type: ignore
     monkeypatch.setattr(httpx2, "get", lambda **kwargs: _FakeResponse(status_code=200, status_error=error))
     remote_server.serialized_queries = [{"name": "old"}]
@@ -882,7 +941,26 @@ def test_get_serialized_queries_keeps_previous_list_on_http_status_error(remote_
     result = remote_server.get_serialized_queries()
 
     assert result == [{"name": "old"}]
-    assert remote_server.last_error is not None
+    assert isinstance(remote_server.last_error, RemoteHTTPStatusError)
+
+
+@pytest.mark.unit
+def test_get_serialized_queries_keeps_previous_list_and_sets_remote_auth_error_on_relogin_failure(
+    remote_server, monkeypatch
+):
+    """A 401 on /queries triggers a relogin - if that relogin fails because credentials are
+    invalid, get_serialized_queries() must surface it as RemoteAuthError (caught via the base
+    RemoteError branch), not misreport it as a generic connectivity failure."""
+    remote_server.address.access_token = _make_token()
+    monkeypatch.setattr(httpx2, "get", lambda **kwargs: _FakeResponse(status_code=401))
+    error = httpx2.HTTPStatusError("401", request=None, response=None)  # type: ignore
+    monkeypatch.setattr(httpx2, "post", lambda **kwargs: _FakeResponse(status_error=error))
+    remote_server.serialized_queries = [{"name": "old"}]
+
+    result = remote_server.get_serialized_queries()
+
+    assert result == [{"name": "old"}]
+    assert isinstance(remote_server.last_error, RemoteAuthError)
 
 
 # ================================================================================
@@ -1535,14 +1613,14 @@ def test_execute_raises_remote_execution_error_on_error_line(remote_server, monk
 
 
 @pytest.mark.unit
-def test_execute_propagates_http_status_error(remote_server, monkeypatch):
+def test_execute_wraps_http_status_error_as_remote_http_status_error(remote_server, monkeypatch):
     _mock_health_check_ok(monkeypatch)
     error = httpx2.HTTPStatusError("404", request=None, response=None)  # type: ignore
     monkeypatch.setattr(
         httpx2, "stream", lambda *a, **k: _FakeStreamContext(_FakeStreamResponse([], status_error=error))
     )
 
-    with pytest.raises(httpx2.HTTPStatusError):
+    with pytest.raises(RemoteHTTPStatusError):
         with remote_server.execute("Q1", "hash1", {}):
             pass
 
@@ -1607,9 +1685,10 @@ def test_execute_relogs_in_and_retries_once_on_401(remote_server, monkeypatch):
 
 
 @pytest.mark.unit
-def test_execute_raises_http_status_error_if_still_401_after_relogin(remote_server, monkeypatch):
+def test_execute_raises_remote_http_status_error_if_still_401_after_relogin(remote_server, monkeypatch):
     """Relogin succeeded (new token issued) but the retried request is still rejected - the
-    2nd attempt is the last one (max_login_retry reached), so it must surface as-is."""
+    2nd attempt is the last one (max_login_retry reached), so it must surface as-is, wrapped
+    the same way as any other non-retriable HTTP failure."""
     _mock_health_check_ok(monkeypatch)
     error = httpx2.HTTPStatusError("401", request=None, response=None)  # type: ignore
     stream_contexts = iter(
@@ -1623,21 +1702,35 @@ def test_execute_raises_http_status_error_if_still_401_after_relogin(remote_serv
         httpx2, "post", lambda **kwargs: _FakeResponse({"refresh_token": "r1", "access_token": "new-token"})
     )
 
-    with pytest.raises(httpx2.HTTPStatusError):
+    with pytest.raises(RemoteHTTPStatusError):
         with remote_server.execute("Q1", "hash1", {}):
             pass
 
 
 @pytest.mark.unit
-def test_execute_raises_http_status_error_if_relogin_fails(remote_server, monkeypatch):
-    """Login itself fails (e.g. stored password no longer valid) - falls straight through to
-    the same HTTPStatusError as any other non-retriable failure, no separate exception type."""
+def test_execute_raises_remote_auth_error_if_relogin_fails_with_bad_credentials(remote_server, monkeypatch):
+    """Login itself fails because credentials are no longer valid (e.g. stored password
+    changed server-side) - propagates as RemoteAuthError, distinct from a network failure or a
+    plain HTTP failure on /execute itself, so callers can offer to re-enter credentials."""
     _mock_health_check_ok(monkeypatch)
-    error = httpx2.HTTPStatusError("401", request=None, response=None)  # type: ignore
     monkeypatch.setattr(
-        httpx2,
-        "stream",
-        lambda *a, **k: _FakeStreamContext(_FakeStreamResponse([], status_code=401, status_error=error)),
+        httpx2, "stream", lambda *a, **k: _FakeStreamContext(_FakeStreamResponse([], status_code=401))
+    )
+    error = httpx2.HTTPStatusError("401", request=None, response=None)  # type: ignore
+    monkeypatch.setattr(httpx2, "post", lambda **kwargs: _FakeResponse(status_error=error))
+
+    with pytest.raises(RemoteAuthError):
+        with remote_server.execute("Q1", "hash1", {}):
+            pass
+
+
+@pytest.mark.unit
+def test_execute_raises_remote_request_error_if_relogin_fails_due_to_network(remote_server, monkeypatch):
+    """Login itself fails due to a network error while retrying after a 401 - propagates as
+    RemoteRequestError, distinct from the bad-credentials case above."""
+    _mock_health_check_ok(monkeypatch)
+    monkeypatch.setattr(
+        httpx2, "stream", lambda *a, **k: _FakeStreamContext(_FakeStreamResponse([], status_code=401))
     )
 
     def fake_post(**kwargs):
@@ -1645,6 +1738,6 @@ def test_execute_raises_http_status_error_if_relogin_fails(remote_server, monkey
 
     monkeypatch.setattr(httpx2, "post", fake_post)
 
-    with pytest.raises(httpx2.HTTPStatusError):
+    with pytest.raises(RemoteRequestError):
         with remote_server.execute("Q1", "hash1", {}):
             pass

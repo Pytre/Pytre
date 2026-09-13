@@ -7,13 +7,14 @@ from queue import Queue
 from collections.abc import Iterator
 
 from Pytre_Core import utils
-from Pytre_Core.remotes import Remotes, Remote, RemoteAddress
+from Pytre_Core.remotes import Remotes, Remote, RemoteAddress, RemoteAuthError, RemoteError
 from Pytre_Core.about import APP_NAME
 
 import Pytre_Client.ui_utils as ui_utils
 from Pytre_Client.ui_utils_thread import tk_call_when_ready
 from Pytre_Client.app_theme import set_theme, set_menus, theme_is_on
 from Pytre_Client.MsgOverlay import MsgOverlay
+from Pytre_Client.remote_login import prompt_remote_credentials
 from Pytre_Client.ui_utils_csv import CsvTaskConfig, csv_process_async
 
 
@@ -545,7 +546,7 @@ class RemoteDialog(tk.Toplevel):
                 reveal_button.grid(row=num_row, column=2, padx=2, pady=2, sticky="nswe")
 
             my_entry.grid(row=num_row, column=1, columnspan=col_span, padx=2, pady=2, sticky="nswe")
-            my_label.grid(row=num_row, column=0, padx=2, pady=2, sticky="nswe")
+            my_label.grid(row=num_row, column=0, padx=2, pady=2, ipady=4, sticky="nswe")
             num_row += 1
 
     def _setup_buttons(self):
@@ -583,6 +584,10 @@ class RemoteDialog(tk.Toplevel):
         else:
             remote: Remote = Remote(self.remotes, RemoteAddress("", 8000, ""))
 
+        self._save_and_test(remote)
+
+    def _save_and_test(self, remote: Remote):
+        """Save remote and check credentials. If they are not offer to input corrected credentials."""
         overlay = MsgOverlay.display(self, "Enregistrement en cours...", 0)
 
         # mise à jour des infos de la remote
@@ -593,17 +598,30 @@ class RemoteDialog(tk.Toplevel):
         # enregistrement des infos
         def worker():
             msg: str = ""
+            invalid_credentials: bool = False
             try:
                 remote.save()
+                remote.login()
+            except RemoteAuthError as e:
+                invalid_credentials = True
+            except RemoteError:
+                pass  # ignore other login error
             except Exception as e:
                 msg = "Erreur inattendue lors de l'enregistrement :\n" + str(e)
-            finally:
-                result_queue.put(msg)
 
-        def save_end(error_msg: str = ""):
+            result_queue.put((msg, invalid_credentials))
+
+        def save_end(error_msg: str = "", invalid_credentials: bool = False):
             overlay.hide()
 
-            if error_msg:
+            if invalid_credentials:
+                prompt = f"Login ou mot de passe invalide.\nCorriger le pour pouvoir vous connecter :"
+                if prompt_remote_credentials(remote, parent=self, prompt=prompt, save=False):
+                    self._save_and_test(remote)  # retry with new credentials
+                else:
+                    self.remote_modified = True
+                    self.close()
+            elif error_msg:
                 messagebox.showerror(title="Erreur Enregistrement", message=error_msg, parent=self)
             else:
                 self.remote_modified = True

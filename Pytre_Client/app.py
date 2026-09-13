@@ -12,7 +12,7 @@ from Pytre_Core import old_files, settings, users, utils
 from Pytre_Core.about import APP_NAME, APP_VERSION, APP_STATUS
 from Pytre_Core.context import AppContext, UserContext
 from Pytre_Core.logs_central import ClientDriven as CentralLogs
-from Pytre_Core.remotes import RemoteServer, Remotes
+from Pytre_Core.remotes import RemoteServer, Remotes, RemoteAuthError
 from Pytre_Core.servers import Server, Servers
 from Pytre_Core.user_prefs import UserPrefs, PrefsEnum
 
@@ -29,6 +29,7 @@ from Pytre_Client.save_as import save_as
 from Pytre_Client.InputDialog import InputDialog
 from Pytre_Client.MsgDialog import MsgDialog
 from Pytre_Client.MsgOverlay import MsgOverlay
+from Pytre_Client.remote_login import prompt_remote_credentials
 from Pytre_Client.app_logs import LogsWindow
 from Pytre_Client.app_debug import DebugWindow
 from Pytre_Client.app_users import UsersWindow
@@ -917,7 +918,7 @@ class App(tk.Toplevel):
             if reload_remotes:  # récup des problèmes de récupération des serveurs par les remotes
                 for r in self.remotes.remotes_dict.values():
                     if r.last_error:
-                        errors_msg.append(r.last_error)
+                        errors_msg.append(str(r.last_error))
 
             if errors.get("cnx_error"):  # si remote a échoué à joindre le serveur
                 errors_msg.append(errors["cnx_error"])
@@ -932,13 +933,22 @@ class App(tk.Toplevel):
             if hide_end_msg:
                 pass
             elif errors.get("cnx_error"):
-                messagebox.showerror("Rechargement", errors["cnx_error"], parent=self)
+                if remote_target and isinstance(remote_target.last_error, RemoteAuthError):
+                    self.prompt_remote_credentials_and_reload_queries(remote_target)
+                else:
+                    messagebox.showerror("Rechargement", errors["cnx_error"], parent=self)
             elif not first_load:
                 messagebox.showinfo("Rechargement", "Ok requêtes rechargées", parent=self)
 
         result_queue = ThreadQueue()
         Thread(target=worker, daemon=True).start()
         tk_call_when_ready(self, result_queue, refresh_end)
+
+    def prompt_remote_credentials_and_reload_queries(self, remote_server: RemoteServer):
+        """Prompt credentials for `remote_server` and if dialog has not been dismissed then
+        reload `remote_server` queries."""
+        if prompt_remote_credentials(remote_server.remote, self):
+            self.refresh_queries(remote_server=remote_server)
 
     def refresh_servers(self, reload_servers: bool = False, reload_remotes: bool = False):
         # refresh servers_dict with local and remote servers

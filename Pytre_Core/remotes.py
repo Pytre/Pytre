@@ -13,7 +13,6 @@ from urllib.parse import urlparse
 from uuid import uuid4
 
 import httpx2
-from jwt import DecodeError
 
 from Pytre_Core.keyring import KeyringCatalog
 from Pytre_Core.user_prefs import CONFIG_FOLDER
@@ -59,8 +58,47 @@ def decode_row_value(value: Any) -> Any:
     return value
 
 
-class RemoteExecutionError(Exception):
+class RemoteError(Exception):
+    """Common base class for all remote exceptions."""
+
+    def __init__(self, message: str, cause: Exception | None = None):
+        super().__init__(message)
+        self.__cause__ = cause
+
+
+class RemoteExecutionError(RemoteError):
     """Raised when Pytre_Server reports a row conversion/serialization error via a NDJSON __error__ line."""
+
+
+class RemoteInsecureChannelError(RemoteError):
+    """Raised when trying to use an insecure channel"""
+
+
+class RemoteRequestError(RemoteError):
+    """Raised on a request error / httpx2.RequestError wrapper"""
+
+    @property
+    def request(self) -> httpx2.Request | None:
+        if isinstance(self.__cause__, (httpx2.RequestError, RemoteRequestError)):
+            return self.__cause__.request
+
+
+class RemoteHTTPStatusError(RemoteError):
+    """Raised on an HTTP sttus of 4xx or 5xx / httpx2.HTTPStatusError wrapper"""
+
+    @property
+    def request(self) -> httpx2.Request | None:
+        if isinstance(self.__cause__, (httpx2.HTTPStatusError, RemoteHTTPStatusError)):
+            return self.__cause__.request
+
+    @property
+    def response(self) -> httpx2.Response | None:
+        if isinstance(self.__cause__, (httpx2.HTTPStatusError, RemoteHTTPStatusError)):
+            return self.__cause__.response
+
+
+class RemoteAuthError(RemoteHTTPStatusError):
+    """Raised on a failed login because of invalid credentials."""
 
 
 class Remotes:
@@ -248,6 +286,7 @@ class Remote:
         self.remotes: Remotes | None = remotes
         self.address: RemoteAddress = address
         self.servers: list[RemoteServer] = []
+        self.last_error: RemoteError | None = None
 
         if load:
             self.refresh_servers()
@@ -269,13 +308,14 @@ class Remote:
         return {"Authorization": f"Bearer {self.address.access_token}"}
 
     def login(self) -> bool:
-        """Authenticates and store token on `address`. Returns whether it succeeded. Errors are logged, not raised.
+        """Authenticates and store token on `address`. Returns True on success, raises on failure.
         Refuses to send credentials over plain HTTP if not on localhost or on a private network."""
 
         if not self.address.channel_is_secure:
             msg = f"Login to a non-local remote is not allowed over plain HTTP: {self.id}"
             log(msg, logging.ERROR)
-            return False
+            self.last_error = RemoteInsecureChannelError(msg)
+            raise self.last_error
 
         # try to get an access token only if refresh_token still valid
         if self.address.refresh_token_is_valid:
@@ -298,19 +338,27 @@ class Remote:
             response.raise_for_status()
             self.address.refresh_token = response.json()["refresh_token"]
             self.address.access_token = response.json()["access_token"]
-        except (httpx2.RequestError, httpx2.HTTPStatusError) as e:
-            log(f"Login failed for {self.id} : {e}", logging.WARNING)
-            self.address.refresh_token = ""
-            self.address.access_token = ""
-            return False
+        except httpx2.HTTPStatusError as e:
+            err_msg = f"Login failed for {self.id} - check username/password : {e}"
+            self.address.refresh_token, self.address.access_token = "", ""
+            log(err_msg, logging.WARNING)
+            self.last_error = RemoteAuthError(err_msg, cause=e)
+            raise self.last_error
+        except httpx2.RequestError as e:
+            err_msg = f"Login failed for {self.id} : {e}"
+            self.address.refresh_token, self.address.access_token = "", ""
+            log(err_msg, logging.WARNING)
+            self.last_error = RemoteRequestError(err_msg, cause=e)
+            raise self.last_error
 
+        self.last_error = None
         return True
 
     def get_authenticated(self, url: str, params: dict | None = None) -> httpx2.Response:
         """GETs `url` using a valid Bearer token - logs in and retries once if the token is
-        missing, expired, or invalidated (any of which the server reports as 401). Raises
-        httpx2.RequestError on a login failure or network-level issue; a non-401 error status is
-        returned as-is, for the caller to raise_for_status() itself."""
+        missing, expired, or invalidated (any of which the server reports as 401).
+        Can raise RemoteInsecureChannelError, RemoteAuthError or RemoteRequestError or
+        a non-401 error status returned as-is."""
 
         response = None
 
@@ -318,8 +366,7 @@ class Remote:
             response = httpx2.get(url=url, params=params, headers=self.auth_headers, timeout=_REQUEST_TIMEOUT)
 
         if response is None or response.status_code == 401:
-            if not self.login():
-                raise httpx2.RequestError(f"Login failed for {self.id}")
+            self.login()
             response = httpx2.get(url=url, params=params, headers=self.auth_headers, timeout=_REQUEST_TIMEOUT)
 
         return response
@@ -331,15 +378,19 @@ class Remote:
             response = self.get_authenticated(url=url_route)
             response.raise_for_status()
             servers = response.json()
+        except RemoteError as e:
+            log(f"Failed to retrieve remote servers for {self.id} - see cause above", logging.DEBUG)
+            self.last_error = e
+            return self.servers
         except httpx2.RequestError as e:
             msg = f"Remote unreachable, retrieving servers from {self.id} failed : {e}"
             log(msg, logging.WARNING)
-            self.last_error = msg
+            self.last_error = RemoteRequestError(msg, cause=e)
             return self.servers
         except httpx2.HTTPStatusError as e:
             msg = f"Couldn't retrieve remote servers from {self.id} : {e}"
             log(msg, logging.WARNING)
-            self.last_error = msg
+            self.last_error = RemoteHTTPStatusError(msg, cause=e)
             return self.servers
 
         self.last_error = None
@@ -362,7 +413,7 @@ class Remote:
 
         try:
             RemoteAddress.from_dict(self.address.to_dict())  # check if address can be created from current values
-        except ValueError as err:
+        except ValueError:
             raise
 
         # update remotes_list with current remote
@@ -557,7 +608,7 @@ class RemoteServer:
         self.remote: Remote = remote
 
         self.serialized_queries: list[dict] = []
-        self.last_error: str | None = None
+        self.last_error: RemoteError | None = None
 
     @property
     def id(self):
@@ -593,14 +644,17 @@ class RemoteServer:
         max_login_retry = 1
         for i in range(max_login_retry + 1):
             with httpx2.stream("POST", url, json=body, headers=self._auth_headers, timeout=_EXEC_TIMEOUT) as response:
-                if response.status_code == 401 and not i == max_login_retry and self.remote.login():
+                if response.status_code == 401 and not i == max_login_retry:
+                    self.remote.login()
                     continue
 
                 try:
                     response.raise_for_status()
-                except httpx2.HTTPStatusError:
+                except httpx2.HTTPStatusError as e:
                     response.read()  # buffer the body as the connection closes as soon as `with` ends,
-                    raise  # after that e.response.json()/.text would raise ResponseNotRead
+                    raise RemoteHTTPStatusError(
+                        str(e), cause=e
+                    )  # after that e.response.json()/.text would raise ResponseNotRead
 
                 lines = response.iter_lines()
                 first_line = next(lines, None)
@@ -632,15 +686,19 @@ class RemoteServer:
             response = self.remote.get_authenticated(url=url_route, params=params)
             response.raise_for_status()
             serialized_queries = response.json()
+        except RemoteError as e:
+            log(f"Failed to retrieve serialized queries for {id_for_error_msg} - see cause above", logging.DEBUG)
+            self.last_error = e
+            return self.serialized_queries
         except httpx2.RequestError as e:
             msg = f"Remote unreachable, retrieving queries from {id_for_error_msg} failed : {e}"
             log(msg, logging.WARNING)
-            self.last_error = msg
+            self.last_error = RemoteRequestError(msg, cause=e)
             return self.serialized_queries
         except httpx2.HTTPStatusError as e:
             msg = f"Couldn't retrieve queries from {id_for_error_msg} : {e}"
             log(msg, logging.WARNING)
-            self.last_error = msg
+            self.last_error = RemoteHTTPStatusError(msg, cause=e)
             return self.serialized_queries
 
         self.last_error = None

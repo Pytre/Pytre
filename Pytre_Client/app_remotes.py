@@ -469,12 +469,12 @@ class RemotesWindow(tk.Toplevel):
 
 
 class RemoteDialog(tk.Toplevel):
-    def __init__(self, parent: RemotesWindow, address: Remote | None = None):
+    def __init__(self, parent: RemotesWindow, remote: Remote | None = None):
         super().__init__(master=parent)
         self.parent: RemotesWindow = parent
 
         self.remotes: Remotes = self.parent.remotes
-        self.remote: Remote | None = address
+        self.remote: Remote | None = remote
         self.remote_modified: bool = False
 
         self.focus_set()
@@ -521,32 +521,46 @@ class RemoteDialog(tk.Toplevel):
         self.entries_frame.columnconfigure(1, weight=1)
 
         entries_caption: dict[str, str] = {
+            "description": "Description",
             "url": "URL",
             "port": "Port",
             "username": "Login",
             "password": "Mot de passe",
-            "description": "Description",
+            "allow_unsecure_channel": "Autoriser sur un canal non sécurisé",
         }
         self.entries: dict[str, WidgetGroup] = {}
 
         num_row = 0
         for key, caption in entries_caption.items():
             my_label = ttk.Label(self.entries_frame, text=caption + " : ")
-            my_tk_var = tk.IntVar() if key == "port" else tk.StringVar()
-            my_entry = ttk.Entry(self.entries_frame, textvariable=my_tk_var)
 
-            self.entries[key] = WidgetGroup(caption=caption, w_label=my_label, w_entry=my_entry, var=my_tk_var)
+            label_col, entry_col = 0, 1
+            label_span, entry_span = 1, 3
 
-            col_span = 2
             if key == "password":
-                col_span = 1
+                entry_span = 1
+                my_tk_var = tk.StringVar()
+                my_entry = ttk.Entry(self.entries_frame, textvariable=my_tk_var)
                 reveal_button = ttk.Button(self.entries_frame, width=8)
                 reveal_button.config(command=lambda wc=reveal_button, wt=my_entry: self.toggle_password(wc, wt))
                 self.toggle_password(reveal_button, my_entry)
-                reveal_button.grid(row=num_row, column=2, padx=2, pady=2, sticky="nswe")
+                reveal_button.grid(row=num_row, column=2, columnspan=2, padx=2, pady=2, sticky="nswe")
+            elif key == "port":
+                my_tk_var = tk.IntVar()
+                my_entry = ttk.Entry(self.entries_frame, textvariable=my_tk_var)
+            elif key == "allow_unsecure_channel":
+                label_col, entry_col = 0, 2
+                label_span, entry_span = 2, 1
+                my_tk_var = tk.BooleanVar()
+                my_entry = ttk.Checkbutton(self.entries_frame, variable=my_tk_var, onvalue=True, offvalue=False)
+            else:
+                my_tk_var = tk.StringVar()
+                my_entry = ttk.Entry(self.entries_frame, textvariable=my_tk_var)
 
-            my_entry.grid(row=num_row, column=1, columnspan=col_span, padx=2, pady=2, sticky="nswe")
-            my_label.grid(row=num_row, column=0, padx=2, pady=2, ipady=4, sticky="nswe")
+            self.entries[key] = WidgetGroup(caption=caption, w_label=my_label, w_entry=my_entry, var=my_tk_var)
+
+            my_label.grid(row=num_row, column=label_col, columnspan=label_span, padx=2, pady=2, ipady=4, sticky="nswe")
+            my_entry.grid(row=num_row, column=entry_col, columnspan=entry_span, padx=2, pady=2, sticky="nswe")
             num_row += 1
 
     def _setup_buttons(self):
@@ -586,14 +600,20 @@ class RemoteDialog(tk.Toplevel):
 
         self._save_and_test(remote)
 
-    def _save_and_test(self, remote: Remote):
-        """Save remote and check credentials. If they are not offer to input corrected credentials."""
+    def _save_and_test(self, remote: Remote, retry: bool = False):
+        """Save `remote` and check access via `login()`. On invalid credentials, offers to correct them and retries.
+        On `retry` the credentials prompt applies corrected values directly to `remote.address` and a `login()` is
+        always attempted since credentials were just re-entered."""
+
         overlay = MsgOverlay.display(self, "Enregistrement en cours...", 0)
+        address = remote.address
+        original_address = (address.url, address.port, address.username, address.password)
 
         # mise à jour des infos de la remote
-        for key, w_group in self.entries.items():
-            val = w_group.var.get()
-            setattr(remote.address, key, val)
+        if not retry:
+            for key, w_group in self.entries.items():
+                val = w_group.var.get()
+                setattr(remote.address, key, val)
 
         # enregistrement des infos
         def worker():
@@ -601,7 +621,11 @@ class RemoteDialog(tk.Toplevel):
             invalid_credentials: bool = False
             try:
                 remote.save()
-                remote.login()
+                address = remote.address
+                modified_address = (address.url, address.port, address.username, address.password)
+                if retry or modified_address != original_address:
+                    address.refresh_token, address.access_token = "", ""
+                    remote.login()
             except RemoteAuthError as e:
                 invalid_credentials = True
             except RemoteError:
@@ -617,7 +641,7 @@ class RemoteDialog(tk.Toplevel):
             if invalid_credentials:
                 prompt = f"Login ou mot de passe invalide.\nCorriger le pour pouvoir vous connecter :"
                 if prompt_remote_credentials(remote, parent=self, prompt=prompt, save=False):
-                    self._save_and_test(remote)  # retry with new credentials
+                    self._save_and_test(remote, retry=True)  # retry with new credentials
                 else:
                     self.remote_modified = True
                     self.close()

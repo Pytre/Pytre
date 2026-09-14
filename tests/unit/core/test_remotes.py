@@ -228,7 +228,7 @@ def test_remote_address_to_dict_round_trips():
 
     remote = RemoteAddress.from_dict(original)
 
-    assert remote.to_dict() == original | {"encrypted_pwd": "", "token": ""}
+    assert remote.to_dict() == original | {"encrypted_pwd": "", "token": "", "allow_unsecure_channel": False}
 
 
 @pytest.mark.unit
@@ -287,6 +287,55 @@ def test_remote_address_from_dict_keeps_provided_description():
     )
 
     assert remote.description == "Prod"
+
+
+@pytest.mark.unit
+def test_remote_address_allow_unsecure_channel_defaults_to_false():
+    remote = RemoteAddress(url="http://a", port=8000, username="alice")
+
+    assert remote.allow_unsecure_channel is False
+
+
+@pytest.mark.unit
+def test_remote_address_from_dict_defaults_allow_unsecure_channel_to_false():
+    remote = RemoteAddress.from_dict({"url": "http://a", "port": 8000, "username": "alice"})
+
+    assert remote.allow_unsecure_channel is False
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("value", [True, False])
+def test_remote_address_from_dict_accepts_native_bool_allow_unsecure_channel(value):
+    """The value read from Pytre_Remotes.json (via json.load()) is already a real bool -
+    must be preserved as-is, not just treated as truthy/falsy."""
+    remote = RemoteAddress.from_dict(
+        {"url": "http://a", "port": 8000, "username": "alice", "allow_unsecure_channel": value}
+    )
+
+    assert remote.allow_unsecure_channel is value
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "value, expected",
+    [("true", True), ("True", True), ("TRUE", True), ("false", False), ("False", False), ("0", False), ("1", False)],
+)
+def test_remote_address_from_dict_parses_string_allow_unsecure_channel_case_insensitively(value, expected):
+    """Regression: a csv-imported value is always a string - a naive truthy check would treat
+    the string "false" (or "0") as truthy, same class of bug already hit with
+    ServerField.TRUST_CERTIFICATE - only the case-insensitive text "true" must parse as True."""
+    remote = RemoteAddress.from_dict(
+        {"url": "http://a", "port": 8000, "username": "alice", "allow_unsecure_channel": value}
+    )
+
+    assert remote.allow_unsecure_channel is expected
+
+
+@pytest.mark.unit
+def test_remote_address_to_dict_includes_allow_unsecure_channel():
+    remote = RemoteAddress(url="http://a", port=8000, username="alice", allow_unsecure_channel=True)
+
+    assert remote.to_dict()["allow_unsecure_channel"] is True
 
 
 @pytest.mark.unit
@@ -634,6 +683,19 @@ def test_login_refuses_plain_http_to_a_public_ip(address, remotes, monkeypatch):
     remote = Remote(remotes, address)
     with pytest.raises(RemoteInsecureChannelError):
         remote.login()
+
+
+@pytest.mark.unit
+def test_login_allows_plain_http_to_a_public_ip_when_allow_unsecure_channel_is_true(address, remotes, monkeypatch):
+    """The explicit opt-out (e.g. an enterprise/Azure network not detected as private) bypasses
+    the channel_is_secure gate entirely - login() proceeds normally."""
+    address.url = "http://8.8.8.8"
+    address.allow_unsecure_channel = True
+    monkeypatch.setattr(httpx2, "post", lambda **kwargs: _FakeResponse({"refresh_token": "r1", "access_token": "a1"}))
+
+    result = Remote(remotes, address).login()
+
+    assert result is True
 
 
 # ================================================================================
@@ -1371,9 +1433,25 @@ def test_csv_export_writes_current_remotes(no_remote_servers, address, tmp_path,
     remotes.csv_export(out_file, overwrite=True)
 
     content = out_file.read_text(encoding="utf-8-sig")
-    assert "url;port;username;encrypted_pwd;description" in content
+    assert "url;port;username;encrypted_pwd;allow_unsecure_channel;description" in content
     assert f"{address.url};{address.port};{address.username};" in content
     assert f";{address.description}" in content
+
+
+@pytest.mark.unit
+def test_csv_export_import_round_trips_allow_unsecure_channel(no_remote_servers, tmp_path, remotes_file):
+    """Regression: allow_unsecure_channel used to be silently dropped by csv_export() - a
+    remote exported then re-imported (e.g. as a backup/migration) would lose the setting."""
+    address = RemoteAddress(url="http://a", port=8000, username="alice", allow_unsecure_channel=True)
+    _write_remotes_file(remotes_file, [address])
+    remotes = Remotes(remotes_file)
+    csv_file = tmp_path / "out.csv"
+
+    remotes.csv_export(csv_file, overwrite=True)
+    remotes.csv_import(csv_file)
+
+    reimported = remotes.remotes_dict[address.uuid]
+    assert reimported.address.allow_unsecure_channel is True
 
 
 # ================================================================================

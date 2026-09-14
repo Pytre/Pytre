@@ -252,13 +252,13 @@ class Remotes:
             raise FileExistsError(f"File to export users already exists and overwrite is set to False : {filepath}")
 
         pwd_col_name = "encrypted_pwd" if encrypt else "password"
-        rows: list = [["url", "port", "username", pwd_col_name, "description"]]
+        rows: list = [["url", "port", "username", pwd_col_name, "allow_unsecure_channel", "description"]]
 
         self.get_all_remotes(reload=True)
         for remote in self.remotes_dict.values():
             a = remote.address
             pwd = REMOTES_CIPHER.encrypt(a.password) if encrypt else a.password
-            rows.append([a.url, a.port, a.username, pwd, a.description])
+            rows.append([a.url, a.port, a.username, pwd, a.allow_unsecure_channel, a.description])
 
         with open(filepath, mode="w", encoding="utf-8-sig", newline="") as csv_file:
             csv_writer = csv.writer(csv_file, delimiter=delimiter, quotechar=quotechar, quoting=csv.QUOTE_MINIMAL)
@@ -311,7 +311,7 @@ class Remote:
         """Authenticates and store token on `address`. Returns True on success, raises on failure.
         Refuses to send credentials over plain HTTP if not on localhost or on a private network."""
 
-        if not self.address.channel_is_secure:
+        if not self.address.channel_is_secure and self.address.allow_unsecure_channel is False:
             msg = f"Login to a non-local remote is not allowed over plain HTTP: {self.id}"
             log(msg, logging.ERROR)
             self.last_error = RemoteInsecureChannelError(msg)
@@ -455,6 +455,7 @@ class RemoteAddress:
         uuid: str = "",
         description: str = "",
         refresh_token: str = "",
+        allow_unsecure_channel: bool = False,
     ):
         self.uuid: str = uuid if not uuid == "" else str(uuid4())
         self.url: str = url
@@ -464,6 +465,7 @@ class RemoteAddress:
         self.description: str = description
         self.refresh_token: str = refresh_token
         self.access_token: str = ""  # in memory only, to_dict / from_dict don't use it
+        self.allow_unsecure_channel = allow_unsecure_channel
 
     @property
     def id(self) -> str:
@@ -527,6 +529,7 @@ class RemoteAddress:
             "username": self.username,
             "encrypted_pwd": REMOTES_CIPHER.encrypt(self.password),
             "description": self.description,
+            "allow_unsecure_channel": self.allow_unsecure_channel,
             "token": REMOTES_CIPHER.encrypt(self.refresh_token),
         }
 
@@ -555,6 +558,7 @@ class RemoteAddress:
             "username": None,
             "password": pwd_key,
             "description": None,
+            "allow_unsecure_channel": None,
             "refresh_token": "token",
         }
 
@@ -567,8 +571,11 @@ class RemoteAddress:
                 msg = f"{key} is required to create a RemoteAddress"
                 log(msg, logging.ERROR)
                 raise ValueError(msg)
+            # and convert None val for optional attributes
+            elif key == "allow_unsecure_channel":
+                val = str(val).lower() == "true" if val else False
             else:
-                val = val if val else ""  # convert None val for optional attributes
+                val = val if val else ""
 
             if key == "uuid" and not val:
                 val = str(uuid4())  # generate an uuid if missing

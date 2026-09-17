@@ -275,7 +275,8 @@ class LogsWindow(tk.Toplevel):
                     value = self.duration_format(value) if isinstance(value, float | int) else ""
                 elif col == "file":
                     nb_rows = getattr(rows, "nb_rows", "")
-                    value = "" if nb_rows == 0 or (isinstance(value, str) and Path(value).exists()) else "\U0000274c"
+                    file_exists = isinstance(value, (Path, str)) and Path(value).exists()
+                    value = "" if nb_rows == 0 or file_exists else "\U0000274c"
                 elif col in ("num", "nb_rows", "nb_run"):
                     value = format(value, ",").replace(",", " ")
 

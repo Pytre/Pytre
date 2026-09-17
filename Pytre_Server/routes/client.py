@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import traceback
 from datetime import datetime, timezone
 
 import jwt
@@ -345,12 +346,17 @@ async def _run_query(
             result = await driver.execute(template, params)
         success = True
     except SqlConnectionError as e:
+        log(f"Server unavailable on server '{request.server_id}' (user {username}) : {e}", logging.WARNING)
         http_error = status.HTTP_503_SERVICE_UNAVAILABLE
         raise HTTPException(status_code=http_error, detail=f"Server unavailable: {e}") from e
     except SqlError as e:
+        msg = f"SQL error for query '{request.query_id}' on server '{request.server_id}' (user {username}): {e}"
+        log(msg, logging.ERROR)
         http_error = status.HTTP_500_INTERNAL_SERVER_ERROR
         raise HTTPException(status_code=http_error, detail=f"SQL error: {e}") from e
     except Exception as e:
+        msg = f"Unexpected error for query '{request.query_id}' on server '{request.server_id}' (user {username}): "
+        log(f"{msg} {type(e).__name__}: {e}\n{traceback.format_exc()}", logging.ERROR)
         http_error = status.HTTP_500_INTERNAL_SERVER_ERROR
         raise HTTPException(status_code=http_error, detail=f"Unexpected error: {e}") from e
     finally:

@@ -62,25 +62,51 @@ class AppContext(LazyContext):
 
 
 class UserContext(LazyContext):
-    def __init__(self, users: Users, username: str = ""):
+    def __init__(self, users: Users, username: str = "", current_user_override: User | None = None):
+        """`current_user_override`, when given, is returned as-is by `current_user`."""
         self._users: Users = users
         self._username: str = username
+        self._current_user_override: User | None = current_user_override
+
+        self._base: UserContext | None = None  # provides prefs, logs and remotes when set by with_remote_user_infos()
 
         attributes = ("current_user", "user_prefs", "user_logs", "remotes")
         super().__init__(attributes=attributes)
 
     @property
     def current_user(self) -> User:
+        if self._current_user_override:
+            return self._current_user_override
         return self._get_or_create("current_user", lambda: User(self._users, username=self._username))
 
     @property
     def user_prefs(self) -> UserPrefs:
+        if self._base:
+            return self._base.user_prefs
         return self._get_or_create("user_prefs", UserPrefs)
 
     @property
     def user_logs(self) -> UserLogs:
+        if self._base:
+            return self._base.user_logs
         return self._get_or_create("user_logs", UserLogs)
 
     @property
     def remotes(self) -> Remotes:
+        if self._base:
+            return self._base.remotes
         return self._get_or_create("remotes", lambda: Remotes())
+
+    def with_remote_user_infos(self, user_infos: dict | None) -> UserContext:
+        """Same context, but override current_user with a remote's user_infos.
+        All other attributes are shared with `self` and stay lazy.
+        Returns `self` if `user_infos` is None or empty."""
+
+        if not user_infos:
+            return self
+
+        user = User.create_from_remote_infos(self._users, user_infos)
+        derived = UserContext(users=self._users, current_user_override=user)
+        derived._base = self._base or self
+
+        return derived

@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from datetime import datetime, timezone
 
@@ -9,13 +10,14 @@ from pydantic import BaseModel
 
 from Pytre_Core.context import UserContext
 from Pytre_Core.logs_central import ExecutionLogEntry
-from Pytre_Core.sql_query.file_parser import FileParser
-from Pytre_Core.servers import ServerType, filter_servers
+from Pytre_Core.servers import Server, ServerType, filter_servers
 from Pytre_Core.users import AuthType, hash_password, verify_password
 from Pytre_Core.utils import log as _log
 from Pytre_Core.sql_query.loader import build_queries_from_parsers, filter_queries
+from Pytre_Core.sql_query.query import Query
 
 from Pytre_Server.auth_token import create_token, decode_token, TokenType
+from Pytre_Server.execution.protocol import AsyncSqlResult
 from Pytre_Server.execution.template_converter import to_positional_style
 from Pytre_Server.result_streaming import stream_result_and_release
 from Pytre_Server.server_state import ServerResources, ServerState, get_server_state
@@ -62,6 +64,13 @@ class ChangePasswordRequest(BaseModel):
 class ChangePasswordResponse(BaseModel):
     refresh_token: str
     access_token: str
+
+
+class ServersResponse(BaseModel):
+    """user_infos carries what a client needs to display queries correctly using remote's own user data."""
+
+    servers: list[dict]
+    user_infos: dict
 
 
 def username_from_token(token: str, token_type: TokenType, state: ServerState) -> str:
@@ -169,22 +178,25 @@ async def change_password(
 @router.get("/servers")
 async def list_servers(
     username: str = Depends(require_access_token), state: ServerState = Depends(get_server_state)
-) -> list[dict]:
-    """Return the SQL servers the client can use, as id/description only.
+) -> ServersResponse:
+    """Return the SQL servers the client can use, as id/description only, plus the user's own infos.
     The client never connects directly, the server does."""
     user_ctx = UserContext(state.app_ctx.users, username=username)
     user = user_ctx.current_user
     grp_authorized = user.groups if not user.admin else None
     servers_dict = filter_servers(state.app_ctx.servers.servers_dict, grp_filter=grp_authorized)
 
-    supported_servers = []
+    supported_servers: list[Server] = []
     for server in servers_dict.values():
         if server.type not in (ServerType.mssql.name,):
             log(f"Server '{server.id}' ignored, unsupported type: {server.type}", logging.WARNING)
             continue
         supported_servers.append(server)
 
-    return [{"id": s.id, "description": s.description} for s in supported_servers]
+    return ServersResponse(
+        servers=[{"id": s.id, "description": s.description} for s in supported_servers],
+        user_infos=user.export_infos_for_remote(),
+    )
 
 
 @router.get("/queries")
@@ -207,43 +219,14 @@ async def execute_query(
 ) -> StreamingResponse:
     """Execute query using infos sent by the client : a query_id, template hash (to check for staleness) and
     parameter values. Authorization is re-validated (query exists, is associated with server_id, user allowed)"""
+
     resources: ServerResources = state.resources
     user_ctx = UserContext(state.app_ctx.users, username=username)
 
-    # build the requested query and filter to keep only if authorized
-    target_parser = state.query_catalog.by_file_id.get(request.query_id)
-    queries, _errors = build_queries_from_parsers(state.app_ctx, user_ctx, [target_parser] if target_parser else [])
-    authorized = filter_queries(state.app_ctx.servers, queries, request.server_id, user_ctx.current_user)
-
-    # get query version on the server matching the requested query_id
-    query = next((q for q in authorized if q.file_id == request.query_id), None)
-    if query is None:
-        http_error = status.HTTP_404_NOT_FOUND
-        raise HTTPException(status_code=http_error, detail="Unknown or unauthorized query_id for this server_id")
-
-    # check if the client's template hash matches the server's version, unless exempted
-    hash_exemption_until = resources.ignore_hash_until.get(query.file_id)
-    hash_must_be_checked = hash_exemption_until is None or datetime.now() > hash_exemption_until
-    if hash_must_be_checked and request.template_hash != query.get_template_hash():
-        http_error = status.HTTP_409_CONFLICT
-        raise HTTPException(status_code=http_error, detail="Query is not up to date, refresh your query list")
-
-    # check the client's parameters matches what the server expects
-    expected_params = set(query.parameters.params.keys())
-    received_params = set(request.parameters.keys())
-    if expected_params != received_params:
-        missing = sorted(expected_params - received_params)
-        extra = sorted(received_params - expected_params)
-        http_error = status.HTTP_409_CONFLICT
-        detail = f"Parameters mismatch, refresh your query list - missing: {missing}, unexpected: {extra}"
-        raise HTTPException(status_code=http_error, detail=detail)
-
-    # update query parameter values
-    try:
-        query.set_display_values(request.parameters)
-    except ValueError as e:
-        http_error = status.HTTP_400_BAD_REQUEST
-        raise HTTPException(status_code=http_error, detail=f"Invalid value: {e.args[0]}") from e
+    # build and control query
+    query = _resolve_query(state, user_ctx, request)
+    _check_template_hash(query, request, resources)
+    _apply_parameters(query, request, user_ctx.current_user.admin)
 
     # translate command to positional style and configure SQL driver
     exec_config = query.get_exec_config(request.server_id, file_output=False)
@@ -257,12 +240,109 @@ async def execute_query(
 
     # execute the requested query on the server's shared, pooled driver
     await semaphore.acquire()
+
+    result, start_time = await _run_query(state, resources, request, username, positional_template, params, semaphore)
+
+    # prepare a log entry
+    log_entry = ExecutionLogEntry(
+        server_id=request.server_id,
+        user_id=user_ctx.current_user.username,
+        user_name=user_ctx.current_user.title,
+        query_id=request.query_id,
+        start=start_time,
+        parameters=request.parameters,
+    )
+
+    # stream result
+    return StreamingResponse(
+        stream_result_and_release(
+            result,
+            http_request,
+            semaphore,
+            state.chunk_size,
+            resources.execution_logs,
+            log_entry,
+        ),
+        media_type="application/x-ndjson",
+    )
+
+
+def _resolve_query(state: ServerState, user_ctx: UserContext, request: ExecuteRequest) -> Query:
+    """Finds request.query_id among the queries the user is authorized to use.
+    Raises HTTPException(404) if not found or not authorized."""
+
+    # build the requested query and filter to keep only if authorized
+    target_parser = state.query_catalog.by_file_id.get(request.query_id)
+    queries, _errors = build_queries_from_parsers(state.app_ctx, user_ctx, [target_parser] if target_parser else [])
+    authorized = filter_queries(state.app_ctx.servers, queries, request.server_id, user_ctx.current_user)
+
+    # get query version on the server matching the requested query_id
+    query = next((q for q in authorized if q.file_id == request.query_id), None)
+    if query is None:
+        http_error = status.HTTP_404_NOT_FOUND
+        raise HTTPException(status_code=http_error, detail="Unknown or unauthorized query_id for this server_id")
+
+    return query
+
+
+def _check_template_hash(query: Query, request: ExecuteRequest, resources: ServerResources) -> None:
+    """Check client's template hash against the server's version. Raises HTTPException(409) unless exempted."""
+    hash_exemption_until = resources.ignore_hash_until.get(query.file_id)
+    hash_must_be_checked = hash_exemption_until is None or datetime.now() > hash_exemption_until
+    if hash_must_be_checked and request.template_hash != query.get_template_hash():
+        http_error = status.HTTP_409_CONFLICT
+        raise HTTPException(status_code=http_error, detail="Query is not up to date, refresh your query list")
+
+
+def _apply_parameters(query: Query, request: ExecuteRequest, is_admin: bool) -> None:
+    """Validates parameters matches what the server expects,
+    replace received hidden parameters with server computed one unless user is an admin,
+    then applies the values onto `query`.
+    Raises HTTPException(409) on a name mismatch or HTTPException(400) on an invalid value."""
+
+    # check the client's parameters matches what the server expects
+    expected_params = set(query.parameters.params.keys())
+    received_params = set(request.parameters.keys())
+    if expected_params != received_params:
+        missing = sorted(expected_params - received_params)
+        extra = sorted(received_params - expected_params)
+        http_error = status.HTTP_409_CONFLICT
+        detail = f"Parameters mismatch, refresh your query list - missing: {missing}, unexpected: {extra}"
+        raise HTTPException(status_code=http_error, detail=detail)
+
+    # unless user is an admin, replace received hidden parameters with the server computed one
+    if not is_admin:
+        for key, param in query.parameters.params.items():
+            if param.is_hidden:
+                request.parameters[key] = param.display_value
+
+    # update query parameter values
+    try:
+        query.set_display_values(request.parameters)
+    except ValueError as e:
+        http_error = status.HTTP_400_BAD_REQUEST
+        raise HTTPException(status_code=http_error, detail=f"Invalid value: {e.args[0]}") from e
+
+
+async def _run_query(
+    state: ServerState,
+    resources: ServerResources,
+    request: ExecuteRequest,
+    username: str,
+    template: str,
+    params: list,
+    semaphore: asyncio.Semaphore,
+) -> tuple[AsyncSqlResult, datetime]:
+    """Executes the query on the server's shared, pooled driver. `semaphore` must already be
+    acquired by the caller - only released here on failure (kept held on success until
+    streaming completes, released by stream_result_and_release())."""
+
     success: bool = False
     try:
         server = state.app_ctx.servers.servers_dict[request.server_id]
         async with resources.use_driver(server) as driver:
             start_time = datetime.now()
-            result = await driver.execute(positional_template, params)
+            result = await driver.execute(template, params)
         success = True
     except SqlConnectionError as e:
         http_error = status.HTTP_503_SERVICE_UNAVAILABLE
@@ -277,19 +357,4 @@ async def execute_query(
         if not success:
             semaphore.release()
 
-    # return result
-    log_entry = ExecutionLogEntry(
-        server_id=request.server_id,
-        user_id=user_ctx.current_user.username,
-        user_name=user_ctx.current_user.title,
-        query_id=request.query_id,
-        start=start_time,
-        parameters=request.parameters,
-    )
-
-    return StreamingResponse(
-        stream_result_and_release(
-            result, http_request, semaphore, state.chunk_size, resources.execution_logs, log_entry
-        ),
-        media_type="application/x-ndjson",
-    )
+    return result, start_time

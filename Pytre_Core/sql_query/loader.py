@@ -77,20 +77,20 @@ def build_queries_from_parsers(
 def build_queries_from_remote(
     app_ctx: AppContext, user_ctx: UserContext, remote_server: RemoteServer
 ) -> tuple[list[Query], list[str]]:
-    """Builds a Query per entry in remote_server.serialized_queries, for user.
-    Entries that fail to deserialize are skipped and their error are collected instead."""
+    """Builds a Query per entry in remote_server.serialized_queries.
+    Entries that fail to deserialize are skipped and their errors are collected instead."""
 
     queries: list[Query] = []
     errors: list[str] = []
 
     for data in remote_server.serialized_queries:
         try:
-            my_query = Query.deserialize(app_ctx, user_ctx, data, remote=remote_server)
+            my_query = Query.deserialize(app_ctx, user_ctx, data, remote_server=remote_server)
         except (KeyError, ValueError) as e:
             error = f"Erreur création Query remote pour '{remote_server.id_on_remote}' : {e.__class__.__name__}, {e}"
             errors.append(error)
             log(error, level=logging.WARNING)
-            continue  # si erreur, ne pas bloquer et ignorer la requête
+            continue  # on error ignore query
 
         queries.append(my_query)
 

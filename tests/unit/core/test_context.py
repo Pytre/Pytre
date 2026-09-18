@@ -328,3 +328,59 @@ def test_user_context_property_access_is_thread_safe(mock_user_dependencies, moc
 
     assert call_count == 1
     assert results[0] is results[1]
+
+
+@pytest.mark.unit
+def test_with_remote_user_infos_returns_self_without_infos(mock_user_dependencies, mock_users):
+    ctx = UserContext(mock_users)
+
+    assert ctx.with_remote_user_infos(None) is ctx
+    assert ctx.with_remote_user_infos({}) is ctx
+    mock_user_dependencies["User"].create_from_remote_infos.assert_not_called()
+
+
+@pytest.mark.unit
+def test_with_remote_user_infos_builds_context_overriding_current_user(mock_user_dependencies, mock_users):
+    infos = {"username": "alice"}
+    ctx = UserContext(mock_users)
+    mock_user_cls = mock_user_dependencies["User"]
+
+    derived = ctx.with_remote_user_infos(infos)
+
+    mock_user_cls.create_from_remote_infos.assert_called_once_with(mock_users, infos)
+    assert derived is not ctx
+    assert derived.current_user is mock_user_cls.create_from_remote_infos.return_value
+    mock_user_cls.assert_not_called()  # no lookup in the local users db
+
+
+@pytest.mark.unit
+def test_with_remote_user_infos_shares_prefs_logs_and_remotes(mock_user_dependencies, mock_users):
+    ctx = UserContext(mock_users)
+
+    derived = ctx.with_remote_user_infos({"username": "alice"})
+
+    assert derived.user_prefs is ctx.user_prefs
+    assert derived.user_logs is ctx.user_logs
+    assert derived.remotes is ctx.remotes
+
+
+@pytest.mark.unit
+def test_with_remote_user_infos_stays_lazy(mock_user_dependencies, mock_users):
+    ctx = UserContext(mock_users)
+
+    ctx.with_remote_user_infos({"username": "alice"})
+
+    for name in ("UserPrefs", "UserLogs", "Remotes"):
+        assert not mock_user_dependencies[name].called, f"{name} should not be built by with_remote_user_infos()"
+
+
+@pytest.mark.unit
+def test_with_remote_user_infos_flattens_chained_derivation(mock_user_dependencies, mock_users):
+    """Deriving from an already-derived context must not stack indirection - _base always points
+    at the root context, never at another derived one."""
+    root = UserContext(mock_users)
+    intermediate = root.with_remote_user_infos({"username": "alice"})
+
+    derived = intermediate.with_remote_user_infos({"username": "bob"})
+
+    assert derived._base is root

@@ -14,7 +14,7 @@ class Query:
         """source can be a Path (it will be read and parsed)
         or an already-built FileParser (reused as-is without disk read)"""
         parser = source if isinstance(source, FileParser) else FileParser(source)
-        self.remote: RemoteServer | None = None  # initialisé en direct ou avec deserialize
+        self.remote_server: RemoteServer | None = None  # initialisé en direct ou avec deserialize
 
         self.app_ctx: AppContext = app_ctx
         self.user_ctx: UserContext = user_ctx
@@ -85,8 +85,8 @@ class Query:
         return self.cmd_builder.params_pos_for_debug(only_inlined)
 
     def get_exec_config(self, server_id: str = "", file_output: bool = True) -> LocalExecuteCfg | RemoteExecuteCfg:
-        if self.remote:
-            return self.cmd_builder.build_exec_remote_cfg(self.remote, self.name, self.file_id, file_output)
+        if self.remote_server:
+            return self.cmd_builder.build_exec_remote_cfg(self.remote_server, self.name, self.file_id, file_output)
         else:
             select_server_id: str = server_id or (self.servers_id[0] if self.servers_id else "")
             return self.cmd_builder.build_exec_local_cfg(select_server_id, self.name, file_output)
@@ -104,7 +104,7 @@ class Query:
             display_params[key] = param.display_value
 
         return {
-            "remote": self.remote.serialize() if self.remote else None,
+            "remote_server": self.remote_server.serialize() if self.remote_server else None,
             "filename": str(self.filename),
             "file_content": self.file_content,
             "infos": self.infos,
@@ -120,11 +120,18 @@ class Query:
 
     @classmethod
     def deserialize(
-        cls, app_ctx: AppContext, user_ctx: UserContext, data: dict, remote: RemoteServer | None = None
+        cls, app_ctx: AppContext, user_ctx: UserContext, data: dict, remote_server: RemoteServer | None = None
     ) -> Self:
-        query: Query = cls(app_ctx, user_ctx)
+        """Rebuilds a Query from serialize(). `remote_server` overrides data["remote_server"] when given."""
 
-        query.remote = remote or (RemoteServer.deserialize(data["remote"]) if data["remote"] else None)
+        if not remote_server and data["remote_server"]:
+            remote_server = RemoteServer.deserialize(data["remote_server"])
+
+        user_infos = remote_server.remote.user_infos if remote_server else None
+        query_user_ctx = user_ctx.with_remote_user_infos(user_infos)  # return as is if no user_infos
+        query: Query = cls(app_ctx, query_user_ctx)
+
+        query.remote_server = remote_server
         query.filename = Path(data["filename"])
         query.file_content = data["file_content"]
         query.infos = data["infos"]
@@ -135,8 +142,8 @@ class Query:
         query.grp_authorized = data["grp_authorized"]
         query.servers_id = data["servers_id"]
 
-        query.parameters = SqlParameters(app_ctx.settings, user_ctx.current_user, query.file_content)
-        query.cmd_builder = CmdBuilder(app_ctx.settings, user_ctx.user_prefs, query.raw_cmd, query.parameters)
+        query.parameters = SqlParameters(app_ctx.settings, query_user_ctx.current_user, query.file_content)
+        query.cmd_builder = CmdBuilder(app_ctx.settings, query_user_ctx.user_prefs, query.raw_cmd, query.parameters)
 
         display_params: dict[str, str] = data["display_params"]
         query.set_display_values(display_params)

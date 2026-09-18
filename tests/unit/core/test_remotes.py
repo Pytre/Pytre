@@ -87,6 +87,12 @@ class _FakeResponse:
         return self._json_data
 
 
+def _servers_payload(servers: list[dict], user_infos: dict | None = None) -> dict:
+    """Builds the {"servers": [...], "user_infos": {...}} shape GET /servers actually returns
+    (Remote.refresh_servers() expects this, not a bare list)."""
+    return {"servers": servers, "user_infos": user_infos or {}}
+
+
 def _make_token() -> str:
     """A well-formed JWT string, comfortably far from expiry (well outside
     _token_is_valid()'s near-expiry margin) - enough to make RemoteAddress._token_is_valid()
@@ -960,7 +966,8 @@ def test_get_authenticated_raises_remote_auth_error_if_login_fails_with_bad_cred
 @pytest.mark.unit
 def test_refresh_servers_populates_servers_on_success(address, remotes, monkeypatch, auto_login_ok):
     servers_data = [{"id": "s1", "description": "Server 1"}, {"id": "s2", "description": "Server 2"}]
-    monkeypatch.setattr(httpx2, "get", lambda **kwargs: _FakeResponse(servers_data, status_code=200))
+    payload = _servers_payload(servers_data)
+    monkeypatch.setattr(httpx2, "get", lambda **kwargs: _FakeResponse(payload, status_code=200))
 
     remote = Remote(remotes, address=address)
     result = remote.refresh_servers()
@@ -972,6 +979,17 @@ def test_refresh_servers_populates_servers_on_success(address, remotes, monkeypa
 
 
 @pytest.mark.unit
+def test_refresh_servers_populates_user_infos_on_success(address, remotes, monkeypatch, auto_login_ok):
+    payload = _servers_payload([], user_infos={"username": "alice", "admin": False})
+    monkeypatch.setattr(httpx2, "get", lambda **kwargs: _FakeResponse(payload, status_code=200))
+
+    remote = Remote(remotes, address=address)
+    remote.refresh_servers()
+
+    assert remote.user_infos == {"username": "alice", "admin": False}
+
+
+@pytest.mark.unit
 def test_refresh_servers_sends_correct_url_and_auth_header(address, remotes, monkeypatch):
     address.access_token = _make_token()
     captured = {}
@@ -979,7 +997,7 @@ def test_refresh_servers_sends_correct_url_and_auth_header(address, remotes, mon
     def fake_get(url, params, headers, timeout):
         captured["url"] = url
         captured["headers"] = headers
-        return _FakeResponse([], status_code=200)
+        return _FakeResponse(_servers_payload([]), status_code=200)
 
     monkeypatch.setattr(httpx2, "get", fake_get)
 
@@ -1052,7 +1070,7 @@ def test_refresh_servers_success_clears_last_error(address, remotes, monkeypatch
     remote = Remote(remotes, address=address)
     remote.last_error = RemoteError("previous failure")
 
-    monkeypatch.setattr(httpx2, "get", lambda **kwargs: _FakeResponse([], status_code=200))
+    monkeypatch.setattr(httpx2, "get", lambda **kwargs: _FakeResponse(_servers_payload([]), status_code=200))
     remote.refresh_servers()
 
     assert remote.last_error is None
@@ -1167,9 +1185,8 @@ def test_remote_init_does_not_call_http_when_load_is_false(address, remotes, mon
 
 @pytest.mark.unit
 def test_remote_init_with_load_true_fetches_servers(address, remotes, monkeypatch, auto_login_ok):
-    monkeypatch.setattr(
-        httpx2, "get", lambda **kwargs: _FakeResponse([{"id": "s1", "description": "Server 1"}], status_code=200)
-    )
+    payload = _servers_payload([{"id": "s1", "description": "Server 1"}])
+    monkeypatch.setattr(httpx2, "get", lambda **kwargs: _FakeResponse(payload, status_code=200))
 
     remote = Remote(remotes, address=address, load=True)
 
@@ -1245,7 +1262,8 @@ def test_get_all_servers_reload_refreshes_every_remote_and_merges_them(monkeypat
     addr1 = RemoteAddress(url="http://127.0.0.1", port=8000, username="alice")
     addr2 = RemoteAddress(url="http://127.0.0.1", port=8001, username="bob")
     _write_remotes_file(remotes_file, [addr1, addr2])
-    monkeypatch.setattr(httpx2, "get", lambda **kwargs: _FakeResponse([{"id": "s1", "description": "Server 1"}]))
+    payload = _servers_payload([{"id": "s1", "description": "Server 1"}])
+    monkeypatch.setattr(httpx2, "get", lambda **kwargs: _FakeResponse(payload))
 
     remotes = Remotes(remotes_file)
     servers = remotes.get_all_servers(reload=True)
@@ -1260,7 +1278,8 @@ def test_get_all_servers_without_reload_assembles_from_current_state(monkeypatch
     memory, rather than returning a possibly-empty separately-tracked cache."""
     addr = RemoteAddress(url="http://127.0.0.1", port=8000, username="alice")
     _write_remotes_file(remotes_file, [addr])
-    monkeypatch.setattr(httpx2, "get", lambda **kwargs: _FakeResponse([{"id": "s1", "description": "Server 1"}]))
+    payload = _servers_payload([{"id": "s1", "description": "Server 1"}])
+    monkeypatch.setattr(httpx2, "get", lambda **kwargs: _FakeResponse(payload))
     remotes = Remotes(remotes_file)
     remotes.get_all_servers(reload=True)  # populate remote.servers once, since init no longer does it
 
@@ -1624,7 +1643,12 @@ def test_remote_server_serialize(address, remotes):
 
     data = server.serialize()
 
-    assert data == {"id_on_remote": "SRV1", "description": "Server 1", "address": address.to_dict()}
+    assert data == {
+        "id_on_remote": "SRV1",
+        "description": "Server 1",
+        "address": address.to_dict(),
+        "user_infos": None,
+    }
 
 
 @pytest.mark.unit
@@ -1670,6 +1694,26 @@ def test_remote_server_serialize_deserialize_round_trip(address, remotes):
     assert rebuilt.address.url == original.address.url
     assert rebuilt.address.port == original.address.port
     assert rebuilt.address.username == original.address.username
+
+
+@pytest.mark.unit
+def test_remote_server_serialize_carries_user_infos(address, remotes):
+    remote = Remote(remotes, address)
+    remote.user_infos = {"username": "alice", "attribs_cust": {"dept": "IT"}}
+    original = RemoteServer(id="SRV1", description="Server 1", remote=remote)
+
+    data = original.serialize()
+    rebuilt = RemoteServer.deserialize(data)
+
+    assert data["user_infos"] == remote.user_infos
+    assert rebuilt.remote.user_infos == remote.user_infos
+
+
+@pytest.mark.unit
+def test_remote_server_deserialize_without_user_infos_defaults_to_none(address):
+    data = {"id_on_remote": "SRV1", "description": "Server 1", "address": address.to_dict()}
+
+    assert RemoteServer.deserialize(data).remote.user_infos is None
 
 
 # ================================================================================

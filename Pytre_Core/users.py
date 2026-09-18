@@ -697,6 +697,28 @@ class User:
 
         return True
 
+    def export_infos_for_remote(self) -> dict:
+        """Export infos needed to correctly deserialize queries from a remote."""
+        return {
+            "username": self.username,
+            "title": self.title,
+            "admin": self.admin,
+            "msg_login": self.msg_login,
+            "attribs_cust": self.attribs_cust,
+        }
+
+    @classmethod
+    def create_from_remote_infos(cls, users: Users, data: dict) -> User:
+        """Create a user from a remote's infos - Used to deserialize its queries."""
+        user = User(users, detect_user=False)
+        user.username = data.get("username", "")
+        user.title = data.get("title", "")
+        user.admin = data.get("admin", False)
+        user.msg_login = data.get("msg_login", "")
+        user.attribs_cust = data.get("attribs_cust", {})
+
+        return user
+
 
 def get_dummy_hash() -> str:
     """Generate Precomputed hash to be used as a default hash so an unknown user login takes

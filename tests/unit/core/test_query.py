@@ -3,8 +3,10 @@ Tests for Pytre/sql_query/query.py
 """
 
 import pytest
+from typing import cast
 from unittest.mock import Mock
 
+from Pytre_Core.context import UserContext
 from Pytre_Core.remotes import Remote, RemoteServer
 from Pytre_Core.sql_query.query import Query
 from Pytre_Core.remotes import RemoteAddress
@@ -139,7 +141,7 @@ def test_query_serialize_deserialize(mock_app_ctx, mock_user_ctx, sample_sql_fil
 
 
 # ================================================================================
-# Query.remote - serialize / deserialize
+# Query.remote_server - serialize / deserialize
 # ================================================================================
 
 
@@ -152,11 +154,11 @@ def remote_server() -> RemoteServer:
 @pytest.mark.unit
 def test_query_serialize_includes_remote_when_set(mock_app_ctx, mock_user_ctx, sample_sql_file, remote_server):
     query = Query(mock_app_ctx, mock_user_ctx, sample_sql_file)
-    query.remote = remote_server
+    query.remote_server = remote_server
 
     data = query.serialize()
 
-    assert data["remote"] == remote_server.serialize()
+    assert data["remote_server"] == remote_server.serialize()
 
 
 @pytest.mark.unit
@@ -165,40 +167,40 @@ def test_query_serialize_remote_is_none_when_local(mock_app_ctx, mock_user_ctx, 
 
     data = query.serialize()
 
-    assert data["remote"] is None
+    assert data["remote_server"] is None
 
 
 @pytest.mark.unit
 def test_query_deserialize_restores_remote_from_data(mock_app_ctx, mock_user_ctx, sample_sql_file, remote_server):
     """The 'execution round-trip' use case (multiprocessing queue): the Query being
-    serialized already has .remote set, so data["remote"] carries it correctly."""
+    serialized already has .remote_server set, so data["remote_server"] carries it correctly."""
     query1 = Query(mock_app_ctx, mock_user_ctx, sample_sql_file)
-    query1.remote = remote_server
+    query1.remote_server = remote_server
     data = query1.serialize()
 
     query2 = Query.deserialize(mock_app_ctx, mock_user_ctx, data)
 
-    assert query2.remote is not None
-    assert query2.remote.id_on_remote == remote_server.id_on_remote
+    assert query2.remote_server is not None
+    assert query2.remote_server.id_on_remote == remote_server.id_on_remote
     # description itself isn't compared: from_dict() always fills a blank description with
     # a "host:port" fallback by design (see RemoteAddress), so it won't match the original "".
-    assert query2.remote.address.url == remote_server.address.url
-    assert query2.remote.address.port == remote_server.address.port
-    assert query2.remote.address.username == remote_server.address.username
+    assert query2.remote_server.address.url == remote_server.address.url
+    assert query2.remote_server.address.port == remote_server.address.port
+    assert query2.remote_server.address.username == remote_server.address.username
 
 
 @pytest.mark.unit
 def test_query_deserialize_uses_explicit_remote_override(mock_app_ctx, mock_user_ctx, sample_sql_file, remote_server):
-    """The 'display' use case: data['remote'] is None (Pytre_Server never sets it on its
+    """The 'display' use case: data['remote_server'] is None (Pytre_Server never sets it on its
     own Query objects), but the caller - who just fetched this query from that remote -
     passes it explicitly instead."""
     query1 = Query(mock_app_ctx, mock_user_ctx, sample_sql_file)
     data = query1.serialize()
-    assert data["remote"] is None  # confirms this really is the "server never set it" case
+    assert data["remote_server"] is None  # confirms this really is the "server never set it" case
 
-    query2 = Query.deserialize(mock_app_ctx, mock_user_ctx, data, remote=remote_server)
+    query2 = Query.deserialize(mock_app_ctx, mock_user_ctx, data, remote_server=remote_server)
 
-    assert query2.remote is remote_server
+    assert query2.remote_server is remote_server
 
 
 @pytest.mark.unit
@@ -208,7 +210,99 @@ def test_query_deserialize_without_remote_stays_local(mock_app_ctx, mock_user_ct
 
     query2 = Query.deserialize(mock_app_ctx, mock_user_ctx, data)
 
-    assert query2.remote is None
+    assert query2.remote_server is None
+
+
+@pytest.fixture
+def user_info_sql_file(tmp_path):
+    """Query with a parameter resolved through USER_INFO(dept)"""
+    sql_file = tmp_path / "user_info_query.sql"
+    sql_file.write_text(
+        """/* Infos requête
+Code : USER_INFO_QUERY
+Description : Query using USER_INFO
+Hide : 0
+Servers : TEST_SERVER
+*/
+
+DECLARE
+@dept as nvarchar(50) = ''  -- Department|USER_INFO(dept)
+;
+
+SELECT col1 FROM test_table WHERE dept = @dept
+""",
+        encoding="utf-8",
+    )
+    return sql_file
+
+
+def _user_ctx_knowing_dept(mock_user_prefs, dept: str) -> UserContext:
+    """Real UserContext (so with_remote_user_infos() really runs) whose local user answers `dept` to USER_INFO"""
+    local_user = Mock()
+    local_user.user_info = Mock(return_value=dept)
+    ctx = UserContext(Mock(), current_user_override=local_user)
+    ctx._base = Mock(user_prefs=mock_user_prefs)  # prefs are provided by the base context
+    return ctx
+
+
+def _user_info_mock(ctx: UserContext) -> Mock:
+    """The Mock behind ctx.current_user.user_info, to assert on how the local user was consulted"""
+    return cast(Mock, ctx.current_user).user_info
+
+
+@pytest.mark.unit
+def test_query_deserialize_rebuilds_user_from_remote_user_infos(
+    mock_app_ctx, mock_user_prefs, user_info_sql_file, remote_server
+):
+    """Execution round-trip: the process deserializing the query runs with the *local* user, which doesn't
+    know the remote's custom attribute. USER_INFO(dept) must resolve against the remote's user_infos carried
+    by data["remote_server"], not the local user."""
+    remote_server.remote.user_infos = {"username": "alice", "attribs_cust": {"dept": "IT"}}
+    query1 = Query(mock_app_ctx, _user_ctx_knowing_dept(mock_user_prefs, "IT"), user_info_sql_file)
+    query1.remote_server = remote_server
+    data = query1.serialize()
+
+    local_ctx = _user_ctx_knowing_dept(mock_user_prefs, "")  # local user has no "dept"
+    query2 = Query.deserialize(mock_app_ctx, local_ctx, data)
+
+    assert query2.user_ctx is not local_ctx
+    assert query2.user_ctx.current_user.user_info("dept") == "IT"
+    assert query2.parameters.params["@dept"].display_value == "IT"
+    _user_info_mock(local_ctx).assert_not_called()
+
+
+@pytest.mark.unit
+def test_query_deserialize_with_explicit_remote_server_uses_its_user_infos(
+    mock_app_ctx, mock_user_prefs, user_info_sql_file, remote_server
+):
+    """Loader use case: the Query comes from a server (data["remote_server"] is None) and the caller
+    passes the RemoteServer explicitly - USER_INFO must still resolve against that remote's user_infos."""
+    remote_server.remote.user_infos = {"username": "alice", "attribs_cust": {"dept": "IT"}}
+    data = Query(mock_app_ctx, _user_ctx_knowing_dept(mock_user_prefs, "IT"), user_info_sql_file).serialize()
+    assert data["remote_server"] is None
+
+    local_ctx = _user_ctx_knowing_dept(mock_user_prefs, "")  # local user has no "dept"
+    query = Query.deserialize(mock_app_ctx, local_ctx, data, remote_server=remote_server)
+
+    assert query.user_ctx is not local_ctx
+    assert query.user_ctx.user_prefs is local_ctx.user_prefs  # shared, not reloaded
+    assert query.parameters.params["@dept"].display_value == "IT"
+    _user_info_mock(local_ctx).assert_not_called()
+
+
+@pytest.mark.unit
+def test_query_deserialize_without_user_infos_keeps_given_user_ctx(
+    mock_app_ctx, mock_user_prefs, user_info_sql_file, remote_server
+):
+    remote_server.remote.user_infos = None
+    query1 = Query(mock_app_ctx, _user_ctx_knowing_dept(mock_user_prefs, "IT"), user_info_sql_file)
+    query1.remote_server = remote_server
+    data = query1.serialize()
+
+    local_ctx = _user_ctx_knowing_dept(mock_user_prefs, "IT")
+    query2 = Query.deserialize(mock_app_ctx, local_ctx, data)
+
+    assert query2.user_ctx is local_ctx
 
 
 # ================================================================================
@@ -455,7 +549,7 @@ def test_query_get_exec_config_remote_splits_query_id_from_remote_query_id(
     deliberately has a code: header ("TEST_QUERY") that differs from its filename stem
     ("test_query"), so a bug conflating the two would be caught here."""
     query = Query(mock_app_ctx, mock_user_ctx, sample_sql_file)
-    query.remote = remote_server
+    query.remote_server = remote_server
 
     config = query.get_exec_config(file_output=False)
 

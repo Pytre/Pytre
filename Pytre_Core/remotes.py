@@ -299,6 +299,7 @@ class Remote:
         self.remotes: Remotes | None = remotes
         self.address: RemoteAddress = address
         self.servers: list[RemoteServer] = []
+        self.user_infos: dict | None = None
         self.last_error: RemoteError | None = None
 
         if load:
@@ -406,12 +407,13 @@ class Remote:
         return response
 
     def refresh_servers(self) -> list[RemoteServer]:
-        """Fetches exposed SQL servers. On failure, logs a warning, sets last_error and keeps the previous list."""
+        """Fetches exposed SQL servers and user's own infos.
+        On failure, logs a warning, sets last_error and keeps the previous list."""
         try:
             url_route = self.address.build_url(route="/servers")
             response = self.get_authenticated(url=url_route)
             response.raise_for_status()
-            servers = response.json()
+            data = response.json()
         except RemoteError as e:
             log(f"Failed to retrieve remote servers for {self.id} - see cause above", logging.DEBUG)
             self.last_error = e
@@ -429,7 +431,8 @@ class Remote:
             return self.servers
 
         self.last_error = None
-        self.servers = [RemoteServer(**s, remote=self) for s in servers]
+        self.servers = [RemoteServer(**s, remote=self) for s in data.get("servers", [])]
+        self.user_infos = data.get("user_infos")
 
         return self.servers
 
@@ -748,25 +751,27 @@ class RemoteServer:
         return self.serialized_queries
 
     def serialize(self) -> dict:
-        """Only carries what execute() needs standalone: id_on_remote, description, and address
-        (RemoteAddress.to_dict() itself excludes the in-memory-only token). Everything else -
-        serialized_queries/last_error, and the rest of `remote` (its Remotes collection, sibling
+        """Only carries what execute() needs standalone: id_on_remote, description, address
+        (RemoteAddress.to_dict() excludes the in-memory-only token), and user_infos. Everything else
+        - serialized_queries/last_error, and the rest of `remote` (its Remotes collection, sibling
         servers) - is dropped, not needed for the execution round-trip - see Query.serialize()."""
 
         return {
             "id_on_remote": self.id_on_remote,
             "description": self.description,
             "address": self.address.to_dict(),
+            "user_infos": self.remote.user_infos,
         }
 
     @classmethod
     def deserialize(cls, data: dict) -> Self:
-        """Rebuilds id_on_remote, description, address only - serialized_queries/last_error stay
-        at their defaults, and the reconstructed Remote has no Remotes collection (remotes=None),
+        """Rebuilds id_on_remote, description, address, user_infos only - serialized_queries/last_error
+        stay at their defaults, and the reconstructed Remote has no Remotes collection (remotes=None),
         since this is only used for the execution round-trip - see Query.serialize()."""
 
         address = RemoteAddress.from_dict(data["address"])
         remote = Remote(None, address)
+        remote.user_infos = data.get("user_infos")
         return cls(data["id_on_remote"], data["description"], remote)
 
 

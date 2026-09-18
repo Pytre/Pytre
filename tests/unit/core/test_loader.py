@@ -4,8 +4,10 @@ Tests for Pytre/sql_query/loader.py
 
 import pytest
 from pathlib import Path
+from typing import cast
 from unittest.mock import Mock
 
+from Pytre_Core.context import UserContext
 from Pytre_Core.remotes import Remote
 from Pytre_Core.remotes import RemoteServer
 from Pytre_Core.remotes import RemoteAddress
@@ -339,6 +341,59 @@ def test_build_queries_from_remote_empty_when_no_serialized_queries(mock_app_ctx
     assert errors == []
 
 
+_USER_INFO_QUERY = """/* Infos requête
+Code : USER_INFO_QUERY
+Hide : 0
+*/
+
+DECLARE
+@dept as nvarchar(50) = ''  -- Department|USER_INFO(dept)
+;
+
+SELECT 1
+"""
+
+
+def _user_ctx_knowing_dept(mock_user_prefs, dept: str) -> UserContext:
+    """Real UserContext (so with_remote_user_infos() really runs) whose local user answers `dept` to USER_INFO"""
+    local_user = Mock()
+    local_user.user_info = Mock(return_value=dept)
+    ctx = UserContext(Mock(), current_user_override=local_user)
+    ctx._base = Mock(user_prefs=mock_user_prefs)  # prefs are provided by the base context
+    return ctx
+
+
+def _user_info_mock(ctx: UserContext) -> Mock:
+    """The Mock behind ctx.current_user.user_info, to assert on how the local user was consulted"""
+    return cast(Mock, ctx.current_user).user_info
+
+
+def _serialize_user_info_query_into(remote_server, mock_app_ctx, builder_ctx, tmp_path):
+    """Builds the query with `builder_ctx` (the "server", whose user knows dept) and serializes it into remote_server"""
+    (tmp_path / "user_info_query.sql").write_text(_USER_INFO_QUERY, encoding="utf-8")
+    server_queries, load_errors = get_queries(mock_app_ctx, builder_ctx, tmp_path)
+    assert load_errors == []
+    remote_server.serialized_queries = [q.serialize() for q in server_queries]
+
+
+@pytest.mark.unit
+def test_build_queries_from_remote_resolves_user_info_with_the_remote_user(
+    mock_app_ctx, mock_user_prefs, remote_server, tmp_path
+):
+    """USER_INFO(dept) must be resolved with the user the remote knows (its user_infos), not the local one."""
+    _serialize_user_info_query_into(
+        remote_server, mock_app_ctx, _user_ctx_knowing_dept(mock_user_prefs, "IT"), tmp_path
+    )
+    remote_server.remote.user_infos = {"username": "alice", "attribs_cust": {"dept": "IT"}}
+    local_ctx = _user_ctx_knowing_dept(mock_user_prefs, "")  # the local user has no "dept"
+
+    queries, errors = build_queries_from_remote(mock_app_ctx, local_ctx, remote_server)
+
+    assert errors == []
+    assert queries[0].parameters.params["@dept"].display_value == "IT"
+    _user_info_mock(local_ctx).assert_not_called()
+
+
 @pytest.mark.unit
 def test_build_queries_from_remote_collects_and_sorts(mock_app_ctx, mock_user_ctx, remote_server, tmp_path):
     for name, code in [("b", "BQUERY"), ("a", "AQUERY")]:
@@ -351,7 +406,7 @@ def test_build_queries_from_remote_collects_and_sorts(mock_app_ctx, mock_user_ct
 
     assert errors == []
     assert [q.name for q in queries] == ["AQUERY", "BQUERY"]
-    assert all(q.remote is remote_server for q in queries)
+    assert all(q.remote_server is remote_server for q in queries)
 
 
 @pytest.mark.unit

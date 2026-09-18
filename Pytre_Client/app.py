@@ -519,7 +519,7 @@ class App(tk.Toplevel):
         for i, key in enumerate(params):
             # ne pas afficher le paramètre si il doit être caché
             # et que l'utilisateur n'est pas un super utilisateur
-            if params[key].is_hidden and not self.user.admin:
+            if params[key].is_hidden and not params[key].user.admin:
                 continue
 
             label = ttk.Label(self.params_inner, text=params[key].description + " : ", justify=tk.LEFT)

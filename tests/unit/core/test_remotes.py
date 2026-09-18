@@ -23,6 +23,7 @@ from Pytre_Core.remotes import (
     RemoteServer,
     Remotes,
     decode_row_value,
+    detail_from_response,
     encode_row_value,
 )
 
@@ -479,6 +480,131 @@ def test_access_token_is_valid_false_when_expiring_within_margin():
     remote.access_token = _make_soon_to_expire_token()
 
     assert remote.access_token_is_valid is False
+
+
+# ================================================================================
+# detail_from_response
+# ================================================================================
+
+
+@pytest.mark.unit
+def test_detail_from_response_returns_detail_when_present():
+    response = _FakeResponse(json_data={"detail": "Something specific went wrong"})
+
+    assert detail_from_response(response, "fallback") == "Something specific went wrong"
+
+
+@pytest.mark.unit
+def test_detail_from_response_falls_back_when_response_is_none():
+    assert detail_from_response(None, "fallback") == "fallback"
+
+
+@pytest.mark.unit
+def test_detail_from_response_falls_back_when_detail_is_not_a_string():
+    """FastAPI's own validation errors (422) put a list of error objects in "detail", not a
+    plain string - must not be used as-is."""
+    response = _FakeResponse(json_data={"detail": [{"loc": ["body"], "msg": "field required"}]})
+
+    assert detail_from_response(response, "fallback") == "fallback"
+
+
+@pytest.mark.unit
+def test_detail_from_response_falls_back_when_detail_is_empty():
+    response = _FakeResponse(json_data={"detail": ""})
+
+    assert detail_from_response(response, "fallback") == "fallback"
+
+
+@pytest.mark.unit
+def test_detail_from_response_falls_back_when_body_has_no_detail_key():
+    response = _FakeResponse(json_data={"other_key": "value"})
+
+    assert detail_from_response(response, "fallback") == "fallback"
+
+
+@pytest.mark.unit
+def test_detail_from_response_falls_back_when_body_is_not_a_json_object():
+    """Valid JSON but not an object (e.g. the body is literally `null`) - `.get("detail")`
+    would raise AttributeError, not silently return None."""
+    response = _FakeResponse(json_data=None)
+
+    assert detail_from_response(response, "fallback") == "fallback"
+
+
+@pytest.mark.unit
+def test_detail_from_response_falls_back_when_body_is_not_json():
+    class _NotJsonResponse:
+        def json(self):
+            raise ValueError("not json")
+
+    assert detail_from_response(_NotJsonResponse(), "fallback") == "fallback"
+
+
+# ================================================================================
+# Remote.check_health
+# ================================================================================
+
+
+@pytest.mark.unit
+def test_check_health_returns_true_on_success(address, remotes, monkeypatch):
+    monkeypatch.setattr(httpx2, "get", lambda **kwargs: _FakeResponse({"status": "ok"}))
+
+    result = Remote(remotes, address).check_health()
+
+    assert result is True
+
+
+@pytest.mark.unit
+def test_check_health_sends_correct_url(address, remotes, monkeypatch):
+    captured = {}
+
+    def fake_get(url, timeout=None):
+        captured["url"] = url
+        return _FakeResponse({"status": "ok"})
+
+    monkeypatch.setattr(httpx2, "get", fake_get)
+
+    Remote(remotes, address).check_health()
+
+    assert captured["url"] == "http://127.0.0.1:8000/health"
+
+
+@pytest.mark.unit
+def test_check_health_success_clears_last_error(address, remotes, monkeypatch):
+    remote = Remote(remotes, address)
+    remote.last_error = RemoteError("previous failure")
+    monkeypatch.setattr(httpx2, "get", lambda **kwargs: _FakeResponse({"status": "ok"}))
+
+    remote.check_health()
+
+    assert remote.last_error is None
+
+
+@pytest.mark.unit
+def test_check_health_raises_remote_request_error_on_connection_failure(address, remotes, monkeypatch):
+    def fake_get(**kwargs):
+        raise httpx2.ConnectError("boom")
+
+    monkeypatch.setattr(httpx2, "get", fake_get)
+
+    remote = Remote(remotes, address)
+    with pytest.raises(RemoteRequestError):
+        remote.check_health()
+
+    assert isinstance(remote.last_error, RemoteRequestError)
+
+
+@pytest.mark.unit
+def test_check_health_raises_remote_http_status_error_with_detail(address, remotes, monkeypatch):
+    fake_response = _FakeResponse(json_data={"detail": "Server is shutting down"})
+    error = httpx2.HTTPStatusError("503", request=None, response=fake_response)  # type: ignore
+    monkeypatch.setattr(httpx2, "get", lambda **kwargs: _FakeResponse(status_error=error))
+
+    remote = Remote(remotes, address)
+    with pytest.raises(RemoteHTTPStatusError, match="Server is shutting down"):
+        remote.check_health()
+
+    assert isinstance(remote.last_error, RemoteHTTPStatusError)
 
 
 # ================================================================================
@@ -1725,7 +1851,8 @@ def test_execute_checks_health_before_streaming(remote_server, monkeypatch):
 @pytest.mark.unit
 def test_execute_fails_fast_without_streaming_if_health_check_fails(remote_server, monkeypatch):
     """Regression: if Pytre_Server itself is unreachable, execute() must fail via the short
-    /health timeout instead of ever attempting the long-timeout POST /execute stream."""
+    /health timeout instead of ever attempting the long-timeout POST /execute stream. Delegated
+    to Remote.check_health() - see its own dedicated tests for the exception-wrapping details."""
 
     def fake_get(**kwargs):
         raise httpx2.ConnectError("boom")
@@ -1733,7 +1860,7 @@ def test_execute_fails_fast_without_streaming_if_health_check_fails(remote_serve
     monkeypatch.setattr(httpx2, "get", fake_get)
     monkeypatch.setattr(httpx2, "stream", lambda *a, **k: pytest.fail("httpx2.stream should not be called"))
 
-    with pytest.raises(httpx2.ConnectError):
+    with pytest.raises(RemoteRequestError):
         with remote_server.execute("Q1", "hash1", {}):
             pass
 

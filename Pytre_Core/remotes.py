@@ -8,7 +8,7 @@ from collections.abc import Generator, Iterator
 from datetime import datetime, date, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
-from typing import Self, Any
+from typing import Self, Any, Protocol
 from urllib.parse import urlparse
 from uuid import uuid4
 
@@ -56,6 +56,19 @@ def decode_row_value(value: Any) -> Any:
         return Decimal(value["$decimal"])
 
     return value
+
+
+class JsonResponse(Protocol):
+    """Minimal surface needed from a Response - only json()"""
+
+    def json(self) -> Any: ...
+
+
+class AuthenticatedResponse(JsonResponse, Protocol):
+    """Minimal surface needed from a Response by get_authenticated()'s callers -
+    raise_for_status() + json() (inherited from JsonResponse)."""
+
+    def raise_for_status(self) -> Any: ...
 
 
 class RemoteError(Exception):
@@ -307,9 +320,29 @@ class Remote:
             return {}
         return {"Authorization": f"Bearer {self.address.access_token}"}
 
+    def check_health(self) -> bool:
+        """Checks if remote is reachable. Returns True on success, raises on failure."""
+        try:
+            response = httpx2.get(url=self.address.build_url("/health"), timeout=_REQUEST_TIMEOUT)
+            response.raise_for_status()
+        except httpx2.HTTPStatusError as e:
+            msg = f"Couldn't reach {self.id} : {detail_from_response(e.response, str(e))}"
+            log(msg, logging.WARNING)
+            self.last_error = RemoteHTTPStatusError(msg, cause=e)
+            raise self.last_error
+        except httpx2.RequestError as e:
+            msg = f"Remote unreachable : {self.id} : {e}"
+            log(msg, logging.WARNING)
+            self.last_error = RemoteRequestError(msg, cause=e)
+            raise self.last_error
+
+        self.last_error = None
+        return True
+
     def login(self) -> bool:
         """Authenticates and store token on `address`. Returns True on success, raises on failure.
-        Refuses to send credentials over plain HTTP if not on localhost or on a private network."""
+        Refuses to send credentials over plain HTTP if not on localhost or on a private network or
+        explicitly allowed."""
 
         if not self.address.channel_is_secure and self.address.allow_unsecure_channel is False:
             msg = f"Login to a non-local remote is not allowed over plain HTTP: {self.id}"
@@ -339,7 +372,8 @@ class Remote:
             self.address.refresh_token = response.json()["refresh_token"]
             self.address.access_token = response.json()["access_token"]
         except httpx2.HTTPStatusError as e:
-            err_msg = f"Login failed for {self.id} - check username/password : {e}"
+            detail = detail_from_response(e.response, str(e))
+            err_msg = f"Login failed for {self.id} - check username/password : {detail}"
             self.address.refresh_token, self.address.access_token = "", ""
             log(err_msg, logging.WARNING)
             self.last_error = RemoteAuthError(err_msg, cause=e)
@@ -354,7 +388,7 @@ class Remote:
         self.last_error = None
         return True
 
-    def get_authenticated(self, url: str, params: dict | None = None) -> httpx2.Response:
+    def get_authenticated(self, url: str, params: dict | None = None) -> AuthenticatedResponse:
         """GETs `url` using a valid Bearer token - logs in and retries once if the token is
         missing, expired, or invalidated (any of which the server reports as 401).
         Can raise RemoteInsecureChannelError, RemoteAuthError or RemoteRequestError or
@@ -388,7 +422,8 @@ class Remote:
             self.last_error = RemoteRequestError(msg, cause=e)
             return self.servers
         except httpx2.HTTPStatusError as e:
-            msg = f"Couldn't retrieve remote servers from {self.id} : {e}"
+            detail = detail_from_response(e.response, str(e))
+            msg = f"Couldn't retrieve remote servers from {self.id} : {detail}"
             log(msg, logging.WARNING)
             self.last_error = RemoteHTTPStatusError(msg, cause=e)
             return self.servers
@@ -636,8 +671,7 @@ class RemoteServer:
         The underlying HTTP connection closes as soon as the `with` block exits."""
 
         # check if server is available to avoid long timeout if it is not
-        response = httpx2.get(url=self.address.build_url("/health"), timeout=_REQUEST_TIMEOUT)
-        response.raise_for_status()
+        self.remote.check_health()
 
         # proceed to query execution as the server has been confirmed to be available
         url = self.address.build_url("/execute")
@@ -660,7 +694,7 @@ class RemoteServer:
                 except httpx2.HTTPStatusError as e:
                     response.read()  # buffer the body as the connection closes as soon as `with` ends,
                     raise RemoteHTTPStatusError(
-                        str(e), cause=e
+                        detail_from_response(e.response, str(e)), cause=e
                     )  # after that e.response.json()/.text would raise ResponseNotRead
 
                 lines = response.iter_lines()
@@ -703,7 +737,8 @@ class RemoteServer:
             self.last_error = RemoteRequestError(msg, cause=e)
             return self.serialized_queries
         except httpx2.HTTPStatusError as e:
-            msg = f"Couldn't retrieve queries from {id_for_error_msg} : {e}"
+            detail = detail_from_response(e.response, str(e))
+            msg = f"Couldn't retrieve queries from {id_for_error_msg} : {detail}"
             log(msg, logging.WARNING)
             self.last_error = RemoteHTTPStatusError(msg, cause=e)
             return self.serialized_queries
@@ -751,3 +786,15 @@ class RemoteCursor:
         """Describes columns the same way a local cursor's `.description` would.
         Only column names are available - other fields are always None."""
         return tuple((col_name, None, None, None, None, None, None) for col_name in self._col_names)
+
+
+def detail_from_response(response: JsonResponse | None, fallback: str) -> str:
+    """Extract detail from response - Pytre_Server always fails with HTTPException(detail="...")"""
+    if response is not None:
+        try:
+            detail = response.json().get("detail")
+            if isinstance(detail, str) and detail:
+                return detail
+        except (ValueError, AttributeError):
+            pass
+    return fallback

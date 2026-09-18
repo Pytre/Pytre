@@ -6,11 +6,9 @@ from multiprocessing import Queue, Event as proc_get_event
 from multiprocessing.synchronize import Event as ProcEvent
 from typing import Any, TYPE_CHECKING
 
-from httpx2 import RequestError, HTTPStatusError
-
 from Pytre_Core import settings, users, logs_user
 from Pytre_Core.context import AppContext, UserContext
-from Pytre_Core.remotes import RemoteCursor, RemoteServer
+from Pytre_Core.remotes import RemoteCursor, RemoteError, RemoteRequestError, RemoteServer
 from Pytre_Core.servers import Server
 from Pytre_Core.sql_query.execute_config import LocalExecuteCfg, RemoteExecuteCfg
 from Pytre_Core.sql_query.execution_msg import ExecResultMsg
@@ -210,12 +208,11 @@ class QueryExecute:
                 self.queue.put((ExecResultMsg.STOP_TIMER, ""))
                 # extract records
                 return self._extract_records(cursor, start_date)
-        except RequestError as e:
+        except RemoteRequestError as e:
             self._broadcast(self._time_log() + f" - Remote injoignable : {e}")
             return (-1, None)
-        except HTTPStatusError as e:
-            err_msg = e.response.json()["detail"]
-            self._broadcast(self._time_log() + f" - Erreur du serveur remote : {err_msg}")
+        except RemoteError as e:
+            self._broadcast(self._time_log() + f" - Erreur du serveur remote : {e}")
             return (-1, None)
 
     def _execute_log_results(self, starting_date: datetime, ending_date: datetime, rows_count: int):

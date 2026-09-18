@@ -10,9 +10,8 @@ from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
 
 import pymssql
-from httpx2 import ConnectError
 
-from Pytre_Core.remotes import RemoteCursor, RemoteExecutionError
+from Pytre_Core.remotes import RemoteCursor, RemoteExecutionError, RemoteHTTPStatusError, RemoteRequestError
 from Pytre_Core.sql_query.query_drivers import ServerConnectionError
 from Pytre_Core.sql_query.query_execute import QueryExecute
 from Pytre_Core.sql_query.execute_config import LocalExecuteCfg, RemoteExecuteCfg
@@ -619,8 +618,24 @@ def test_execute_remote_writes_to_file_and_logs(qe, mock_query, remote_config, t
 
 @pytest.mark.unit
 def test_execute_remote_handles_connection_error(qe, mock_query, remote_config):
+    """RemoteServer.execute() never raises a raw httpx2 exception - RemoteRequestError is what
+    an unreachable-remote failure actually looks like (see Remote.check_health())."""
     mock_query.get_exec_config.return_value = replace(
-        remote_config, remote_server=_FakeRemote(columns=(), rows=[], error=ConnectError("boom"))
+        remote_config, remote_server=_FakeRemote(columns=(), rows=[], error=RemoteRequestError("boom"))
+    )
+
+    result = qe.execute()
+
+    assert result == (-1, None)
+
+
+@pytest.mark.unit
+def test_execute_remote_handles_server_error(qe, mock_query, remote_config):
+    """A RemoteHTTPStatusError (the remote server responded with an error status) is caught by
+    the broader `except RemoteError` branch in _execute_remote(), distinct from
+    RemoteRequestError (remote unreachable) which has its own branch."""
+    mock_query.get_exec_config.return_value = replace(
+        remote_config, remote_server=_FakeRemote(columns=(), rows=[], error=RemoteHTTPStatusError("boom"))
     )
 
     result = qe.execute()

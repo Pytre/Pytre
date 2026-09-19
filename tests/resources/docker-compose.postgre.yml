@@ -1,0 +1,33 @@
+# Local-only postgre-test container used by integration tests marked @requires_postgre_docker.
+# Started automatically by tests/integration/conftest.py (_ensure_postgre_test_server) when the
+# container isn't already reachable on 127.0.0.1:5432 - no manual docker run needed.
+# Kept apart from docker-compose.mssql.yml on purpose: starting the mssql container must never start this one.
+# POSTGRES_PASSWORD is injected at "docker compose up" time from
+# tests/resources/build_test_keepass.py's TEST_PG_SERVER["password"], not hardcoded here.
+# SSL is enabled with a self-signed certificate generated at first start, so that
+# trust_server_certificate can be tested for real (trust=True works, trust=False fails).
+name: postgre-test  # compose project name - defaults to the folder name ("resources") otherwise
+
+services:
+  postgre-test:
+    image: postgres:16
+    container_name: postgre-test
+    environment:
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
+    ports:
+      - "5432:5432"
+    tmpfs:
+      - /var/lib/postgresql/data  # throwaway test data - no anonymous docker volume left behind
+    entrypoint:
+      - sh
+      - -c
+      - |
+        if [ ! -f /var/lib/postgresql/server.crt ]; then
+          openssl req -new -x509 -days 3650 -nodes -subj '/CN=localhost' \
+            -out /var/lib/postgresql/server.crt -keyout /var/lib/postgresql/server.key
+          chown postgres:postgres /var/lib/postgresql/server.crt /var/lib/postgresql/server.key
+          chmod 600 /var/lib/postgresql/server.key
+        fi
+        exec docker-entrypoint.sh postgres -c ssl=on \
+          -c ssl_cert_file=/var/lib/postgresql/server.crt \
+          -c ssl_key_file=/var/lib/postgresql/server.key

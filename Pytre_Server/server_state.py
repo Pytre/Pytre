@@ -98,14 +98,14 @@ class ServerResources:
             else:
                 stale = {}
 
-        for server_id, driver_entry in stale.items():
-            task = asyncio.create_task(self._disconnect_when_idle(server_id, driver_entry))
+        for driver_entry in stale.values():
+            task = asyncio.create_task(self._disconnect_when_idle(driver_entry))
             self._disconnect_tasks.add(task)
             task.add_done_callback(self._disconnect_tasks.discard)
 
         return len(stale)
 
-    async def _disconnect_when_idle(self, server_id: str, driver_entry: _DriverEntry) -> None:
+    async def _disconnect_when_idle(self, driver_entry: _DriverEntry) -> None:
         while driver_entry.inflight > 0:
             await asyncio.sleep(0.5)
         await driver_entry.driver.disconnect()

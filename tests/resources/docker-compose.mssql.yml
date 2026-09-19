@@ -3,6 +3,8 @@
 # container isn't already reachable on 127.0.0.1:1433 - no manual docker run needed.
 # MSSQL_SA_PASSWORD is injected at "docker compose up" time from
 # tests/resources/build_test_keepass.py's TEST_SQL_SERVER["password"], not hardcoded here.
+name: mssql-test  # compose project name - defaults to the folder name ("resources") otherwise
+
 services:
   mssql-test:
     image: mcr.microsoft.com/mssql/server:2022-latest

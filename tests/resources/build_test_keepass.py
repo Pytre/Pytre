@@ -6,8 +6,9 @@ the fixture stays structurally identical to what the real app writes.
 
 Run from the repo root: .env_314_linux/bin/python tests/resources/build_test_keepass.py
 
-To change the local docker test server's credentials (e.g. after rebuilding the mssql-test
-container), edit TEST_SQL_SERVER below and re-run this script - no test file needs touching.
+To change a local docker test server's credentials (e.g. after rebuilding the mssql-test or
+postgre-test container), edit TEST_SQL_SERVER/TEST_PG_SERVER below and re-run this script - no
+test file needs touching.
 """
 
 import shutil
@@ -30,6 +31,18 @@ TEST_SQL_SERVER = {
     "user": "sa",
     "password": "TonNouveauM0tDeP@sse2026!",
     "type": "mssql",
+}
+
+# Local-only docker container (postgre-test), no security criticality - see docker-compose.postgre.yml.
+TEST_PG_SERVER = {
+    "id": "test_pg",
+    "description": "Local docker postgre-test container, used by integration tests",
+    "host": "127.0.0.1",
+    "port": "5432",
+    "database": "postgres",
+    "user": "postgres",
+    "password": "TestPgP@ssw0rd2026!",
+    "type": "postgre",
 }
 
 TEST_USERNAME = "test_user"  # synthetic, not a real person
@@ -68,6 +81,19 @@ def main() -> None:
     server.type = TEST_SQL_SERVER["type"]
     server.trust_server_certificate = True  # mssql-test docker uses a self-signed certificate
     server.save()
+
+    pg_server = Server(servers)
+    pg_server.id = TEST_PG_SERVER["id"]
+    pg_server.description = TEST_PG_SERVER["description"]
+    pg_server.host = TEST_PG_SERVER["host"]
+    pg_server.port = TEST_PG_SERVER["port"]
+    pg_server.database = TEST_PG_SERVER["database"]
+    pg_server.user = TEST_PG_SERVER["user"]
+    pg_server.password = TEST_PG_SERVER["password"]
+    pg_server.type = TEST_PG_SERVER["type"]
+    pg_server.charset = "UTF8"
+    pg_server.trust_server_certificate = True  # postgre-test docker uses a self-signed certificate
+    pg_server.save()
 
     users = Users(kee)
     user = User(users, username=TEST_USERNAME, detect_user=False)

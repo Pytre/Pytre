@@ -291,7 +291,7 @@ async def test_disconnect_when_idle_disconnects_immediately_if_already_idle(serv
     sleep_mock = AsyncMock()
     monkeypatch.setattr("Pytre_Server.server_state.asyncio.sleep", sleep_mock)
 
-    await server_state.resources._disconnect_when_idle("a", entry)
+    await server_state.resources._disconnect_when_idle(entry)
 
     sleep_mock.assert_not_awaited()
     driver.disconnect.assert_awaited_once()
@@ -308,7 +308,7 @@ async def test_disconnect_when_idle_waits_until_inflight_reaches_zero(server_sta
 
     monkeypatch.setattr("Pytre_Server.server_state.asyncio.sleep", fake_sleep)
 
-    await server_state.resources._disconnect_when_idle("a", entry)
+    await server_state.resources._disconnect_when_idle(entry)
 
     driver.disconnect.assert_awaited_once()
 

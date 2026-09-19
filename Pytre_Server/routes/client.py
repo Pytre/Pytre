@@ -10,7 +10,7 @@ from pydantic import BaseModel
 
 from Pytre_Core.context import UserContext
 from Pytre_Core.logs_central import ExecutionLogEntry
-from Pytre_Core.servers import Server, ServerType, filter_servers
+from Pytre_Core.servers import filter_servers
 from Pytre_Core.users import AuthType, hash_password, verify_password
 from Pytre_Core.utils import log as _log
 from Pytre_Core.sql_query.loader import build_queries_from_parsers, filter_queries
@@ -185,15 +185,8 @@ async def list_servers(
     grp_authorized = user.groups if not user.admin else None
     servers_dict = filter_servers(state.app_ctx.servers.servers_dict, grp_filter=grp_authorized)
 
-    supported_servers: list[Server] = []
-    for server in servers_dict.values():
-        if server.type not in (ServerType.mssql.name,):
-            log(f"Server '{server.id}' ignored, unsupported type: {server.type}", logging.WARNING)
-            continue
-        supported_servers.append(server)
-
     return ServersResponse(
-        servers=[{"id": s.id, "description": s.description} for s in supported_servers],
+        servers=[{"id": s.id, "description": s.description} for s in list(servers_dict.values())],
         user_infos=user.export_infos_for_remote(),
     )
 

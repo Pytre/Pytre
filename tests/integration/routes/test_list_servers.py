@@ -9,6 +9,7 @@ import pytest
 from Pytre_Core.context import AppContext
 from Pytre_Server.auth_token import TokenType, create_token
 from tests.integration.conftest import TEST_DB_PASSWORD, TEST_SERVER_ID, TEST_USERNAME
+from tests.resources.build_test_keepass import TEST_PG_SERVER
 
 pytestmark = pytest.mark.integration
 
@@ -22,6 +23,14 @@ def test_list_servers_never_exposes_credentials(client, auth_headers):
     assert any(s["id"] == TEST_SERVER_ID for s in servers)
     for server in servers:
         assert set(server.keys()) == {"id", "description"}
+
+
+def test_list_servers_includes_postgre_servers_too(client, auth_headers):
+    """Both server types have an async driver, so both are executable through Pytre_Server."""
+    response = client.get("/servers", headers=auth_headers)
+
+    ids = {s["id"] for s in response.json()["servers"]}
+    assert {TEST_SERVER_ID, TEST_PG_SERVER["id"]} <= ids
 
 
 def test_list_servers_includes_requesting_users_own_info(client, auth_headers):

@@ -199,17 +199,18 @@ def test_execute_rejects_stale_hash_once_exemption_expired(client, auth_headers)
 
 
 def test_execute_returns_503_when_pool_saturated(client, auth_headers, monkeypatch):
-    """SqlConnectionError from driver.execute() (e.g. pool exhausted, connection_timeout_secs
+    """AsyncSqlConnectionError from driver.execute() (e.g. pool exhausted, connection_timeout_secs
     elapsed) must surface as a clean 503, not an unhandled 500 - and must not leak the
     caller's concurrency slot (the per-user semaphore must be released, not left locked).
-    The driver itself is monkeypatched, so no real docker connection is attempted."""
+    The driver itself is monkeypatched, so no real docker connection is attempted - the
+    fastmssql -> AsyncSqlConnectionError translation itself is unit-tested separately in
+    tests/unit/core/test_query_drivers_async.py."""
     import hashlib
 
-    from fastmssql import SqlConnectionError
-    from Pytre_Server.execution.fastmssql_driver import FastMssqlDriver
+    from Pytre_Core.sql_query.query_drivers_async import AsyncSqlConnectionError, FastMssqlDriver
 
     async def _raise_pool_timeout(self, template, params):
-        raise SqlConnectionError("Connection pool timeout - all connections are busy.")
+        raise AsyncSqlConnectionError("Connection pool timeout - all connections are busy.")
 
     monkeypatch.setattr(FastMssqlDriver, "execute", _raise_pool_timeout)
 
@@ -232,16 +233,15 @@ def test_execute_returns_503_when_pool_saturated(client, auth_headers, monkeypat
 
 
 def test_execute_returns_503_when_server_unreachable(client, auth_headers, monkeypatch):
-    """SqlConnectionError from the initial connect() (server down/unreachable) must also
+    """AsyncSqlConnectionError from the initial connect() (server down/unreachable) must also
     surface as 503, not an unhandled 500 - same semaphore-leak concern as above. The driver
     itself is monkeypatched, so no real docker connection is attempted."""
     import hashlib
 
-    from fastmssql import SqlConnectionError
-    from Pytre_Server.execution.fastmssql_driver import FastMssqlDriver
+    from Pytre_Core.sql_query.query_drivers_async import AsyncSqlConnectionError, FastMssqlDriver
 
     async def _raise_unreachable(self):
-        raise SqlConnectionError("Failed to connect: connection refused.")
+        raise AsyncSqlConnectionError("Failed to connect: connection refused.")
 
     monkeypatch.setattr(FastMssqlDriver, "connect", _raise_unreachable)
 

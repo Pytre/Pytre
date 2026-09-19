@@ -7,7 +7,7 @@ from typing import Protocol
 
 from Pytre_Core.logs_central import ExecutionLogEntry, ServerDriven
 from Pytre_Core.remotes import encode_row_value
-from Pytre_Server.execution.protocol import AsyncSqlResult
+from Pytre_Core.sql_query.query_drivers_async import AsyncSqlResult
 
 
 class DisconnectAware(Protocol):

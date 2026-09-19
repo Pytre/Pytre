@@ -6,17 +6,14 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
 from fastapi import Request
-from fastmssql import PoolConfig
 
 from Pytre_Core.context import AppContext
 from Pytre_Core.logs_central import ServerDriven
 from Pytre_Core.servers import Server
 from Pytre_Core.utils import log as _log
+from Pytre_Core.sql_query.query_drivers_async import AsyncSqlDriver, get_driver
 
 from Pytre_Server.query_catalog import QueryCatalog
-from Pytre_Server.execution.fastmssql_driver import FastMssqlDriver
-from Pytre_Server.execution.protocol import AsyncSqlDriver
-from Pytre_Server.execution.sql_browser import split_instance_host, resolve_instance_port
 
 
 MAX_LOGIN_ATTEMPTS = 5
@@ -49,8 +46,6 @@ class ServerResources:
     drivers_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     _disconnect_tasks: set[asyncio.Task] = field(default_factory=set, repr=False)  # ref to avoid garbage collection
 
-    resolved_hosts: dict[str, tuple[str, int]] = field(default_factory=dict)  # server.host -> (hostname, port)
-
     user_semaphores: dict[str, asyncio.Semaphore] = field(default_factory=dict)
     throttle_failed_login: dict[str, list[datetime]] = field(default_factory=dict)
 
@@ -82,16 +77,7 @@ class ServerResources:
             if server.id in self.driver_entries:  # check again: another request may have connected first
                 return self.driver_entries[server.id]
 
-            hostname, port = await self._resolve_connection_target(server)
-            driver = FastMssqlDriver(
-                host=hostname,
-                port=port,
-                database=server.database,
-                username=server.user,
-                password=server.password,
-                trust_certificate=server.trust_server_certificate,
-                pool_config=PoolConfig.performance(),
-            )
+            driver = await get_driver(server)
             await driver.connect()  # not cached on failure - next call retries fresh
 
             driver_entry = _DriverEntry(driver=driver)
@@ -99,36 +85,14 @@ class ServerResources:
 
             return driver_entry
 
-    async def _resolve_connection_target(self, server: Server) -> tuple[str, int]:
-        """Return (hostname, port) to actually connect to.
-        If `server.host` has no named-instance suffix (no backslash), returns it unchanged - no network call.
-        Otherwise resolves the instance's real TCP port via the SQL Browser service once and caches it;
-        falls back to the configured port unchanged if resolution fails (Browser service disabled/unreachable)."""
-        if server.host in self.resolved_hosts:
-            return self.resolved_hosts[server.host]
-
-        hostname, instance_name = split_instance_host(server.host)
-        target = (hostname, int(server.port))
-
-        if instance_name is None:
-            log(f"'{server.host}' has no named-instance suffix, using configured port as-is", logging.DEBUG)
-        else:
-            resolved_port = await resolve_instance_port(hostname, instance_name)
-            if resolved_port is not None:
-                target = (hostname, resolved_port)
-
-        self.resolved_hosts[server.host] = target
-        return target
-
     async def reset_connections(self, server_id: str | None = None) -> int:
-        """Detach `server_id` if set and cached otherwise every cached driver + resolved host so the next request
+        """Detach `server_id` if set and cached otherwise every cached driver so the next request
         reconnects with fresh Server parameters. Already-running queries on a detached driver are not
         affected - each stale driver is disconnected only when no use_driver() call is still holding it."""
         async with self.drivers_lock:
             if server_id is None:
                 stale = dict(self.driver_entries)
                 self.driver_entries.clear()
-                self.resolved_hosts.clear()
             elif server_id in self.driver_entries:
                 stale = {server_id: self.driver_entries.pop(server_id)}
             else:

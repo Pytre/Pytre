@@ -20,7 +20,7 @@ import time
 
 import pytest
 
-from Pytre_Server.execution.fastmssql_driver import FastMssqlDriver
+from Pytre_Core.sql_query.query_drivers_async import FastMssqlDriver
 from tests.integration.conftest import requires_docker
 from tests.resources.build_test_keepass import TEST_SQL_SERVER
 
@@ -102,7 +102,7 @@ async def test_query_call_does_not_block_event_loop(driver):
     """await driver.execute(...) itself must stay responsive - fastmssql's PyO3 binding
     is expected to release control during the network wait, unlike the row iteration
     below (see test_raw_iteration_blocks_event_loop)."""
-    _result, elapsed, max_gap = await _measure(driver.execute(_BIG_QUERY, []))
+    _result, elapsed, max_gap = await _measure(driver.execute(_BIG_QUERY, {}))
 
     print(f"\nquery() elapsed: {elapsed:.3f}s, max heartbeat gap: {max_gap:.3f}s")
     # Relative to elapsed rather than a fixed multiple of the heartbeat interval - a fixed
@@ -120,7 +120,7 @@ async def test_raw_iteration_blocks_event_loop(driver):
     failing because fastmssql grows a real async iterator, that's good news - the
     chunked streaming in Pytre_Server/app.py's _stream_result_ndjson (and the executor-based
     alternative characterized below) would no longer be needed."""
-    result = await driver.execute(_BIG_QUERY, [])
+    result = await driver.execute(_BIG_QUERY, {})
 
     rows, elapsed, max_gap = await _measure(_to_list_sync(result))
 
@@ -139,7 +139,7 @@ async def test_iteration_wrapped_in_executor_does_not_block_event_loop(driver):
     _stream_result_ndjson, where each yield between chunks hands control back to the loop) -
     this test documents that the executor approach also works, as a lower-level fact
     about fastmssql/asyncio, independent of which technique /execute happens to use."""
-    result = await driver.execute(_BIG_QUERY, [])
+    result = await driver.execute(_BIG_QUERY, {})
     loop = asyncio.get_running_loop()
 
     rows, elapsed, max_gap = await _measure(loop.run_in_executor(None, lambda: [row.to_dict() for row in result]))

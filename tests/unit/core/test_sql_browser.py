@@ -1,12 +1,12 @@
 """
-Tests for Pytre_Server/execution/sql_browser.py
+Tests for Pytre_Core/sql_query/sql_browser.py
 """
 
 from unittest.mock import Mock
 
 import pytest
 
-from Pytre_Server.execution.sql_browser import _query_browser_service, resolve_instance_port, split_instance_host
+from Pytre_Core.sql_query.sql_browser import _query_browser_service, resolve_instance_port, split_instance_host
 
 
 @pytest.fixture
@@ -26,7 +26,7 @@ def _mock_socket(monkeypatch, response_body: str):
     fake_socket.__exit__ = Mock(return_value=False)
     fake_socket.recvfrom = Mock(return_value=(b"\x05\x00\x00" + response_body.encode("ascii"), ("1.2.3.4", 1434)))
 
-    import Pytre_Server.execution.sql_browser as sql_browser
+    import Pytre_Core.sql_query.sql_browser as sql_browser
 
     monkeypatch.setattr(sql_browser.socket, "socket", Mock(return_value=fake_socket))
     return fake_socket
@@ -120,7 +120,7 @@ def test_query_browser_service_returns_none_on_empty_response(monkeypatch):
 @pytest.mark.anyio
 async def test_resolve_instance_port_returns_resolved_port(monkeypatch):
     monkeypatch.setattr(
-        "Pytre_Server.execution.sql_browser._query_browser_service", lambda host, instance, timeout: 52149
+        "Pytre_Core.sql_query.sql_browser._query_browser_service", lambda host, instance, timeout: 52149
     )
 
     port = await resolve_instance_port("SWTPX3BDD01", "DBX3V12")
@@ -133,7 +133,7 @@ async def test_resolve_instance_port_returns_none_on_os_error(monkeypatch):
     def raise_timeout(host, instance, timeout):
         raise OSError("timed out")
 
-    monkeypatch.setattr("Pytre_Server.execution.sql_browser._query_browser_service", raise_timeout)
+    monkeypatch.setattr("Pytre_Core.sql_query.sql_browser._query_browser_service", raise_timeout)
 
     port = await resolve_instance_port("SWTPX3BDD01", "DBX3V12")
 
@@ -143,7 +143,7 @@ async def test_resolve_instance_port_returns_none_on_os_error(monkeypatch):
 @pytest.mark.anyio
 async def test_resolve_instance_port_returns_none_if_instance_not_found(monkeypatch):
     monkeypatch.setattr(
-        "Pytre_Server.execution.sql_browser._query_browser_service", lambda host, instance, timeout: None
+        "Pytre_Core.sql_query.sql_browser._query_browser_service", lambda host, instance, timeout: None
     )
 
     port = await resolve_instance_port("SWTPX3BDD01", "DBX3V12")

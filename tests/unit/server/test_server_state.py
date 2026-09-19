@@ -121,80 +121,19 @@ def test_different_usernames_have_independent_throttles(server_state):
 
 
 # ================================================================================
-# _resolve_connection_target
-# ================================================================================
-
-
-@pytest.mark.anyio
-async def test_resolve_connection_target_skips_resolution_for_plain_host(server_state, monkeypatch):
-    resolve_mock = Mock()
-    monkeypatch.setattr("Pytre_Server.server_state.resolve_instance_port", resolve_mock)
-    server = Mock(host="SWTPX3BDD01", port="1433")
-
-    target = await server_state.resources._resolve_connection_target(server)
-
-    assert target == ("SWTPX3BDD01", 1433)
-    assert not resolve_mock.called
-
-
-@pytest.mark.anyio
-async def test_resolve_connection_target_uses_resolved_port_for_named_instance(server_state, monkeypatch):
-    async def fake_resolve(hostname, instance_name, timeout=5.0):
-        return 52149
-
-    monkeypatch.setattr("Pytre_Server.server_state.resolve_instance_port", fake_resolve)
-    server = Mock(host="SWTPX3BDD01\\DBX3V12", port="1433")
-
-    target = await server_state.resources._resolve_connection_target(server)
-
-    assert target == ("SWTPX3BDD01", 52149)
-
-
-@pytest.mark.anyio
-async def test_resolve_connection_target_falls_back_to_configured_port_if_resolution_fails(
-    server_state, monkeypatch
-):
-    async def fake_resolve(hostname, instance_name, timeout=5.0):
-        return None
-
-    monkeypatch.setattr("Pytre_Server.server_state.resolve_instance_port", fake_resolve)
-    server = Mock(host="SWTPX3BDD01\\DBX3V12", port="1433")
-
-    target = await server_state.resources._resolve_connection_target(server)
-
-    assert target == ("SWTPX3BDD01", 1433)
-
-
-@pytest.mark.anyio
-async def test_resolve_connection_target_caches_result_per_host(server_state, monkeypatch):
-    call_count = 0
-
-    async def fake_resolve(hostname, instance_name, timeout=5.0):
-        nonlocal call_count
-        call_count += 1
-        return 52149
-
-    monkeypatch.setattr("Pytre_Server.server_state.resolve_instance_port", fake_resolve)
-    server = Mock(host="SWTPX3BDD01\\DBX3V12", port="1433")
-
-    first = await server_state.resources._resolve_connection_target(server)
-    second = await server_state.resources._resolve_connection_target(server)
-
-    assert first == second == ("SWTPX3BDD01", 52149)
-    assert call_count == 1
-
-
-# ================================================================================
 # Driver caching (use_driver / _get_driver_entry / reset_connections / shutdown_drivers)
 # ================================================================================
 
 
 def _make_fake_driver_factory(monkeypatch) -> list[Mock]:
-    """Monkeypatches FastMssqlDriver so _get_driver_entry() never touches a real connection.
-    Returns the list of fake driver instances created, in construction order."""
+    """Monkeypatches get_driver() so _get_driver_entry() never touches a real connection.
+    Returns the list of fake driver instances created, in construction order.
+    Driver construction details (trust_certificate forwarding, host resolution...) are
+    fastmssql-specific and tested against get_driver()/FastMssqlDriver directly in
+    tests/unit/core/test_query_drivers_async.py, not here."""
     created: list[Mock] = []
 
-    def factory(**kwargs):
+    async def fake_get_driver(server):
         driver = Mock()
         driver.connect = AsyncMock()
         driver.disconnect = AsyncMock()
@@ -202,20 +141,12 @@ def _make_fake_driver_factory(monkeypatch) -> list[Mock]:
         created.append(driver)
         return driver
 
-    monkeypatch.setattr("Pytre_Server.server_state.FastMssqlDriver", factory)
+    monkeypatch.setattr("Pytre_Server.server_state.get_driver", fake_get_driver)
     return created
 
 
-def _make_server(server_id: str, host: str = "host", trust_server_certificate: bool = False) -> Mock:
-    return Mock(
-        id=server_id,
-        host=host,
-        port="1433",
-        database="db",
-        user="u",
-        password="p",
-        trust_server_certificate=trust_server_certificate,
-    )
+def _make_server(server_id: str, host: str = "host") -> Mock:
+    return Mock(id=server_id, host=host)
 
 
 @pytest.mark.unit
@@ -235,24 +166,6 @@ async def test_get_driver_entry_connects_and_caches(server_state, monkeypatch):
     assert entry.driver is created[0]
     created[0].connect.assert_awaited_once()
     assert server_state.resources.driver_entries["srv1"] is entry
-
-
-@pytest.mark.anyio
-async def test_get_driver_entry_forwards_trust_server_certificate(server_state, monkeypatch):
-    captured_kwargs: dict = {}
-
-    def factory(**kwargs):
-        captured_kwargs.update(kwargs)
-        driver = Mock()
-        driver.connect = AsyncMock()
-        return driver
-
-    monkeypatch.setattr("Pytre_Server.server_state.FastMssqlDriver", factory)
-    server = _make_server("srv1", trust_server_certificate=True)
-
-    await server_state.resources._get_driver_entry(server)
-
-    assert captured_kwargs["trust_certificate"] is True
 
 
 @pytest.mark.anyio
@@ -336,22 +249,7 @@ async def test_reset_connections_scoped_detaches_only_the_target_server(server_s
 
 
 @pytest.mark.anyio
-async def test_reset_connections_scoped_does_not_clear_resolved_hosts(server_state, monkeypatch):
-    """resolved_hosts is keyed by server.host, not server.id - a scoped reset doesn't need to
-    touch it (an unchanged host keeps a valid resolution, a changed host just misses the cache
-    and gets resolved fresh on its own)."""
-    _make_fake_driver_factory(monkeypatch)
-    server = _make_server("a", host="host-a")
-    await server_state.resources._get_driver_entry(server)
-    assert "host-a" in server_state.resources.resolved_hosts
-
-    await server_state.resources.reset_connections("a")
-
-    assert "host-a" in server_state.resources.resolved_hosts
-
-
-@pytest.mark.anyio
-async def test_reset_connections_full_clears_every_driver_and_resolved_host(server_state, monkeypatch):
+async def test_reset_connections_full_clears_every_driver(server_state, monkeypatch):
     _make_fake_driver_factory(monkeypatch)
     server_a = _make_server("a", host="host-a")
     server_b = _make_server("b", host="host-b")
@@ -362,7 +260,6 @@ async def test_reset_connections_full_clears_every_driver_and_resolved_host(serv
 
     assert reset_count == 2
     assert server_state.resources.driver_entries == {}
-    assert server_state.resources.resolved_hosts == {}
 
 
 @pytest.mark.anyio

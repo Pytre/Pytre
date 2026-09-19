@@ -6,7 +6,6 @@ from datetime import datetime, timezone
 import jwt
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
-from fastmssql import SqlConnectionError, SqlError
 from pydantic import BaseModel
 
 from Pytre_Core.context import UserContext
@@ -16,10 +15,9 @@ from Pytre_Core.users import AuthType, hash_password, verify_password
 from Pytre_Core.utils import log as _log
 from Pytre_Core.sql_query.loader import build_queries_from_parsers, filter_queries
 from Pytre_Core.sql_query.query import Query
+from Pytre_Core.sql_query.query_drivers_async import AsyncSqlConnectionError, AsyncSqlExecutionError, AsyncSqlResult
 
 from Pytre_Server.auth_token import create_token, decode_token, TokenType
-from Pytre_Server.execution.protocol import AsyncSqlResult
-from Pytre_Server.execution.template_converter import to_positional_style
 from Pytre_Server.result_streaming import stream_result_and_release
 from Pytre_Server.server_state import ServerResources, ServerState, get_server_state
 
@@ -229,9 +227,9 @@ async def execute_query(
     _check_template_hash(query, request, resources)
     _apply_parameters(query, request, user_ctx.current_user.admin)
 
-    # translate command to positional style and configure SQL driver
+    # retrieve build command template and parameters for execution
     exec_config = query.get_exec_config(request.server_id, file_output=False)
-    positional_template, params = to_positional_style(exec_config.cmd_template, exec_config.cmd_parameters)
+    template, params = exec_config.cmd_template, exec_config.cmd_parameters
 
     # cap how many requests user can have running at once (execute + streaming)
     semaphore = resources._get_user_semaphore(state.max_concurrency_per_user, username)
@@ -242,7 +240,7 @@ async def execute_query(
     # execute the requested query on the server's shared, pooled driver
     await semaphore.acquire()
 
-    result, start_time = await _run_query(state, resources, request, username, positional_template, params, semaphore)
+    result, start_time = await _run_query(state, resources, request, username, template, params, semaphore)
 
     # prepare a log entry
     log_entry = ExecutionLogEntry(
@@ -331,7 +329,7 @@ async def _run_query(
     request: ExecuteRequest,
     username: str,
     template: str,
-    params: list,
+    params: dict,
     semaphore: asyncio.Semaphore,
 ) -> tuple[AsyncSqlResult, datetime]:
     """Executes the query on the server's shared, pooled driver. `semaphore` must already be
@@ -345,11 +343,11 @@ async def _run_query(
             start_time = datetime.now()
             result = await driver.execute(template, params)
         success = True
-    except SqlConnectionError as e:
+    except AsyncSqlConnectionError as e:
         log(f"Server unavailable on server '{request.server_id}' (user {username}) : {e}", logging.WARNING)
         http_error = status.HTTP_503_SERVICE_UNAVAILABLE
         raise HTTPException(status_code=http_error, detail=f"Server unavailable: {e}") from e
-    except SqlError as e:
+    except AsyncSqlExecutionError as e:
         msg = f"SQL error for query '{request.query_id}' on server '{request.server_id}' (user {username}): {e}"
         log(msg, logging.ERROR)
         http_error = status.HTTP_500_INTERNAL_SERVER_ERROR

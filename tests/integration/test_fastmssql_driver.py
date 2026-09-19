@@ -6,8 +6,7 @@ its pinned connection details) - skipped automatically if it isn't reachable.
 
 import pytest
 
-from Pytre_Server.execution.fastmssql_driver import FastMssqlDriver
-from Pytre_Server.execution.template_converter import to_positional_style
+from Pytre_Core.sql_query.query_drivers_async import FastMssqlDriver
 from tests.integration.conftest import requires_docker
 from tests.resources.build_test_keepass import TEST_SQL_SERVER
 
@@ -36,14 +35,8 @@ async def driver():
 
 @requires_docker
 @pytest.mark.anyio
-async def test_query_returns_rows(driver):
-    result = await driver.execute("SELECT @P1 AS n", [42])
-    assert list(result)[0]["n"] == 42
-
-
-@requires_docker
-@pytest.mark.anyio
-async def test_query_with_translated_named_params(driver):
-    template, params = to_positional_style("SELECT %(@ID)s AS id", {"@ID": 7})
-    result = await driver.execute(template, params)
+async def test_query_with_named_params(driver):
+    """execute() takes a %(name)s-style template + dict, like the sync driver - it converts to
+    fastmssql's positional @P1 style itself."""
+    result = await driver.execute("SELECT %(@ID)s AS id", {"@ID": 7})
     assert list(result)[0]["id"] == 7

@@ -3,20 +3,12 @@ from PyInstaller.utils.hooks import collect_all
 
 datas = [('Pytre_Core/res', 'res'), ('Pytre_Server/templates', 'Pytre_Server/templates')]
 binaries = []
-hiddenimports = ['uuid']
-
-tmp_ret = collect_all('keyring')
-binaries += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
-
-tmp_ret = collect_all('lxml')
-binaries += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
-
-tmp_ret = collect_all('Cryptodome')
-binaries += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
-
-tmp_ret = collect_all('uvicorn')
-binaries += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
-
+hiddenimports = [
+    'uuid',
+    'keyring.backends',
+    'uvicorn.loops.auto','uvicorn.protocols.http.auto', 'uvicorn.lifespan.on',
+    'asyncpg', 'asyncpg.pgproto.pgproto',
+]
 
 block_cipher = None
 
@@ -42,7 +34,7 @@ exe = EXE(pyz,
           a.zipfiles,
           a.datas,
           [],
-          name='Pytre Server',
+          name='Pytre_Server',
           debug=False,
           bootloader_ignore_signals=False,
           strip=False,

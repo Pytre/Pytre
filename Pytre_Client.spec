@@ -3,20 +3,13 @@ from PyInstaller.utils.hooks import collect_all
 
 datas = [('Pytre_Core/res', 'res')]
 binaries = []
-hiddenimports = ['pymssql', 'uuid']
+hiddenimports = ['uuid', 'keyring.backends']
 
-tmp_ret = collect_all('keyring')
-binaries += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
-
-tmp_ret = collect_all('pymssql')
-binaries += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
-
-tmp_ret = collect_all('lxml')
-binaries += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
-
-tmp_ret = collect_all('Cryptodome')
-binaries += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
-
+for pkg in ['pymssql']:
+    tmp_datas, tmp_binaries, tmp_hidden = collect_all(pkg)
+    datas += tmp_datas
+    binaries += tmp_binaries
+    hiddenimports += tmp_hidden
 
 block_cipher = None
 

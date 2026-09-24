@@ -280,7 +280,7 @@ def _resolve_query(state: ServerState, user_ctx: UserContext, request: ExecuteRe
 def _check_template_hash(query: Query, request: ExecuteRequest, resources: ServerResources) -> None:
     """Check client's template hash against the server's version. Raises HTTPException(409) unless exempted."""
     hash_exemption_until = resources.ignore_hash_until.get(query.file_id)
-    hash_must_be_checked = hash_exemption_until is None or datetime.now() > hash_exemption_until
+    hash_must_be_checked = hash_exemption_until is None or datetime.now(timezone.utc) > hash_exemption_until
     if hash_must_be_checked and request.template_hash != query.get_template_hash():
         http_error = status.HTTP_409_CONFLICT
         raise HTTPException(status_code=http_error, detail="Query is not up to date, refresh your query list")

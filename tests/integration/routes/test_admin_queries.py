@@ -6,6 +6,7 @@ here writes .sql files), so `admin_client` (no per-test isolation needed) is use
 
 import re
 from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -105,7 +106,7 @@ def test_reload_queries_reports_a_failed_reload(admin_client, monkeypatch):
 # ------------------------------------------------------------------------------------------
 # Edit (hash exemption only)
 # ------------------------------------------------------------------------------------------
-def test_query_edit_form_shows_every_field_read_only_except_the_hash_date(admin_client):
+def test_query_edit_form_shows_every_field_read_only_except_hours(admin_client):
     response = admin_client.get(f"/admin/queries/{TEST_QUERY_ID}/edit")
 
     assert response.status_code == 200
@@ -114,10 +115,13 @@ def test_query_edit_form_shows_every_field_read_only_except_the_hash_date(admin_
         assert tag_match is not None, f"{field_id} input not found"
         assert "readonly" in tag_match.group(0) or "disabled" in tag_match.group(0)
 
-    until_tag = re.search(r'<input[^>]*id="until"[^>]*>', response.text)
-    assert until_tag is not None
-    assert "readonly" not in until_tag.group(0)
-    assert "disabled" not in until_tag.group(0)
+    # "until" is display-only - a <div>, not a form control, filled in and never submitted by JS
+    assert re.search(r'<div[^>]*id="until"[^>]*class="field-static"', response.text) is not None
+
+    hours_tag = re.search(r'<input[^>]*id="hours"[^>]*>', response.text)
+    assert hours_tag is not None
+    assert "readonly" not in hours_tag.group(0)
+    assert "disabled" not in hours_tag.group(0)
 
 
 def test_query_edit_form_unknown_file_id_redirects_to_list_with_error(admin_client):
@@ -127,53 +131,97 @@ def test_query_edit_form_unknown_file_id_redirects_to_list_with_error(admin_clie
     assert response.headers["location"] == "/admin/queries?error=Query+not+found"
 
 
+def _future_ts(hours: int = 24) -> int:
+    return int((datetime.now(timezone.utc) + timedelta(hours=hours)).timestamp())
+
+
+def _past_ts(hours: int = 24) -> int:
+    return int((datetime.now(timezone.utc) - timedelta(hours=hours)).timestamp())
+
+
 def test_ignore_hash_set_then_reflected_in_list_and_form(admin_client):
+    until_ts = _future_ts()
+
     response = admin_client.post(
-        f"/admin/queries/{TEST_QUERY_ID}/ignore-hash", data={"until": "2099-01-01"}, follow_redirects=False
+        f"/admin/queries/{TEST_QUERY_ID}/ignore-hash", data={"until_ts": str(until_ts)}, follow_redirects=False
     )
 
     assert response.status_code == 303
-    assert response.headers["location"] == f"/admin/queries?msg=Hash+check+for+{TEST_QUERY_ID}+ignored+until+2099-01-01"
+    assert response.headers["location"] == f"/admin/queries?msg=Hash%20check%20for%20{TEST_QUERY_ID}%20updated"
 
+    # the list/form don't render a human date themselves anymore - a browser converts data-ts /
+    # data-until-ts to the viewer's local time client-side (see pytreFormatLocal in base.html)
     list_page = admin_client.get("/admin/queries")
-    assert "2099-01-01" in list_page.text
+    assert f'data-ts="{until_ts}"' in list_page.text
 
     edit_page = admin_client.get(f"/admin/queries/{TEST_QUERY_ID}/edit")
-    assert 'value="2099-01-01"' in edit_page.text
-    assert 'form="clear-form"' in edit_page.text  # Clear button only shows up once an exemption exists
+    assert f'data-until-ts="{until_ts}"' in edit_page.text
+    assert f'value="{until_ts}"' in edit_page.text  # the hidden until_ts input, pre-filled
+
+
+def test_ignore_hash_set_persists_a_brand_new_exemption(admin_client):
+    """Regression: saving an exemption when none existed yet must actually be stored, not just
+    report success without writing anything (the very first version of this route's rewrite did
+    exactly that - a boolean condition inverted around `current_datetime is None`)."""
+    until_ts = _future_ts()
+
+    admin_client.post(f"/admin/queries/{TEST_QUERY_ID}/ignore-hash", data={"until_ts": str(until_ts)})
+
+    stored = admin_client.app.state.server.resources.ignore_hash_until[TEST_QUERY_ID]
+    assert stored == datetime.fromtimestamp(until_ts, tz=timezone.utc)
+
+
+def test_ignore_hash_set_same_timestamp_is_reported_unchanged(admin_client):
+    until_ts = _future_ts()
+    admin_client.post(f"/admin/queries/{TEST_QUERY_ID}/ignore-hash", data={"until_ts": str(until_ts)})
+
+    response = admin_client.post(
+        f"/admin/queries/{TEST_QUERY_ID}/ignore-hash", data={"until_ts": str(until_ts)}, follow_redirects=False
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == f"/admin/queries?msg=Hash%20exemption%20for%20{TEST_QUERY_ID}%20unchanged"
+
+
+def test_ignore_hash_set_empty_clears_the_exemption(admin_client):
+    admin_client.post(f"/admin/queries/{TEST_QUERY_ID}/ignore-hash", data={"until_ts": str(_future_ts())})
+
+    response = admin_client.post(
+        f"/admin/queries/{TEST_QUERY_ID}/ignore-hash", data={"until_ts": ""}, follow_redirects=False
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == f"/admin/queries?msg=Hash+exemption+for+{TEST_QUERY_ID}+cleared"
+    assert TEST_QUERY_ID not in admin_client.app.state.server.resources.ignore_hash_until
+
+
+def test_ignore_hash_set_past_timestamp_clears_the_exemption(admin_client):
+    """N hours <= 0 (client-computed result not after now) must behave like clearing it - the
+    server applies whatever instant it receives, past included."""
+    admin_client.post(f"/admin/queries/{TEST_QUERY_ID}/ignore-hash", data={"until_ts": str(_future_ts())})
+
+    response = admin_client.post(
+        f"/admin/queries/{TEST_QUERY_ID}/ignore-hash", data={"until_ts": str(_past_ts())}, follow_redirects=False
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == f"/admin/queries?msg=Hash+exemption+for+{TEST_QUERY_ID}+cleared"
+    assert TEST_QUERY_ID not in admin_client.app.state.server.resources.ignore_hash_until
 
 
 def test_ignore_hash_set_unknown_file_id_redirects_with_error(admin_client):
     response = admin_client.post(
-        "/admin/queries/DOES_NOT_EXIST/ignore-hash", data={"until": "2099-01-01"}, follow_redirects=False
+        "/admin/queries/DOES_NOT_EXIST/ignore-hash", data={"until_ts": str(_future_ts())}, follow_redirects=False
     )
 
     assert response.status_code == 303
     assert response.headers["location"] == "/admin/queries?error=Query+not+found"
 
 
-def test_ignore_hash_set_invalid_date_redirects_with_error(admin_client):
+def test_ignore_hash_set_invalid_timestamp_redirects_with_error(admin_client):
     response = admin_client.post(
-        f"/admin/queries/{TEST_QUERY_ID}/ignore-hash", data={"until": "not-a-date"}, follow_redirects=False
+        f"/admin/queries/{TEST_QUERY_ID}/ignore-hash", data={"until_ts": "not-a-number"}, follow_redirects=False
     )
 
     assert response.status_code == 303
     assert response.headers["location"] == "/admin/queries?error=Invalid+date"
-
-
-def test_clear_hash_exemption_removes_it(admin_client):
-    admin_client.post(f"/admin/queries/{TEST_QUERY_ID}/ignore-hash", data={"until": "2099-01-01"})
-
-    response = admin_client.post(f"/admin/queries/{TEST_QUERY_ID}/clear-hash-exemption", follow_redirects=False)
-
-    assert response.status_code == 303
-    assert response.headers["location"] == f"/admin/queries?msg=Hash+exemption+for+{TEST_QUERY_ID}+cleared"
-
-    edit_page = admin_client.get(f"/admin/queries/{TEST_QUERY_ID}/edit")
-    assert 'form="clear-form"' not in edit_page.text
-
-
-def test_clear_hash_exemption_on_unset_query_is_a_noop(admin_client):
-    response = admin_client.post(f"/admin/queries/{TEST_QUERY_ID}/clear-hash-exemption", follow_redirects=False)
-
-    assert response.status_code == 303

@@ -4,6 +4,17 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <script>
+        // Formats a UTC epoch (seconds) as "YYYY-MM-DD HH:MM" in the viewer's own timezone -
+        // shared by the queries list and its edit form (live preview).
+        // Defined here, before <body>, so it's available to any inline script in page content -
+        // a content script can run before the shared <script> block further down the page is reached.
+        function pytreFormatLocal(epochSeconds) {
+            var d = new Date(epochSeconds * 1000);
+            function pad(n) { return n < 10 ? "0" + n : "" + n; }
+            return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate())
+                + " " + pad(d.getHours()) + ":" + pad(d.getMinutes());
+        }
+
         // Applied before first paint to avoid a flash of the wrong theme.
         (function () {
             try {
@@ -227,8 +238,20 @@
         .tool-name { font-weight: 600; font-size: 14px; }
         .tool-note { font-size: 12px; margin-top: 2px; }
         label { display: block; font-size: 13px; margin: 14px 0 4px; font-weight: 600; }
-        input[type="password"], input[type="text"], input[type="file"], select {
+        input[type="password"], input[type="text"], input[type="number"], input[type="file"], select {
             width: 100%;
+            padding: 8px 10px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            font-size: 14px;
+            font-family: inherit;
+            background: var(--surface);
+            color: var(--text);
+        }
+        .field-static {
+            display: block;
+            width: 100%;
+            box-sizing: border-box;
             padding: 8px 10px;
             border: 1px solid var(--border);
             border-radius: 6px;
@@ -242,7 +265,7 @@
         .form-row { display: flex; gap: 12px; }
         .form-row .form-col { flex: 1; min-width: 0; }
         .password-field { position: relative; }
-        .password-field input { padding-right: 36px; }
+        .password-field input, .password-field .field-static { padding-right: 36px; }
         /* Hides the browser's own built-in reveal icon (Edge/IE) so it can't overlap or
         conflict with our custom .password-toggle button below. */
         .password-field input::-ms-reveal, .password-field input::-ms-clear { display: none; }

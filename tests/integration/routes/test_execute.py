@@ -137,9 +137,9 @@ def test_execute_ignores_stale_hash_when_exempted(client, auth_headers):
     """A query listed in resources.ignore_hash_until, with a still-future date, must let a
     stale template_hash through - the hash check is the only thing waived, not the query
     itself (real parameters and real execution still apply, hence requires_docker)."""
-    from datetime import datetime, timedelta
+    from datetime import datetime, timedelta, timezone
 
-    client.app.state.server.resources.ignore_hash_until[TEST_QUERY_ID] = datetime.now() + timedelta(days=1)
+    client.app.state.server.resources.ignore_hash_until[TEST_QUERY_ID] = datetime.now(timezone.utc) + timedelta(days=1)
 
     response = client.post(
         "/execute",
@@ -159,9 +159,9 @@ def test_execute_still_checks_parameters_when_hash_exempted(client, auth_headers
     """The parameter-set check must stay active even while the hash check is waived - the
     hash exemption only covers SQL body drift, not the parameter contract (see point 10:
     template_hash never covers the DECLARE block, so it can't stand in for this check)."""
-    from datetime import datetime, timedelta
+    from datetime import datetime, timedelta, timezone
 
-    client.app.state.server.resources.ignore_hash_until[TEST_QUERY_ID] = datetime.now() + timedelta(days=1)
+    client.app.state.server.resources.ignore_hash_until[TEST_QUERY_ID] = datetime.now(timezone.utc) + timedelta(days=1)
 
     response = client.post(
         "/execute",
@@ -181,9 +181,9 @@ def test_execute_rejects_stale_hash_once_exemption_expired(client, auth_headers)
     """A past exemption date must not waive the hash check - it should behave exactly as if
     no exemption had ever been set (regression guard against an off-by-one on the comparison
     direction, e.g. accidentally using < instead of > against datetime.now())."""
-    from datetime import datetime, timedelta
+    from datetime import datetime, timedelta, timezone
 
-    client.app.state.server.resources.ignore_hash_until[TEST_QUERY_ID] = datetime.now() - timedelta(days=1)
+    client.app.state.server.resources.ignore_hash_until[TEST_QUERY_ID] = datetime.now(timezone.utc) - timedelta(days=1)
 
     response = client.post(
         "/execute",

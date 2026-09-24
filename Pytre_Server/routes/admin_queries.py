@@ -5,7 +5,7 @@ Gated by require_admin_session (see admin_router.py)
 """
 
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote_plus
 
@@ -33,13 +33,14 @@ class _QueryRow:
     servers: list[str]
     groups: list[str]
     hidden: bool
-    exempt_until: date | None
+    exempt_until: datetime | None  # UTC datetime
 
 
-def _build_row(parser: FileParser, ignore_hash_until: dict[str, datetime]) -> _QueryRow:
+def _build_query_row(parser: FileParser, ignore_hash_until: dict[str, datetime]) -> _QueryRow:
     infos = parser.extract_header_infos()
     file_id = parser.filename.stem
     exemption = ignore_hash_until.get(file_id)
+    now = datetime.now(timezone.utc)
 
     return _QueryRow(
         file_id=file_id,
@@ -48,7 +49,14 @@ def _build_row(parser: FileParser, ignore_hash_until: dict[str, datetime]) -> _Q
         servers=infos.get("servers", []),
         groups=infos.get("grp_authorized", []),
         hidden=infos.get("hide", "0") != "0",
-        exempt_until=exemption.date() if exemption else None,
+        exempt_until=exemption if exemption is not None and exemption > now else None,
+    )
+
+
+def _clear_hash_exemption(state: ServerState, file_id: str) -> RedirectResponse:
+    state.resources.ignore_hash_until.pop(file_id, None)
+    return RedirectResponse(
+        url=f"/admin/queries?msg=Hash+exemption+for+{file_id}+cleared", status_code=status.HTTP_303_SEE_OTHER
     )
 
 
@@ -62,13 +70,12 @@ def queries_list(
     msg: str | None = None,
     error: str | None = None,
 ) -> HTMLResponse:
-    rows = [_build_row(p, state.resources.ignore_hash_until) for p in state.query_catalog.parsers]
+    rows = [_build_query_row(p, state.resources.ignore_hash_until) for p in state.query_catalog.parsers]
     context = {
         "rows": rows,
         "load_errors": state.query_catalog.load_errors,
         "msg": msg,
         "error": error,
-        "today": date.today(),
     }
     return templates.TemplateResponse(request, "admin/queries_list.html", context)
 
@@ -109,31 +116,44 @@ def query_edit_form(
     if parser is None:
         return RedirectResponse(url="/admin/queries?error=Query+not+found", status_code=status.HTTP_303_SEE_OTHER)
 
-    row = _build_row(parser, state.resources.ignore_hash_until)
-    context = {"row": row, "today": date.today()}
+    row = _build_query_row(parser, state.resources.ignore_hash_until)
+    context = {
+        "row": row,
+        "until_ts": int(row.exempt_until.timestamp()) if row.exempt_until else "",
+        "server_now_ts": int(datetime.now(timezone.utc).timestamp()),
+    }
     return templates.TemplateResponse(request, "admin/query_form.html", context)
 
 
 @router.post("/{file_id}/ignore-hash")
 def query_ignore_hash_set(
-    file_id: str, state: ServerState = Depends(get_server_state), until: str = Form(...)
+    file_id: str, state: ServerState = Depends(get_server_state), until_ts: str = Form("")
 ) -> RedirectResponse:
+    """`until_ts` is the epoch (UTC seconds) the browser computed and displayed - applied as-is,
+    so what the webui displayed is exactly what gets stored, however long it took to hit Save.
+    Empty clears the exemption (the cross button, or the hours delta bringing it to the past)."""
+
     if file_id not in state.query_catalog.by_file_id:
         return RedirectResponse(url="/admin/queries?error=Query+not+found", status_code=status.HTTP_303_SEE_OTHER)
 
+    if not until_ts:
+        return _clear_hash_exemption(state, file_id)
+
+    # Convert until_ts to UTC datetime and remove exemption if it's in the past
     try:
-        until_date = date.fromisoformat(until)
-    except ValueError:
+        new_datetime = datetime.fromtimestamp(int(until_ts), tz=timezone.utc)
+        now = datetime.now(timezone.utc)
+        if new_datetime <= now:
+            return _clear_hash_exemption(state, file_id)
+    except (ValueError, OverflowError, OSError):
         return RedirectResponse(url="/admin/queries?error=Invalid+date", status_code=status.HTTP_303_SEE_OTHER)
 
-    state.resources.ignore_hash_until[file_id] = datetime.combine(until_date, datetime.max.time())
-    msg = f"Hash+check+for+{file_id}+ignored+until+{until_date.isoformat()}"
+    # Check if new exemption is different from current to decide if it needs to be saved
+    current_datetime = state.resources.ignore_hash_until.get(file_id)
+    if current_datetime is None or int(new_datetime.timestamp()) != int(current_datetime.timestamp()):
+        msg = f"Hash check for {file_id} updated"
+        state.resources.ignore_hash_until[file_id] = new_datetime
+    else:
+        msg = f"Hash exemption for {file_id} unchanged"
+
     return RedirectResponse(url=f"/admin/queries?msg={msg}", status_code=status.HTTP_303_SEE_OTHER)
-
-
-@router.post("/{file_id}/clear-hash-exemption")
-def query_ignore_hash_clear(file_id: str, state: ServerState = Depends(get_server_state)) -> RedirectResponse:
-    state.resources.ignore_hash_until.pop(file_id, None)
-    return RedirectResponse(
-        url=f"/admin/queries?msg=Hash+exemption+for+{file_id}+cleared", status_code=status.HTTP_303_SEE_OTHER
-    )

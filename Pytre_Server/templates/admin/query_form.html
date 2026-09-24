@@ -32,33 +32,83 @@
             method="post"
             id="hash-form"
             action="/admin/queries/{{ row.file_id }}/ignore-hash"
-            onsubmit="return pytreConfirmSubmit(event, 'Ignore the template hash check for this query until the chosen date?')"
+            data-until-ts="{{ until_ts }}"
+            data-server-now-ts="{{ server_now_ts }}"
+            onsubmit="return pytreConfirmSubmit(event, 'Update the hash check exemption for this query?')"
         >
-            <label for="until" style="margin-top: 14px;">Ignore hash check until</label>
-            <input
-                type="date" id="until" name="until"
-                value="{{ row.exempt_until.isoformat() if row.exempt_until else '' }}"
-                min="{{ today.isoformat() }}" required
-            >
+            <div class="form-row">
+                <div class="form-col" style="flex: 0 0 175px;">
+                    <label for="until">Ignore hash check until</label>
+                    <div class="password-field">
+                        <div id="until" class="field-static"></div>
+                        <button type="button" class="password-toggle" id="until-clear" title="Clear" hidden>&times;</button>
+                    </div>
+                </div>
+                <div class="form-col" style="flex: 0 0 125px;">
+                    <label for="hours">Adjust by (hours)</label>
+                    <input type="number" id="hours" step="1" min="-24" max="24" placeholder="0">
+                </div>
+            </div>
+            <input type="hidden" name="until_ts" id="until-ts" value="{{ until_ts }}">
         </form>
-
-        {% if row.exempt_until %}
-        <form
-            method="post"
-            id="clear-form"
-            action="/admin/queries/{{ row.file_id }}/clear-hash-exemption"
-            onsubmit="return pytreConfirmSubmit(event, 'Clear the hash exemption for this query?')"
-        ></form>
-        {% endif %}
 
         <div class="form-actions">
             <button type="submit" form="hash-form">Save</button>
-            {% if row.exempt_until %}
-            <button type="submit" form="clear-form" class="danger">Clear</button>
-            {% endif %}
             <button type="button" class="danger" onclick="pytreConfirm('Not yet implemented')">Delete</button>
             <button type="button" class="secondary" onclick="cancelFormDialog('/admin/queries')">Cancel</button>
         </div>
+
+        <script>
+            (function () {
+                var form = document.getElementById("hash-form");
+                var untilInput = document.getElementById("until");
+                var untilTsInput = document.getElementById("until-ts");
+                var hoursInput = document.getElementById("hours");
+                var clearBtn = document.getElementById("until-clear");
+
+                var initialUntilTs = form.dataset.untilTs ? parseInt(form.dataset.untilTs, 10) : null;
+                var serverNowTs = parseInt(form.dataset.serverNowTs, 10);
+                var offsetMs = serverNowTs * 1000 - Date.now(); // server clock - browser clock
+
+                var cleared = false;
+
+                function setResult(seconds) {
+                    if (seconds === null) {
+                        untilInput.textContent = "No exemption";
+                        untilTsInput.value = "";
+                        clearBtn.hidden = true;
+                    } else {
+                        untilInput.textContent = pytreFormatLocal(seconds);
+                        untilTsInput.value = seconds;
+                        clearBtn.hidden = false;
+                    }
+                }
+
+                hoursInput.addEventListener("input", function () {
+                    if (hoursInput.value === "") {
+                        setResult(!cleared ? initialUntilTs : null);
+                        return;
+                    }
+                    var n = parseInt(hoursInput.value, 10);
+                    if (!Number.isFinite(n)) return;
+
+                    var nowMs = Date.now() + offsetMs;
+                    var baseMs = !cleared && initialUntilTs !== null && initialUntilTs * 1000 > nowMs
+                        ? initialUntilTs * 1000 : nowMs;
+                    var resultMs = baseMs + n * 3600 * 1000;
+                    setResult(resultMs > nowMs ? Math.floor(resultMs / 1000) : null);
+                });
+
+                clearBtn.addEventListener("click", function () {
+                    cleared = true;
+                    hoursInput.value = "";
+                    setResult(null);
+                });
+
+                // Initial display, converted to the visitor's own timezone even though it came from the server.
+                setResult(initialUntilTs);
+            })();
+        </script>
     </div>
 </div>
 {% endblock %}

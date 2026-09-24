@@ -44,7 +44,7 @@
                     <td>{{ "Yes" if row.hidden else "" }}</td>
                     <td>{{ row.servers | join(", ") }}</td>
                     <td>{{ row.groups | join(", ") }}</td>
-                    <td>{{ row.exempt_until.isoformat() if row.exempt_until else "" }}</td>
+                    <td data-ts="{{ row.exempt_until.timestamp() | int if row.exempt_until else '' }}"></td>
                 </tr>
                 {% endfor %}
             </tbody>
@@ -61,11 +61,20 @@
     var lastClickedIndex = null;
     var FILTER_KEY = "pytre-queries-filter";
 
+    // Server sent UTC as a no-JS fallback ("... UTC" suffix) - replace it with the viewer's
+    // own local time, consistent with the edit form's preview.
+    Array.prototype.forEach.call(tbody.querySelectorAll("td[data-ts]"), function (td) {
+        if (td.dataset.ts) td.textContent = pytreFormatLocal(parseInt(td.dataset.ts, 10));
+    });
+
     function applyFilter() {
         var q = filterInput.value.toLowerCase();
         Array.prototype.forEach.call(tbody.rows, function (row) {
-            var text = row.textContent.toLowerCase();
-            row.style.display = q === "" || text.indexOf(q) !== -1 ? "" : "none";
+            var text = "";
+            Array.prototype.forEach.call(row.cells, function (cell) {
+                if (!cell.hasAttribute("data-ts")) text += cell.textContent + " ";
+            });
+            row.style.display = q === "" || text.toLowerCase().indexOf(q) !== -1 ? "" : "none";
         });
     }
 

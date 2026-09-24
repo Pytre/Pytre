@@ -50,7 +50,7 @@ class ServerResources:
     throttle_failed_login: dict[str, list[datetime]] = field(default_factory=dict)
 
     execution_logs: ServerDriven | None = None
-    ignore_hash_until: dict[str, datetime] = field(default_factory=dict)  # query_id -> hash ignored until datetime
+    ignore_hash_until: dict[str, datetime] = field(default_factory=dict)  # query_id -> until UTC datetime
 
     # ------------------------------------------------------------------------------------------
     # driver related methods

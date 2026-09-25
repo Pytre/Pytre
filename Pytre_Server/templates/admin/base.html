@@ -111,13 +111,15 @@
             flex-direction: row;
             align-items: center;
             gap: 10px;
-            padding: 16px 20px;
-            margin-bottom: 8px;
+            padding: 16px 20px 8px;
+            margin-left: 6px;
+            margin-bottom: 0px;
             text-decoration: none;
             cursor: pointer;
         }
         .sidebar-brand img { width: 48px; height: 48px; }
         .sidebar-brand span { font-size: 18px; font-weight: 600; color: var(--sidebar-text); align-items: center;}
+        .sidebar-version {padding: 0px 20px 32px 12px; font-size: 12px; color: var(--sidebar-text-muted); text-align: center;}
         .nav-link {
             display: block;
             padding: 10px 20px;
@@ -536,6 +538,7 @@
                     <span>WebAdmin</span>
                 </span>
             </a>
+            <div class="sidebar-version">Version {{ app_version }}</div>
             <a class="nav-link{% if request.url.path.startswith('/admin/queries') %} active{% endif %}" href="/admin/queries">Queries management</a>
             <a class="nav-link{% if request.url.path.startswith('/admin/users') %} active{% endif %}" href="/admin/users">Users management</a>
             <a class="nav-link{% if request.url.path.startswith('/admin/servers') %} active{% endif %}" href="/admin/servers">Servers management</a>

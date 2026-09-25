@@ -8,12 +8,10 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, Form, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
-from fastapi.templating import Jinja2Templates
 
 from Pytre_Server.server_state import ServerState, get_server_state
+from Pytre_Server.templating import templates
 
-_TEMPLATES_DIR = Path(__file__).parent.parent / "templates"
-templates = Jinja2Templates(directory=_TEMPLATES_DIR)
 
 router = APIRouter(prefix="/settings")
 

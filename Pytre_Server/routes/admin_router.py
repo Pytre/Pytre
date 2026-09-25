@@ -1,11 +1,9 @@
-from pathlib import Path
-
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import FileResponse, HTMLResponse
-from fastapi.templating import Jinja2Templates
 
 from Pytre_Core.utils import get_app_path
 
+from Pytre_Server.templating import templates
 from Pytre_Server.routes.admin_auth import require_admin_session, router as admin_auth_router
 from Pytre_Server.routes.admin_master_key import router as admin_master_key_router
 from Pytre_Server.routes.admin_queries import router as admin_queries_router
@@ -14,10 +12,7 @@ from Pytre_Server.routes.admin_settings import router as admin_settings_router
 from Pytre_Server.routes.admin_users import router as admin_users_router
 
 
-_TEMPLATES_DIR = Path(__file__).parent.parent / "templates"
 _RES_DIR = get_app_path() / "res"  # Pytre_Core/res - shared branding assets (app.png/app.ico)
-
-templates = Jinja2Templates(directory=_TEMPLATES_DIR)
 
 # define a protected router : depends on require_admin_session
 protected_router = APIRouter(dependencies=[Depends(require_admin_session)])

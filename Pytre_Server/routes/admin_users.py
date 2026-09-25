@@ -11,14 +11,12 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile, status
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
-from fastapi.templating import Jinja2Templates
 from starlette.background import BackgroundTask
 
 from Pytre_Core.users import AuthType, User, UserField, hash_password
 from Pytre_Server.server_state import ServerState, get_server_state
+from Pytre_Server.templating import templates
 
-_TEMPLATES_DIR = Path(__file__).parent.parent / "templates"
-templates = Jinja2Templates(directory=_TEMPLATES_DIR)
 
 router = APIRouter(prefix="/users")
 

@@ -6,19 +6,16 @@ Gated by require_admin_session (see admin_router.py)
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from pathlib import Path
 from urllib.parse import quote_plus
 
 from fastapi import APIRouter, Depends, Form, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
-from fastapi.templating import Jinja2Templates
 
 from Pytre_Core.sql_query.file_parser import FileParser
 from Pytre_Server.query_catalog import QueryCatalog
 from Pytre_Server.server_state import ServerState, get_server_state
+from Pytre_Server.templating import templates
 
-_TEMPLATES_DIR = Path(__file__).parent.parent / "templates"
-templates = Jinja2Templates(directory=_TEMPLATES_DIR)
 
 router = APIRouter(prefix="/queries")
 

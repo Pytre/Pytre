@@ -1,20 +1,17 @@
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from pathlib import Path
 from urllib.parse import quote
 
 import jwt
 from fastapi import APIRouter, Depends, Form, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
-from fastapi.templating import Jinja2Templates
 
 from Pytre_Core.context import UserContext
 from Pytre_Core.users import AuthType, User, hash_password, verify_password
 from Pytre_Server.auth_token import TokenType, create_token, decode_token
 from Pytre_Server.server_state import ServerResources, ServerState, get_server_state
+from Pytre_Server.templating import templates
 
-_TEMPLATES_DIR = Path(__file__).parent.parent / "templates"
-templates = Jinja2Templates(directory=_TEMPLATES_DIR)
 
 COOKIE_NAME = "admin_session"
 

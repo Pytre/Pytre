@@ -1,8 +1,9 @@
 argon2-cffi>=25.1.0
 asyncpg>=0.30.0    # async PostgreSQL driver (Pytre_Server)
+authlib>=1.8       # OpenID Connect client flows (SSO)
 cryptography>=46.0.3
 fastapi>=0.140.0
-fastmssql>=0.7.7
+fastmssql>=0.7.7   # mssql driver (Pytre_Server)
 httpx2>=2.9.1      # pour TestClient (tests de routes)
 jinja2>=3.1.6      # server-rendered admin pages
 keyring>=25.7.0

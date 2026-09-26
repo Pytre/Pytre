@@ -12,11 +12,16 @@
             action="{% if user.uuid %}/admin/users/{{ user.uuid }}/edit{% else %}/admin/users/new{% endif %}"
             onsubmit="return pytreConfirmSubmit(event, '{% if user.uuid %}Save changes to this user?{% else %}Create this new user?{% endif %}')"
         >
-            <label for="username">Id</label>
-            <input type="text" id="username" name="username" value="{{ user.username }}" required>
-
-            <label for="title">Title</label>
-            <input type="text" id="title" name="title" value="{{ user.title }}">
+            <div class="form-row">
+                <div class="form-col" style="flex: 2;">
+                    <label for="username">Id</label>
+                    <input type="text" id="username" name="username" value="{{ user.username }}" required>
+                </div>
+                <div class="form-col" style="flex: 3;">
+                    <label for="title">Title</label>
+                    <input type="text" id="title" name="title" value="{{ user.title }}">
+                </div>
+            </div>
 
             <label class="checkbox-item" for="admin" style="margin-top: 14px;">
                 <input type="checkbox" id="admin" name="admin" value="1" {% if user.admin %}checked{% endif %}>
@@ -27,7 +32,7 @@
             <input type="text" id="msg_login" name="msg_login" value="{{ user.msg_login }}">
 
             <div class="form-row">
-                <div class="form-col" style="flex: 1;">
+                <div class="form-col" id="auth-type-col" style="flex: 0 0 150px;">
                     <label for="auth_type">Auth type</label>
                     <select id="auth_type" name="auth_type">
                         {% for at in auth_types %}
@@ -35,12 +40,32 @@
                         {% endfor %}
                     </select>
                 </div>
-                <div class="form-col" style="flex: 3;">
+                <div class="form-col" id="password-col" style="flex: 3;">
                     <label for="password">
                         {% if user.uuid %}Password (leave blank to keep the current one){% else %}Password{% endif %}
                     </label>
                     <input type="password" id="password" name="password" autocomplete="new-password">
                 </div>
+                {% if oidc_providers %}
+                <div id="oidc-section" style="display: contents;">
+                    <div class="form-col" style="flex: 1.5;">
+                        <label for="oidc_issuer">Provider</label>
+                        <select id="oidc_issuer" name="oidc_issuer">
+                            <option value=""></option>
+                            {% for provider in oidc_providers %}
+                            <option value="{{ provider.issuer }}" {% if user.oidc_link and user.oidc_link.issuer == provider.issuer %}selected{% endif %}>{{ provider.label }}</option>
+                            {% endfor %}
+                            {% if user.oidc_link and user.oidc_link.issuer not in oidc_providers | map(attribute="issuer") | list %}
+                            <option value="{{ user.oidc_link.issuer }}" selected>{{ user.oidc_link.issuer }} (unknown provider)</option>
+                            {% endif %}
+                        </select>
+                    </div>
+                    <div class="form-col" style="flex: 2;">
+                        <label for="oidc_sub">Sub</label>
+                        <input type="text" id="oidc_sub" name="oidc_sub" value="{{ user.oidc_link.sub if user.oidc_link else '' }}" placeholder="sub">
+                    </div>
+                </div>
+                {% endif %}
             </div>
 
             <label>Groups</label>
@@ -95,6 +120,23 @@
                 }
             });
             setupInlineGroupCreate("groups-grid");
+
+            Array.prototype.forEach.call(document.querySelectorAll("[data-ts]"), function (el) {
+                if (el.dataset.ts) el.textContent = pytreFormatLocal(parseInt(el.dataset.ts, 10));
+            });
+
+            var authTypeSelect = document.getElementById("auth_type");
+            var passwordCol = document.getElementById("password-col");
+            var oidcSection = document.getElementById("oidc-section");
+
+            function updateAuthTypeVisibility() {
+                var authType = authTypeSelect.value;
+                if (passwordCol) passwordCol.style.display = authType === "basic" ? "" : "none";
+                if (oidcSection) oidcSection.style.display = authType === "oidc" ? "contents" : "none";
+            }
+
+            authTypeSelect.addEventListener("change", updateAuthTypeVisibility);
+            updateAuthTypeVisibility();
         })();
         </script>
     </div>

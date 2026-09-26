@@ -14,8 +14,9 @@ from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile, 
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
+from starlette.datastructures import FormData
 
-from Pytre_Core.users import AuthType, User, UserField, hash_password
+from Pytre_Core.users import AuthType, OidcLink, User, UserField, hash_password
 from Pytre_Server.server_state import ServerState, get_server_state
 from Pytre_Server.templating import templates
 
@@ -55,7 +56,52 @@ def _form_context(state: ServerState, user: User) -> dict:
         "all_groups": sorted(state.app_ctx.users.groups),
         "all_attribs": sorted(state.app_ctx.users.get_cust_attribs_list()),
         "auth_types": list(AuthType),
+        "oidc_providers": sorted(state.app_ctx.oidc_providers.get_all_providers().values(), key=lambda p: p.label),
     }
+
+
+def _apply_oidc_link(user: User, form_data: FormData) -> None:
+    """Applies the submitted provider and sub for the user OIDC link - read directly from the raw form.
+    Either field blank -> no link; unchanged issuer+sub -> refresh_token/last_verified preserved;
+    any other value (new or different) replaces with a fresh, unverified link."""
+    issuer = str(form_data.get("oidc_issuer", "")).strip()
+    sub = str(form_data.get("oidc_sub", "")).strip()
+
+    existing = user.oidc_link
+
+    if not issuer or not sub:
+        user.oidc_link = None
+    elif existing is None or existing.issuer != issuer or existing.sub != sub:
+        user.oidc_link = OidcLink(issuer=issuer, sub=sub)
+
+
+async def _save_user(
+    request: Request,
+    state: ServerState,
+    user: User,
+    user_form: UserForm,
+) -> HTMLResponse | RedirectResponse:
+    """Applies submitted form values onto `user` and saves it. Shared by create and edit -
+    `user` is either a blank new User or one just loaded via find_user_by_uuid()."""
+    # dynamic custom-attribute fields aren't declared as individual Form(...) params since the
+    # set of names is only known at runtime - read directly from the raw form data instead
+    form_data = await request.form()
+    attribs_cust = {
+        name: str(form_data.get(f"attrib__{name}", "")).strip() for name in state.app_ctx.users.get_cust_attribs_list()
+    }
+
+    # update user with form submitted values
+    await user_form.apply_to(user, attribs_cust)
+    _apply_oidc_link(user, form_data)
+
+    try:
+        await asyncio.to_thread(user.save)
+    except ValueError as e:
+        context = _form_context(state, user)
+        context["error"] = str(e)
+        return templates.TemplateResponse(request, "admin/user_form.html", context)
+
+    return RedirectResponse(url="/admin/users?msg=User+saved", status_code=status.HTTP_303_SEE_OTHER)
 
 
 # ------------------------------------------------------------------------------------------
@@ -134,34 +180,6 @@ async def user_edit_submit(
     return await _save_user(request, state, user, user_form)
 
 
-async def _save_user(
-    request: Request,
-    state: ServerState,
-    user: User,
-    user_form: UserForm,
-) -> HTMLResponse | RedirectResponse:
-    """Applies submitted form values onto `user` and saves it. Shared by create and edit -
-    `user` is either a blank new User or one just loaded via find_user_by_uuid()."""
-    # dynamic custom-attribute fields aren't declared as individual Form(...) params since the
-    # set of names is only known at runtime - read directly from the raw form data instead
-    form_data = await request.form()
-    attribs_cust = {
-        name: str(form_data.get(f"attrib__{name}", "")).strip() for name in state.app_ctx.users.get_cust_attribs_list()
-    }
-
-    # update user with form submitted values
-    await user_form.apply_to(user, attribs_cust)
-
-    try:
-        await asyncio.to_thread(user.save)
-    except ValueError as e:
-        context = _form_context(state, user)
-        context["error"] = str(e)
-        return templates.TemplateResponse(request, "admin/user_form.html", context)
-
-    return RedirectResponse(url="/admin/users?msg=User+saved", status_code=status.HTTP_303_SEE_OTHER)
-
-
 # ------------------------------------------------------------------------------------------
 # Delete
 # ------------------------------------------------------------------------------------------
@@ -181,10 +199,8 @@ def user_delete(uuid: str, state: ServerState = Depends(get_server_state)) -> Re
 
 @router.post("/delete")
 def users_delete_bulk(
-    uuids: list[str] = Form(default_factory=list),
-    state: ServerState = Depends(get_server_state),
+    uuids: list[str] = Form(default_factory=list), state: ServerState = Depends(get_server_state)
 ) -> RedirectResponse:
-    """Mirrors UsersWindow._delete_after_msg()'s counted success/failure summary."""
     nb_ok = 0
     nb_errors = 0
     for uuid in uuids:

@@ -186,7 +186,6 @@ async def server_delete(uuid: str, state: ServerState = Depends(get_server_state
 async def servers_delete_bulk(
     uuids: list[str] = Form(default_factory=list), state: ServerState = Depends(get_server_state)
 ) -> RedirectResponse:
-    """Mirrors ServersWindow._delete_after_msg()'s counted success/failure summary."""
     nb_ok = 0
     nb_errors = 0
     for uuid in uuids:

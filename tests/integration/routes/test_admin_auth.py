@@ -7,12 +7,26 @@ uses `admin_client`/`isolated_admin_client` instead (already logged in as the te
 focus on the route's own business logic without repeating the login dance in every test.
 """
 
+import logging
+from unittest.mock import AsyncMock
+from urllib.parse import unquote
+
 import pytest
 from fastapi.testclient import TestClient
 
-from Pytre_Core.users import Users
+from Pytre_Core.context import AppContext
+from Pytre_Core.oidc_client import OidcDiscoveryError
+from Pytre_Core.users import AuthType, Users, User
 from Pytre_Server.app import create_app
+from Pytre_Server.auth_token import TokenType, create_token
 from tests.integration.conftest import TEST_DB_PASSWORD, TEST_USER_PASSWORD, TEST_USERNAME
+from tests.integration.routes.conftest import (
+    SSO_ISSUER,
+    TokenExchangeState,
+    extract_state_token,
+    make_oidc_provider,
+    make_oidc_user,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -136,6 +150,43 @@ def test_cookie_grants_access_to_protected_routes_after_login(client):
     assert response.status_code == 200
 
 
+def test_admin_session_is_rejected_once_the_user_is_disabled(isolated_client, caplog):
+    """Regression: require_admin_session() used to check only user.exists/user.admin - an admin
+    switched to AuthType.NONE kept using an already-issued session cookie until it expired on its
+    own (up to 1h)."""
+    isolated_client.post("/admin/login", data={"username": TEST_USERNAME, "password": TEST_USER_PASSWORD})
+
+    # Mutate through the same AppContext the running server already has open in memory - a
+    # separate AppContext(master_key=...) would write to the same file but stay invisible to the
+    # server's own already-open KeePass copy until an explicit reload (see server_state.py).
+    app_ctx = isolated_client.app.state.server.app_ctx
+    user = User(app_ctx.users, username=TEST_USERNAME)
+    user.auth_type = AuthType.NONE
+    user.save()
+
+    with caplog.at_level(logging.INFO):
+        response = isolated_client.get("/admin/users", follow_redirects=False)
+
+    assert response.status_code == 303
+    assert response.headers["location"].startswith("/admin/login")
+    assert any("disabled user" in r.message for r in caplog.records)
+
+
+def test_admin_session_log_names_unknown_user_not_missing_admin_rights(client, caplog):
+    """Regression: the reason-detection order in require_admin_session() checked `not user.admin`
+    before `not user.exists` - a nonexistent user also defaults to admin=False, so this always
+    reported "user is not an admin" instead of "unknown user"."""
+    app_ctx = AppContext(master_key=TEST_DB_PASSWORD)
+    forged_token = create_token("no-such-user", app_ctx.settings.jwt_secret, TokenType.ADMIN)
+    client.cookies.set("admin_session", forged_token)
+
+    with caplog.at_level(logging.INFO):
+        client.get("/admin/users", follow_redirects=False)
+
+    assert any("unknown user" in r.message for r in caplog.records)
+    assert not any("not an admin" in r.message for r in caplog.records)
+
+
 def test_tampered_cookie_redirects_to_login(client):
     client.cookies.set("admin_session", "not-a-real-token")
 
@@ -184,6 +235,166 @@ def test_already_logged_in_get_login_redirects_away(client):
 
     assert response.status_code == 303
     assert response.headers["location"] == "/admin"
+
+
+# ================================================================================
+# SSO login (OpenID Connect) - end to end through GET /admin/login/sso[/callback], with the
+# identity provider itself faked (discovery/JWKS via a MockTransport, code exchange via a fake
+# AsyncOAuth2Client) - the protocol pieces already have their own dedicated coverage
+# (tests/unit/core/test_oidc_client.py, tests/unit/server/test_oidc.py).
+# ================================================================================
+
+
+def _start_sso(isolated_client, fake_token_exchange: TokenExchangeState, provider_uuid: str, next_path: str = "") -> str:
+    """Starts an SSO login and copies the nonce start_login() generated into fake_token_exchange's
+    claims - a real IdP echoes back whatever nonce it was sent, but our fake exchange has no way to
+    know it on its own, since Authlib's fetch_token() is never given it."""
+    query = f"provider={provider_uuid}" + (f"&next={next_path}" if next_path else "")
+    start = isolated_client.get(f"/admin/login/sso?{query}", follow_redirects=False)
+    state_token = extract_state_token(start.headers["location"])
+    fake_token_exchange.claims["nonce"] = isolated_client.app.state.server.resources.oidc_pending[state_token].nonce
+    return state_token
+
+
+def test_sso_start_redirects_to_the_authorization_endpoint(isolated_client, install_idp_transport):
+    app_ctx = isolated_client.app.state.server.app_ctx
+    provider = make_oidc_provider(app_ctx)
+
+    response = isolated_client.get(f"/admin/login/sso?provider={provider.uuid}", follow_redirects=False)
+
+    assert response.status_code == 303
+    assert response.headers["location"].startswith(f"{SSO_ISSUER}/auth?")
+    assert "state=" in response.headers["location"]
+
+
+def test_sso_start_with_an_unknown_provider_redirects_to_login_without_starting_a_pending_login(isolated_client):
+    response = isolated_client.get("/admin/login/sso?provider=not-a-real-uuid", follow_redirects=False)
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/admin/login"
+    assert isolated_client.app.state.server.resources.oidc_pending == {}
+
+
+def test_sso_start_surfaces_a_discovery_failure(isolated_client, monkeypatch):
+    app_ctx = isolated_client.app.state.server.app_ctx
+    provider = make_oidc_provider(app_ctx)
+    resources = isolated_client.app.state.server.resources
+    monkeypatch.setattr(resources.oidc_client, "discover", AsyncMock(side_effect=OidcDiscoveryError("unreachable")))
+
+    response = isolated_client.get(f"/admin/login/sso?provider={provider.uuid}", follow_redirects=False)
+
+    assert response.status_code == 303
+    assert response.headers["location"].startswith("/admin/login?error=")
+    assert "unreachable" in unquote(response.headers["location"])
+
+
+def test_sso_login_full_flow_sets_cookie_and_redirects_to_next(isolated_client, install_idp_transport, fake_token_exchange):
+    app_ctx = isolated_client.app.state.server.app_ctx
+    provider = make_oidc_provider(app_ctx)
+    make_oidc_user(app_ctx)
+
+    state_token = _start_sso(isolated_client, fake_token_exchange, provider.uuid, next_path="/admin/servers")
+
+    response = isolated_client.get(
+        f"/admin/login/sso/callback?state={state_token}&code=fake-code", follow_redirects=False
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/admin/servers"
+    assert "admin_session=" in response.headers["set-cookie"]
+
+
+def test_sso_login_cookie_grants_access_to_protected_routes(isolated_client, install_idp_transport, fake_token_exchange):
+    app_ctx = isolated_client.app.state.server.app_ctx
+    provider = make_oidc_provider(app_ctx)
+    make_oidc_user(app_ctx)
+    state_token = _start_sso(isolated_client, fake_token_exchange, provider.uuid)
+
+    isolated_client.get(f"/admin/login/sso/callback?state={state_token}&code=fake-code")
+    response = isolated_client.get("/admin/users")
+
+    assert response.status_code == 200
+
+
+def test_sso_login_rejects_open_redirect_via_next_param(isolated_client, install_idp_transport, fake_token_exchange):
+    app_ctx = isolated_client.app.state.server.app_ctx
+    provider = make_oidc_provider(app_ctx)
+    make_oidc_user(app_ctx)
+
+    state_token = _start_sso(
+        isolated_client, fake_token_exchange, provider.uuid, next_path="https://evil.example.com"
+    )
+
+    response = isolated_client.get(
+        f"/admin/login/sso/callback?state={state_token}&code=fake-code", follow_redirects=False
+    )
+
+    assert response.headers["location"] == "/admin"
+
+
+def test_sso_callback_rejects_an_unknown_state(isolated_client):
+    response = isolated_client.get("/admin/login/sso/callback?state=never-issued&code=x", follow_redirects=False)
+
+    assert response.status_code == 303
+    assert response.headers["location"].startswith("/admin/login?error=")
+    assert "expired+or+was+already+used" in response.headers["location"] or "expired" in unquote(
+        response.headers["location"]
+    )
+
+
+def test_sso_callback_state_is_single_use(isolated_client, install_idp_transport, fake_token_exchange):
+    app_ctx = isolated_client.app.state.server.app_ctx
+    provider = make_oidc_provider(app_ctx)
+    make_oidc_user(app_ctx)
+    state_token = _start_sso(isolated_client, fake_token_exchange, provider.uuid)
+    isolated_client.get(f"/admin/login/sso/callback?state={state_token}&code=fake-code")
+
+    replay = isolated_client.get(
+        f"/admin/login/sso/callback?state={state_token}&code=fake-code", follow_redirects=False
+    )
+
+    assert "expired" in unquote(replay.headers["location"])
+
+
+def test_sso_callback_surfaces_an_idp_error_param_without_attempting_an_exchange(isolated_client):
+    response = isolated_client.get(
+        "/admin/login/sso/callback?error=access_denied&error_description=User+cancelled", follow_redirects=False
+    )
+
+    assert response.status_code == 303
+    assert "User+cancelled" in response.headers["location"] or "User" in unquote(response.headers["location"])
+    assert "admin_session" not in response.headers.get("set-cookie", "")
+
+
+def test_sso_callback_rejects_a_non_admin_user(isolated_client, install_idp_transport, fake_token_exchange):
+    app_ctx = isolated_client.app.state.server.app_ctx
+    provider = make_oidc_provider(app_ctx)
+    make_oidc_user(app_ctx, admin=False)
+    state_token = _start_sso(isolated_client, fake_token_exchange, provider.uuid)
+
+    response = isolated_client.get(
+        f"/admin/login/sso/callback?state={state_token}&code=fake-code", follow_redirects=False
+    )
+
+    assert response.status_code == 303
+    assert "not+an+administrator" in response.headers["location"] or "administrator" in unquote(
+        response.headers["location"]
+    )
+    assert "admin_session" not in response.headers.get("set-cookie", "")
+
+
+def test_sso_callback_rejects_an_unknown_username_claim(isolated_client, install_idp_transport, fake_token_exchange):
+    app_ctx = isolated_client.app.state.server.app_ctx
+    provider = make_oidc_provider(app_ctx)
+    # no matching user created
+    state_token = _start_sso(isolated_client, fake_token_exchange, provider.uuid)
+
+    response = isolated_client.get(
+        f"/admin/login/sso/callback?state={state_token}&code=fake-code", follow_redirects=False
+    )
+
+    assert response.status_code == 303
+    assert "admin_session" not in response.headers.get("set-cookie", "")
 
 
 # ================================================================================

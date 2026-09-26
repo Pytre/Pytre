@@ -12,7 +12,7 @@ from Pytre_Core import old_files, settings, users, utils
 from Pytre_Core.about import APP_NAME, APP_VERSION, APP_STATUS
 from Pytre_Core.context import AppContext, UserContext
 from Pytre_Core.logs_central import ClientDriven as CentralLogs
-from Pytre_Core.remotes import RemoteServer, Remotes, RemoteAuthError
+from Pytre_Core.remotes import RemoteServer, Remotes, RemoteAuthError, RemoteSsoRequiredError
 from Pytre_Core.servers import Server, Servers
 from Pytre_Core.user_prefs import UserPrefs, PrefsEnum
 
@@ -30,6 +30,7 @@ from Pytre_Client.InputDialog import InputDialog
 from Pytre_Client.MsgDialog import MsgDialog
 from Pytre_Client.MsgOverlay import MsgOverlay
 from Pytre_Client.remote_login import prompt_remote_credentials
+from Pytre_Client.sso_login import prompt_sso_login
 from Pytre_Client.app_logs import LogsWindow
 from Pytre_Client.app_debug import DebugWindow
 from Pytre_Client.app_users import UsersWindow
@@ -933,7 +934,10 @@ class App(tk.Toplevel):
             if hide_end_msg:
                 pass
             elif errors.get("cnx_error"):
-                if remote_target and isinstance(remote_target.last_error, RemoteAuthError):
+                if remote_target and isinstance(remote_target.last_error, RemoteSsoRequiredError):
+                    on_done = lambda ok: self.refresh_queries(remote_server=remote_target) if ok else None
+                    prompt_sso_login(self, remote_target.remote, on_done=on_done)
+                elif remote_target and isinstance(remote_target.last_error, RemoteAuthError):
                     self.prompt_remote_credentials_and_reload_queries(remote_target)
                 else:
                     messagebox.showerror("Rechargement", errors["cnx_error"], parent=self)

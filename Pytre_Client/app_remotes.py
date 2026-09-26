@@ -7,14 +7,16 @@ from queue import Queue
 from collections.abc import Iterator
 
 from Pytre_Core import utils
-from Pytre_Core.remotes import Remotes, Remote, RemoteAddress, RemoteAuthError, RemoteError
 from Pytre_Core.about import APP_NAME
+from Pytre_Core.remotes import Remotes, Remote, RemoteAddress, RemoteAuthError, RemoteError, RemoteSsoRequiredError
+from Pytre_Core.users import AuthType
 
 import Pytre_Client.ui_utils as ui_utils
 from Pytre_Client.ui_utils_thread import tk_call_when_ready
 from Pytre_Client.app_theme import set_theme, set_menus, theme_is_on
 from Pytre_Client.MsgOverlay import MsgOverlay
 from Pytre_Client.remote_login import prompt_remote_credentials
+from Pytre_Client.sso_login import prompt_sso_login
 from Pytre_Client.ui_utils_csv import CsvTaskConfig, csv_process_async
 
 
@@ -524,6 +526,7 @@ class RemoteDialog(tk.Toplevel):
             "description": "Description",
             "url": "URL",
             "port": "Port",
+            "auth_method": "Connexion",
             "username": "Login",
             "password": "Mot de passe",
             "allow_unsecure_channel": "Autoriser sur un canal non sécurisé",
@@ -553,6 +556,11 @@ class RemoteDialog(tk.Toplevel):
                 label_span, entry_span = 2, 1
                 my_tk_var = tk.BooleanVar()
                 my_entry = ttk.Checkbutton(self.entries_frame, variable=my_tk_var, onvalue=True, offvalue=False)
+            elif key == "auth_method":
+                my_tk_var = tk.StringVar(value=str(AuthType.BASIC))
+                my_tk_var.trace_add("write", self._update_auth_method_fields_state)
+                my_entry = ttk.Combobox(self.entries_frame, textvariable=my_tk_var, state="readonly")
+                my_entry.configure(values=(str(AuthType.BASIC), str(AuthType.OIDC)))
             else:
                 my_tk_var = tk.StringVar()
                 my_entry = ttk.Entry(self.entries_frame, textvariable=my_tk_var)
@@ -562,6 +570,8 @@ class RemoteDialog(tk.Toplevel):
             my_label.grid(row=num_row, column=label_col, columnspan=label_span, padx=2, pady=2, ipady=4, sticky="nswe")
             my_entry.grid(row=num_row, column=entry_col, columnspan=entry_span, padx=2, pady=2, sticky="nswe")
             num_row += 1
+
+        self._update_auth_method_fields_state()
 
     def _setup_buttons(self):
         self.buttons_frame.columnconfigure(0, weight=1)
@@ -578,6 +588,15 @@ class RemoteDialog(tk.Toplevel):
     def _events_binds(self):
         self.protocol("WM_DELETE_WINDOW", self.close)  # arrêter le programme quand fermeture de la fenêtre
 
+    def _update_auth_method_fields_state(self, *_args) -> None:
+        """Disable username/password when auth_method isn't basic."""
+        state = "disabled" if self.entries["auth_method"].var.get() != str(AuthType.BASIC) else "normal"
+
+        for entry_name in ("username", "password"):
+            entry = self.entries[entry_name].w_entry
+            assert isinstance(entry, ttk.Entry)
+            entry.configure(state=state)
+
     # ------------------------------------------------------------------------------------------
     # Autres traitements
     # ------------------------------------------------------------------------------------------
@@ -587,6 +606,8 @@ class RemoteDialog(tk.Toplevel):
 
         for key, w_group in self.entries.items():
             val = getattr(self.remote.address, key, "")
+            if key == "auth_method":
+                val = str(val)
             w_group.var.set(val)
 
     def toggle_password(self, w_caller: ttk.Button, w_target: ttk.Entry, hide_char: str = "\U000025cf"):
@@ -607,53 +628,62 @@ class RemoteDialog(tk.Toplevel):
 
         overlay = MsgOverlay.display(self, "Enregistrement en cours...", 0)
         address = remote.address
-        original_address = (address.url, address.port, address.username, address.password)
+        original_address = (address.url, address.port, address.auth_method, address.username, address.password)
 
         # mise à jour des infos de la remote
         if not retry:
             for key, w_group in self.entries.items():
                 val = w_group.var.get()
+                if key == "auth_method":
+                    val = AuthType.from_value(val) or AuthType.BASIC
                 setattr(remote.address, key, val)
 
         # enregistrement des infos
         def worker():
             msg: str = ""
             invalid_credentials: bool = False
+            sso_required: bool = False
             try:
                 remote.save()
                 address = remote.address
-                modified_address = (address.url, address.port, address.username, address.password)
+                modified_address = (address.url, address.port, address.auth_method, address.username, address.password)
                 if retry or modified_address != original_address:
                     address.refresh_token, address.access_token = "", ""
                     remote.login()
-            except RemoteAuthError as e:
+            except RemoteSsoRequiredError:
+                sso_required = True
+            except RemoteAuthError:
                 invalid_credentials = True
             except RemoteError:
                 pass  # ignore other login error
             except Exception as e:
                 msg = "Erreur inattendue lors de l'enregistrement :\n" + str(e)
 
-            result_queue.put((msg, invalid_credentials))
+            result_queue.put((msg, invalid_credentials, sso_required))
 
-        def save_end(error_msg: str = "", invalid_credentials: bool = False):
+        def save_end(error_msg: str = "", invalid_credentials: bool = False, sso_required: bool = False):
             overlay.hide()
 
-            if invalid_credentials:
+            if sso_required:
+                prompt_sso_login(self, remote, on_done=lambda _: self._abandon_and_close())
+            elif invalid_credentials:
                 prompt = f"Login ou mot de passe invalide.\nCorriger le pour pouvoir vous connecter :"
                 if prompt_remote_credentials(remote, parent=self, prompt=prompt, save=False):
                     self._save_and_test(remote, retry=True)  # retry with new credentials
                 else:
-                    self.remote_modified = True
-                    self.close()
+                    self._abandon_and_close()
             elif error_msg:
                 messagebox.showerror(title="Erreur Enregistrement", message=error_msg, parent=self)
             else:
-                self.remote_modified = True
-                self.close()
+                self._abandon_and_close()
 
         result_queue = Queue()
         Thread(target=worker, daemon=True).start()
         tk_call_when_ready(self, result_queue, save_end)
+
+    def _abandon_and_close(self):
+        self.remote_modified = True
+        self.close()
 
     def close(self, _: Event | None = None):
         ui_utils.ui_undisable_parent(self, self.parent)

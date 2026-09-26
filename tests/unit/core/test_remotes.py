@@ -12,6 +12,7 @@ import jwt
 import pytest
 
 from Pytre_Core.remotes import (
+    REMOTES_CIPHER,
     Remote,
     RemoteAddress,
     RemoteAuthError,
@@ -21,11 +22,13 @@ from Pytre_Core.remotes import (
     RemoteInsecureChannelError,
     RemoteRequestError,
     RemoteServer,
+    RemoteSsoRequiredError,
     Remotes,
     decode_row_value,
     detail_from_response,
     encode_row_value,
 )
+from Pytre_Core.users import AuthType
 
 
 # ================================================================================
@@ -235,7 +238,12 @@ def test_remote_address_to_dict_round_trips():
 
     remote = RemoteAddress.from_dict(original)
 
-    assert remote.to_dict() == original | {"encrypted_pwd": "", "token": "", "allow_unsecure_channel": False}
+    assert remote.to_dict() == original | {
+        "encrypted_pwd": "",
+        "token": "",
+        "allow_unsecure_channel": False,
+        "auth_method": "basic",
+    }
 
 
 @pytest.mark.unit
@@ -343,6 +351,56 @@ def test_remote_address_to_dict_includes_allow_unsecure_channel():
     remote = RemoteAddress(url="http://a", port=8000, username="alice", allow_unsecure_channel=True)
 
     assert remote.to_dict()["allow_unsecure_channel"] is True
+
+
+@pytest.mark.unit
+def test_remote_address_auth_method_defaults_to_basic():
+    remote = RemoteAddress(url="http://a", port=8000, username="alice")
+
+    assert remote.auth_method is AuthType.BASIC
+
+
+@pytest.mark.unit
+def test_remote_address_from_dict_defaults_auth_method_to_basic_when_missing():
+    """An existing Pytre_Remotes.json predating this field has no auth_method key at all -
+    must behave exactly as before (password login), not raise or silently break."""
+    remote = RemoteAddress.from_dict({"url": "http://a", "port": 8000, "username": "alice"})
+
+    assert remote.auth_method is AuthType.BASIC
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("value", ["basic", "BASIC", "oidc", "OIDC"])
+def test_remote_address_from_dict_parses_auth_method_case_insensitively(value):
+    remote = RemoteAddress.from_dict({"url": "http://a", "port": 8000, "username": "alice", "auth_method": value})
+
+    assert remote.auth_method is AuthType.from_value(value)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("value", ["none", "NONE", "not-a-real-auth-method", ""])
+def test_remote_address_from_dict_falls_back_to_basic_for_none_or_invalid_auth_method(value):
+    """AuthType.NONE has no meaning for a remote (there's no way to log in without a method) -
+    treated the same as any other invalid/unrecognized value, falls back to AuthType.BASIC."""
+    remote = RemoteAddress.from_dict({"url": "http://a", "port": 8000, "username": "alice", "auth_method": value})
+
+    assert remote.auth_method is AuthType.BASIC
+
+
+@pytest.mark.unit
+def test_remote_address_to_dict_includes_auth_method():
+    remote = RemoteAddress(url="http://a", port=8000, username="alice", auth_method=AuthType.OIDC)
+
+    assert remote.to_dict()["auth_method"] == "oidc"
+
+
+@pytest.mark.unit
+def test_remote_address_from_dict_auth_method_round_trips():
+    original = RemoteAddress(url="http://a", port=8000, username="alice", auth_method=AuthType.OIDC)
+
+    rebuilt = RemoteAddress.from_dict(original.to_dict())
+
+    assert rebuilt.auth_method is AuthType.OIDC
 
 
 @pytest.mark.unit
@@ -672,6 +730,80 @@ def test_login_uses_valid_refresh_token_and_skips_full_login(address, remotes, m
 
 
 @pytest.mark.unit
+def test_login_via_refresh_persists_a_new_refresh_token_when_the_server_sends_one(address, remotes, monkeypatch):
+    """Lot 7: an OIDC account just reconfirmed active at the IdP gets a fresh, longer-lived Pytre
+    refresh token back from /refresh - persisted immediately, or it would only live in memory for
+    this session and be lost on the next Pytre_Client restart."""
+    address.refresh_token = _make_token()
+    monkeypatch.setattr(
+        httpx2, "post", lambda **kwargs: _FakeResponse({"access_token": "new-access", "refresh_token": "rotated-rt"})
+    )
+
+    result = Remote(remotes, address).login()
+
+    assert result is True
+    assert address.refresh_token == "rotated-rt"
+    saved = _read_remotes_file(remotes.remotes_file)
+    assert REMOTES_CIPHER.decrypt(saved[address.uuid]["token"]) == "rotated-rt"
+
+
+@pytest.mark.unit
+def test_login_via_refresh_does_not_persist_when_the_server_omits_a_new_refresh_token(address, remotes, monkeypatch):
+    """The common case (most /refresh calls don't reverify against the IdP, and a BASIC account
+    never gets a rolled refresh token at all) must behave exactly as before Lot 7 - nothing written
+    to disk just because /refresh was called."""
+    address.refresh_token = _make_token()
+    monkeypatch.setattr(httpx2, "post", lambda **kwargs: _FakeResponse({"access_token": "new-access"}))
+
+    result = Remote(remotes, address).login()
+
+    assert result is True
+    assert not remotes.remotes_file.exists()  # save() never called, nothing persisted
+
+
+@pytest.mark.unit
+def test_login_via_refresh_does_not_raise_for_a_standalone_remote_without_a_remotes_collection(address, monkeypatch):
+    """A Remote built only to carry an address (e.g. RemoteServer.deserialize(), used for the
+    execution round-trip) has no Remotes collection to persist to - Remote.save() would raise
+    RuntimeError there, so persistence must be skipped silently rather than attempted."""
+    address.refresh_token = _make_token()
+    monkeypatch.setattr(
+        httpx2, "post", lambda **kwargs: _FakeResponse({"access_token": "new-access", "refresh_token": "rotated-rt"})
+    )
+
+    result = Remote(None, address).login()  # must not raise
+
+    assert result is True
+    assert address.refresh_token == "rotated-rt"
+
+
+@pytest.mark.unit
+def test_login_via_full_login_persists_the_new_token_pair(address, remotes, monkeypatch):
+    """The full username/password /login path now persists too, closing the same general gap -
+    not OIDC-specific, but needed for the OIDC-specific rolling renewal above to actually survive
+    a Pytre_Client restart."""
+    monkeypatch.setattr(httpx2, "post", lambda **kwargs: _FakeResponse({"refresh_token": "r1", "access_token": "a1"}))
+
+    result = Remote(remotes, address).login()
+
+    assert result is True
+    saved = _read_remotes_file(remotes.remotes_file)
+    assert REMOTES_CIPHER.decrypt(saved[address.uuid]["token"]) == "r1"
+
+
+@pytest.mark.unit
+def test_login_via_full_login_does_not_raise_for_a_standalone_remote_without_a_remotes_collection(
+    address, monkeypatch
+):
+    monkeypatch.setattr(httpx2, "post", lambda **kwargs: _FakeResponse({"refresh_token": "r1", "access_token": "a1"}))
+
+    result = Remote(None, address).login()  # must not raise
+
+    assert result is True
+    assert address.refresh_token == "r1"
+
+
+@pytest.mark.unit
 def test_login_skips_refresh_call_when_refresh_token_is_expired(address, remotes, monkeypatch):
     """Regression: an expired refresh_token used to be reported as valid (see
     test_refresh_token_is_valid_false_when_expired) - login() would then waste a POST /refresh
@@ -828,6 +960,95 @@ def test_login_allows_plain_http_to_a_public_ip_when_allow_unsecure_channel_is_t
     result = Remote(remotes, address).login()
 
     assert result is True
+
+
+# ================================================================================
+# Remote.login - SSO (AuthType.OIDC remotes have no password to fall back on)
+# ================================================================================
+
+
+@pytest.mark.unit
+def test_login_raises_sso_required_for_an_oidc_remote_with_no_refresh_token(address, remotes, monkeypatch):
+    address.auth_method = AuthType.OIDC
+
+    def fake_post(**kwargs):
+        pytest.fail("httpx2.post should not be called - there's no password to send")
+
+    monkeypatch.setattr(httpx2, "post", fake_post)
+
+    remote = Remote(remotes, address)
+    with pytest.raises(RemoteSsoRequiredError):
+        remote.login()
+
+    assert isinstance(remote.last_error, RemoteSsoRequiredError)
+
+
+@pytest.mark.unit
+def test_login_raises_sso_required_for_an_oidc_remote_with_an_expired_refresh_token(address, remotes, monkeypatch):
+    address.auth_method = AuthType.OIDC
+    address.refresh_token = _make_expired_token()
+
+    def fake_post(**kwargs):
+        pytest.fail("httpx2.post should not be called - there's no password to send")
+
+    monkeypatch.setattr(httpx2, "post", fake_post)
+
+    remote = Remote(remotes, address)
+    with pytest.raises(RemoteSsoRequiredError):
+        remote.login()
+
+
+@pytest.mark.unit
+def test_login_raises_sso_required_for_an_oidc_remote_when_the_refresh_call_fails(address, remotes, monkeypatch):
+    """Regression-shaped: a valid-looking but server-rejected refresh_token must raise
+    RemoteSsoRequiredError, mirroring test_login_falls_back_to_full_login_when_refresh_request_fails
+    for a password remote - but here there's no password to fall back to, only an interactive login."""
+    address.auth_method = AuthType.OIDC
+    address.refresh_token = _make_token()
+
+    def fake_post(url, json, timeout):
+        raise httpx2.ConnectError("boom")
+
+    monkeypatch.setattr(httpx2, "post", fake_post)
+
+    remote = Remote(remotes, address)
+    with pytest.raises(RemoteSsoRequiredError):
+        remote.login()
+
+
+@pytest.mark.unit
+def test_login_for_an_oidc_remote_with_a_valid_refresh_token_refreshes_normally(address, remotes, monkeypatch):
+    """The cheap refresh path is entirely agnostic to auth_method - an OIDC remote with a
+    still-valid Pytre refresh_token behaves exactly like a password remote, no browser involved."""
+    address.auth_method = AuthType.OIDC
+    address.refresh_token = _make_token()
+    captured = {}
+
+    def fake_post(url, json, timeout):
+        captured["url"] = url
+        return _FakeResponse({"access_token": "new-access"})
+
+    monkeypatch.setattr(httpx2, "post", fake_post)
+
+    result = Remote(remotes, address).login()
+
+    assert result is True
+    assert captured["url"] == "http://127.0.0.1:8000/refresh"
+    assert address.access_token == "new-access"
+
+
+@pytest.mark.unit
+def test_login_for_a_basic_remote_is_unaffected_by_the_sso_branch(address, remotes, monkeypatch):
+    """Non-regression: auth_method defaults to AuthType.BASIC, so every pre-existing password
+    remote must keep going straight to /login, never hitting the new OIDC branch."""
+    assert address.auth_method is AuthType.BASIC
+    monkeypatch.setattr(httpx2, "post", lambda **kwargs: _FakeResponse({"refresh_token": "r1", "access_token": "a1"}))
+
+    result = Remote(remotes, address).login()
+
+    assert result is True
+    assert address.refresh_token == "r1"
+    assert address.access_token == "a1"
 
 
 # ================================================================================
@@ -1403,6 +1624,40 @@ def test_save_overwrites_entry_with_same_uuid_after_editing_host(no_remote_serve
     saved = remotes.remotes_dict[address.uuid]
     assert saved.address.url == "http://new-host"
     assert saved.address.description == "Updated"
+
+
+@pytest.mark.unit
+def test_save_with_reload_false_does_not_replace_the_in_memory_remotes_dict(no_remote_servers, address, remotes_file):
+    """Regression (Lot 7): save() used to always reload remotes_dict from disk first, replacing
+    every Remote instance currently held in memory - deadly when called from inside code that's
+    iterating remotes_dict itself (Remote.login() persisting a rotated token from inside
+    Remotes.get_all_servers(reload=True)'s own loop silently corrupted that same iteration).
+    reload=False must leave remotes_dict's existing dict object and Remote instances untouched."""
+    remotes = Remotes(remotes_file)
+    remote = Remote(remotes, address)
+    remotes.remotes_dict[address.uuid] = remote
+    before = remotes.remotes_dict
+
+    remote.save(reload=False)
+
+    assert remotes.remotes_dict is before  # same dict object, never replaced
+    assert remotes.remotes_dict[address.uuid] is remote  # same Remote instance, never replaced
+
+
+@pytest.mark.unit
+def test_save_with_reload_false_still_checks_for_id_collisions_against_current_memory(
+    no_remote_servers, address, remotes_file
+):
+    """reload=False skips re-reading remotes_dict from disk, but the id-collision check itself
+    still runs - just against whatever is already in memory, which is enough since the only
+    caller using reload=False (Remote.login()) never changes url/port/username anyway."""
+    remotes = Remotes(remotes_file)
+    remotes.remotes_dict[address.uuid] = Remote(remotes, address)
+    colliding = Remote(remotes, RemoteAddress(url=address.url, port=address.port, username=address.username))
+    remotes.remotes_dict[colliding.uuid] = colliding
+
+    with pytest.raises(LookupError):
+        colliding.save(reload=False)
 
 
 # ================================================================================

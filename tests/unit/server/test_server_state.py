@@ -3,7 +3,9 @@ Tests for Pytre_Server/server_state.py
 """
 
 import asyncio
-from datetime import datetime, timedelta
+import logging
+import time
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -107,11 +109,36 @@ def test_throttle_reset_failings_clears_attempts(server_state):
 
 @pytest.mark.unit
 def test_is_login_throttled_prunes_attempts_outside_the_window(server_state):
-    old_time = datetime.now() - timedelta(minutes=LOGIN_THROTTLE_WINDOW_MINUTES + 1)
+    old_time = datetime.now(timezone.utc) - timedelta(minutes=LOGIN_THROTTLE_WINDOW_MINUTES + 1)
     server_state.resources.throttle_failed_login["alice"] = [old_time] * MAX_LOGIN_ATTEMPTS
 
     assert server_state.resources.is_login_throttled("alice") is False
     assert "alice" not in server_state.resources.throttle_failed_login
+
+
+@pytest.mark.unit
+def test_throttle_record_failing_logs_once_when_threshold_is_reached(server_state, caplog):
+    with caplog.at_level(logging.INFO):
+        for _ in range(MAX_LOGIN_ATTEMPTS - 1):
+            server_state.resources.throttle_record_failing("alice")
+        assert not any("throttled" in r.message for r in caplog.records)
+
+        server_state.resources.throttle_record_failing("alice")  # the exact crossing attempt
+
+    assert sum("throttled" in r.message for r in caplog.records) == 1
+
+
+@pytest.mark.unit
+def test_throttle_record_failing_does_not_relog_past_the_threshold(server_state, caplog):
+    """Regression guard: logging inside is_login_throttled() (>=) instead of here (==) would fire
+    again on every call once past the threshold, even though in normal use the login routes never
+    call throttle_record_failing() again once a user is already throttled."""
+    with caplog.at_level(logging.INFO):
+        for _ in range(MAX_LOGIN_ATTEMPTS):
+            server_state.resources.throttle_record_failing("alice")
+        server_state.resources.throttle_record_failing("alice")  # simulates a misuse past the threshold
+
+    assert sum("throttled" in r.message for r in caplog.records) == 1
 
 
 @pytest.mark.unit
@@ -337,3 +364,231 @@ async def test_shutdown_drivers_cancels_pending_disconnect_tasks(server_state):
     with pytest.raises(asyncio.CancelledError):
         await pending_task
     assert pending_task.cancelled()
+
+
+# ================================================================================
+# OIDC pending login (webui SSO)
+# ================================================================================
+
+
+@pytest.mark.unit
+def test_oidc_start_pending_login_returns_a_usable_state_token(server_state):
+    state_token = server_state.resources.oidc_start_pending_login("https://idp", "nonce", "verifier", "/admin")
+
+    assert state_token
+    assert state_token in server_state.resources.oidc_pending
+
+
+@pytest.mark.unit
+def test_oidc_start_pending_login_generates_distinct_tokens(server_state):
+    first = server_state.resources.oidc_start_pending_login("https://idp", "n1", "v1", "/admin")
+    second = server_state.resources.oidc_start_pending_login("https://idp", "n2", "v2", "/admin")
+
+    assert first != second
+    assert len(server_state.resources.oidc_pending) == 2
+
+
+@pytest.mark.unit
+def test_oidc_pop_pending_login_returns_the_stored_values(server_state):
+    state_token = server_state.resources.oidc_start_pending_login("https://idp", "the-nonce", "the-verifier", "/x")
+
+    entry = server_state.resources.oidc_pop_pending_login(state_token)
+
+    assert entry is not None
+    assert entry.provider_issuer == "https://idp"
+    assert entry.nonce == "the-nonce"
+    assert entry.code_verifier == "the-verifier"
+    assert entry.next_path == "/x"
+
+
+@pytest.mark.unit
+def test_oidc_pop_pending_login_is_single_use(server_state):
+    state_token = server_state.resources.oidc_start_pending_login("https://idp", "n", "v", "/admin")
+
+    first = server_state.resources.oidc_pop_pending_login(state_token)
+    second = server_state.resources.oidc_pop_pending_login(state_token)
+
+    assert first is not None
+    assert second is None
+    assert state_token not in server_state.resources.oidc_pending
+
+
+@pytest.mark.unit
+def test_oidc_pop_pending_login_rejects_an_unknown_state(server_state):
+    assert server_state.resources.oidc_pop_pending_login("never-issued") is None
+
+
+@pytest.mark.unit
+def test_oidc_pop_pending_login_rejects_an_expired_entry(server_state):
+    """Regression guard: an expired entry must not be usable even though it's still physically in
+    the dict until pruned - _oidc_prune_expired() runs lazily, not on a timer."""
+    state_token = server_state.resources.oidc_start_pending_login("https://idp", "n", "v", "/admin")
+    server_state.resources.oidc_pending[state_token].expires_at = time.monotonic() - 1
+
+    entry = server_state.resources.oidc_pop_pending_login(state_token)
+
+    assert entry is None
+    assert state_token not in server_state.resources.oidc_pending  # consumed anyway, not left behind
+
+
+@pytest.mark.unit
+def test_oidc_peek_pending_login_returns_the_stored_values_without_consuming_it(server_state):
+    state_token = server_state.resources.oidc_start_pending_login("https://idp", "the-nonce", "the-verifier", "/x")
+
+    entry = server_state.resources.oidc_peek_pending_login(state_token)
+
+    assert entry is not None
+    assert entry.provider_issuer == "https://idp"
+    assert state_token in server_state.resources.oidc_pending  # still there - peek doesn't consume
+
+
+@pytest.mark.unit
+def test_oidc_peek_pending_login_can_be_called_more_than_once(server_state):
+    state_token = server_state.resources.oidc_start_pending_login("https://idp", "n", "v", "/admin")
+
+    first = server_state.resources.oidc_peek_pending_login(state_token)
+    second = server_state.resources.oidc_peek_pending_login(state_token)
+
+    assert first is not None
+    assert second is not None
+
+
+@pytest.mark.unit
+def test_oidc_peek_pending_login_rejects_an_unknown_state(server_state):
+    assert server_state.resources.oidc_peek_pending_login("never-issued") is None
+
+
+@pytest.mark.unit
+def test_oidc_peek_pending_login_rejects_an_expired_entry(server_state):
+    state_token = server_state.resources.oidc_start_pending_login("https://idp", "n", "v", "/admin")
+    server_state.resources.oidc_pending[state_token].expires_at = time.monotonic() - 1
+
+    assert server_state.resources.oidc_peek_pending_login(state_token) is None
+
+
+@pytest.mark.unit
+def test_oidc_peek_pending_login_does_not_prevent_the_real_pop_from_consuming_the_entry(server_state):
+    """The admin SSO callback route peeks first (to build redirect_uri), then hands off to
+    handle_callback(), which performs the real, consuming lookup - the peek must never interfere."""
+    state_token = server_state.resources.oidc_start_pending_login("https://idp", "n", "v", "/admin")
+
+    server_state.resources.oidc_peek_pending_login(state_token)
+    popped = server_state.resources.oidc_pop_pending_login(state_token)
+
+    assert popped is not None
+    assert state_token not in server_state.resources.oidc_pending
+
+
+@pytest.mark.unit
+def test_oidc_start_pending_login_prunes_expired_entries(server_state):
+    stale_token = server_state.resources.oidc_start_pending_login("https://idp", "n", "v", "/admin")
+    server_state.resources.oidc_pending[stale_token].expires_at = time.monotonic() - 1
+
+    server_state.resources.oidc_start_pending_login("https://idp", "n2", "v2", "/admin")
+
+    assert stale_token not in server_state.resources.oidc_pending
+    assert len(server_state.resources.oidc_pending) == 1
+
+
+@pytest.mark.unit
+def test_oidc_start_pending_login_evicts_the_oldest_once_at_capacity(server_state, monkeypatch):
+    monkeypatch.setattr("Pytre_Server.server_state.OIDC_PENDING_MAX", 2)
+
+    first = server_state.resources.oidc_start_pending_login("https://idp", "n1", "v1", "/admin")
+    server_state.resources.oidc_start_pending_login("https://idp", "n2", "v2", "/admin")
+    server_state.resources.oidc_start_pending_login("https://idp", "n3", "v3", "/admin")
+
+    # OIDC_PENDING_MAX is imported by name in server_state.py's own module scope - monkeypatching
+    # the module attribute (above) is what the SUT sees; a plain `from ... import OIDC_PENDING_MAX`
+    # here would have frozen the original value of 200 instead, so the cap (2) is hardcoded below.
+    assert len(server_state.resources.oidc_pending) == 2
+    assert first not in server_state.resources.oidc_pending  # the oldest, evicted to make room
+
+
+# ================================================================================
+# Client code pending (Pytre_Client mediated-mode SSO - the loopback bridge, not the IdP leg) -
+# exercises the same shared _PendingHelper logic as the OIDC pending tests above, through a
+# second, independent dataclass (_ClientCodePending) - no separate direct test of _PendingHelper
+# itself, the two call sites already prove its generic behavior.
+# ================================================================================
+
+
+@pytest.mark.unit
+def test_client_code_start_pending_returns_a_usable_code(server_state):
+    code = server_state.resources.client_code_start_pending("sso_user", "challenge")
+
+    assert code
+    assert code in server_state.resources.client_code_pending
+
+
+@pytest.mark.unit
+def test_client_code_start_pending_generates_distinct_codes(server_state):
+    first = server_state.resources.client_code_start_pending("sso_user", "challenge-1")
+    second = server_state.resources.client_code_start_pending("sso_user", "challenge-2")
+
+    assert first != second
+    assert len(server_state.resources.client_code_pending) == 2
+
+
+@pytest.mark.unit
+def test_client_code_pop_pending_returns_the_stored_values(server_state):
+    code = server_state.resources.client_code_start_pending("sso_user", "the-challenge")
+
+    entry = server_state.resources.client_code_pop_pending(code)
+
+    assert entry is not None
+    assert entry.username == "sso_user"
+    assert entry.code_challenge == "the-challenge"
+
+
+@pytest.mark.unit
+def test_client_code_pop_pending_is_single_use(server_state):
+    code = server_state.resources.client_code_start_pending("sso_user", "challenge")
+
+    first = server_state.resources.client_code_pop_pending(code)
+    second = server_state.resources.client_code_pop_pending(code)
+
+    assert first is not None
+    assert second is None
+    assert code not in server_state.resources.client_code_pending
+
+
+@pytest.mark.unit
+def test_client_code_pop_pending_rejects_an_unknown_code(server_state):
+    assert server_state.resources.client_code_pop_pending("never-issued") is None
+
+
+@pytest.mark.unit
+def test_client_code_pop_pending_rejects_an_expired_entry(server_state):
+    """Regression guard: an expired entry must not be usable even though it's still physically in
+    the dict until pruned - _PendingHelper._prune_expired() runs lazily, not on a timer."""
+    code = server_state.resources.client_code_start_pending("sso_user", "challenge")
+    server_state.resources.client_code_pending[code].expires_at = time.monotonic() - 1
+
+    entry = server_state.resources.client_code_pop_pending(code)
+
+    assert entry is None
+    assert code not in server_state.resources.client_code_pending  # consumed anyway, not left behind
+
+
+@pytest.mark.unit
+def test_client_code_start_pending_prunes_expired_entries(server_state):
+    stale_code = server_state.resources.client_code_start_pending("sso_user", "challenge")
+    server_state.resources.client_code_pending[stale_code].expires_at = time.monotonic() - 1
+
+    server_state.resources.client_code_start_pending("sso_user", "challenge-2")
+
+    assert stale_code not in server_state.resources.client_code_pending
+    assert len(server_state.resources.client_code_pending) == 1
+
+
+@pytest.mark.unit
+def test_client_code_start_pending_evicts_the_oldest_once_at_capacity(server_state, monkeypatch):
+    monkeypatch.setattr("Pytre_Server.server_state.CLIENT_CODE_PENDING_MAX", 2)
+
+    first = server_state.resources.client_code_start_pending("sso_user", "c1")
+    server_state.resources.client_code_start_pending("sso_user", "c2")
+    server_state.resources.client_code_start_pending("sso_user", "c3")
+
+    assert len(server_state.resources.client_code_pending) == 2
+    assert first not in server_state.resources.client_code_pending  # the oldest, evicted to make room

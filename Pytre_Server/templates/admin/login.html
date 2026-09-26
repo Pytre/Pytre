@@ -68,6 +68,16 @@
                 <button type="submit">Log in</button>
             </div>
         </form>
+        {% if sso_providers %}
+        <div class="sso-divider"><span>or</span></div>
+        <div class="sso-providers">
+            {% for p in sso_providers %}
+            <a class="btn secondary" href="/admin/login/sso?provider={{ p.uuid }}&next={{ next | urlencode }}">
+                Sign in with {{ p.label }}
+            </a>
+            {% endfor %}
+        </div>
+        {% endif %}
         {% endif %}
     </div>
 </div>

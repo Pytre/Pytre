@@ -1,14 +1,18 @@
-from dataclasses import dataclass
+import logging
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from urllib.parse import quote
+from urllib.parse import quote, quote_plus
 
 import jwt
-from fastapi import APIRouter, Depends, Form, Request, status
+from fastapi import APIRouter, Depends, Form, Query, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from Pytre_Core.context import UserContext
 from Pytre_Core.users import AuthType, User, hash_password, verify_password
+from Pytre_Core.utils import log as _log
+
 from Pytre_Server.auth_token import TokenType, create_token, decode_token
+from Pytre_Server.oidc import OidcLoginError, handle_callback, start_login
 from Pytre_Server.server_state import ServerResources, ServerState, get_server_state
 from Pytre_Server.templating import templates
 
@@ -18,19 +22,25 @@ COOKIE_NAME = "admin_session"
 router = APIRouter()
 
 
+def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__) -> None:
+    _log(msg, level=level, sublogger=sublogger)
+
+
 @dataclass
 class LoginContext:
     next: str
     no_admin_yet: bool
     show_bootstrap_form: bool
     error: str = ""
+    sso_providers: list[dict[str, str]] = field(default_factory=list)
 
-    def to_dict(self) -> dict[str, str | bool]:
+    def to_dict(self) -> dict[str, str | bool | list[dict[str, str]]]:
         return {
             "next": self.next,
             "no_admin_yet": self.no_admin_yet,
             "show_bootstrap_form": self.show_bootstrap_form,
             "error": self.error,
+            "sso_providers": self.sso_providers,
         }
 
 
@@ -105,9 +115,23 @@ def require_admin_session(request: Request, state: ServerState = Depends(get_ser
     issued_at = datetime.fromtimestamp(payload["iat"], tz=timezone.utc)
 
     user = UserContext(state.app_ctx.users, username=username).current_user
-    if not user.exists or not user.admin:
-        raise AdminAuthRequired(_next_path_for(request))
-    if user.password_changed_at is not None and issued_at < user.password_changed_at:
+    if (
+        not user.exists
+        or not user.admin
+        or user.auth_type is AuthType.NONE
+        or (user.password_changed_at is not None and issued_at < user.password_changed_at)
+    ):
+        reason = ""
+        if not user.exists:
+            reason = "unknown user"
+        elif user.auth_type is AuthType.NONE:
+            reason = "disabled user"
+        elif not user.admin:
+            reason = "user is not an admin"
+
+        if reason:
+            log(f"Rejected admin session for '{username}': {reason}", logging.INFO)
+
         raise AdminAuthRequired(_next_path_for(request))
 
     request.state.admin_username = user.username
@@ -115,11 +139,11 @@ def require_admin_session(request: Request, state: ServerState = Depends(get_ser
 
 
 # ------------------------------------------------------------------------------------------
-# Login / logout
+# Basic login / logout
 # ------------------------------------------------------------------------------------------
 @router.get("/login", response_class=HTMLResponse, response_model=None)
 def admin_login_form(
-    request: Request, state: ServerState = Depends(get_server_state), next: str = ""
+    request: Request, state: ServerState = Depends(get_server_state), next: str = "", error: str = ""
 ) -> HTMLResponse | RedirectResponse:
 
     token = request.cookies.get(COOKIE_NAME)
@@ -132,10 +156,16 @@ def admin_login_form(
 
     no_admin_yet = not state.app_ctx.users.users_admin_exists()
 
+    sso_providers = [
+        {"uuid": p.uuid, "label": p.label} for p in state.app_ctx.oidc_providers.get_usable_providers().values()
+    ]
+
     context = LoginContext(
         next=next,
         no_admin_yet=no_admin_yet,
         show_bootstrap_form=no_admin_yet and _is_loopback(request),
+        error=error,
+        sso_providers=sso_providers,
     )
 
     return templates.TemplateResponse(request, "admin/login.html", context.to_dict())
@@ -228,4 +258,70 @@ def admin_bootstrap_submit(
 def admin_logout() -> RedirectResponse:
     response = RedirectResponse("/admin/login", status_code=status.HTTP_303_SEE_OTHER)
     response.delete_cookie(COOKIE_NAME, path="/admin")
+    return response
+
+
+# ------------------------------------------------------------------------------------------
+# SSO login (OpenID Connect)
+# ------------------------------------------------------------------------------------------
+@router.get("/login/sso", response_model=None)
+async def admin_login_sso_start(
+    state: ServerState = Depends(get_server_state), provider: str = "", next: str = ""
+) -> RedirectResponse:
+    """Starts an SSO login for the OidcProvider identified by its uuid (never the issuer itself -
+    keeps the URL opaque) and redirects the browser to the identity provider."""
+    usable_by_uuid = {p.uuid: p for p in state.app_ctx.oidc_providers.get_usable_providers().values()}
+    oidc_provider = usable_by_uuid.get(provider)
+    if oidc_provider is None:
+        return RedirectResponse("/admin/login", status_code=status.HTTP_303_SEE_OTHER)
+
+    redirect_uri = f"{oidc_provider.public_base_url.rstrip('/')}/admin/login/sso/callback"
+
+    try:
+        auth_url = await start_login(state.resources, oidc_provider, redirect_uri, _safe_next(next))
+    except OidcLoginError as e:
+        return RedirectResponse(f"/admin/login?error={quote_plus(str(e))}", status_code=status.HTTP_303_SEE_OTHER)
+
+    return RedirectResponse(auth_url, status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.get("/login/sso/callback", response_model=None)
+async def admin_login_sso_callback(
+    request: Request,
+    state: ServerState = Depends(get_server_state),
+    state_token: str = Query("", alias="state"),
+    code: str = "",
+    error: str = "",
+    error_description: str = "",
+) -> RedirectResponse:
+    """Completes an SSO login started above, then issues the admin session cookie exactly like
+    POST /admin/login does for a password login. `state_token`/`code` come from the identity
+    provider's redirect - `error`/`error_description` instead if the user denied consent or the
+    provider itself failed."""
+    if error:
+        error_msg = quote_plus(error_description or error)
+        return RedirectResponse(f"/admin/login?error={error_msg}", status_code=status.HTTP_303_SEE_OTHER)
+
+    resources: ServerResources = state.resources
+
+    # redirect_uri must exactly match the one start_login() used above - built from the same
+    # provider, once it's known. When the state is unknown/expired, handle_callback() below rejects
+    # it on its own with the precise reason; an empty redirect_uri is never used for a real exchange.
+    pending = resources.oidc_peek_pending_login(state_token)
+    oidc_provider = state.app_ctx.oidc_providers.get_all_providers().get(pending.provider_issuer) if pending else None
+    redirect_uri = f"{oidc_provider.public_base_url.rstrip('/')}/admin/login/sso/callback" if oidc_provider else ""
+
+    try:
+        user, next_path = await handle_callback(
+            resources, state.app_ctx.oidc_providers, state.app_ctx.users, state_token, code, redirect_uri
+        )
+    except OidcLoginError as e:
+        return RedirectResponse(f"/admin/login?error={quote_plus(str(e))}", status_code=status.HTTP_303_SEE_OTHER)
+
+    if not user.admin:
+        error_msg = quote_plus("This account is not an administrator.")
+        return RedirectResponse(f"/admin/login?error={error_msg}", status_code=status.HTTP_303_SEE_OTHER)
+
+    response = RedirectResponse(_safe_next(next_path), status_code=status.HTTP_303_SEE_OTHER)
+    _issue_session_cookie(response, request, state, user.username)
     return response

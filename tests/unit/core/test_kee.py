@@ -216,6 +216,7 @@ def test_open_db_finds_groups(mock_pykeepass, mock_credentials):
     mock_settings_grp = Mock()
     mock_servers_grp = Mock()
     mock_users_grp = Mock()
+    mock_oidc_grp = Mock()
 
     def mock_find_groups(name, first):
         if name == "Paramètres":
@@ -224,6 +225,8 @@ def test_open_db_finds_groups(mock_pykeepass, mock_credentials):
             return mock_servers_grp
         elif name == "Utilisateurs":
             return mock_users_grp
+        elif name == "OidcProviders":
+            return mock_oidc_grp
         return None
 
     mock_pykeepass.find_groups = mock_find_groups
@@ -235,6 +238,7 @@ def test_open_db_finds_groups(mock_pykeepass, mock_credentials):
         assert kee.grp_settings == mock_settings_grp
         assert kee.grp_servers == mock_servers_grp
         assert kee.grp_users == mock_users_grp
+        assert kee.grp_oidc == mock_oidc_grp
 
 
 # ================================================================================
@@ -361,8 +365,8 @@ def test_get_group_raises_if_database_not_open(mock_pykeepass, mock_credentials)
 
 
 @pytest.mark.unit
-def test_open_db_creates_all_three_default_groups_on_a_fresh_database(mock_credentials):
-    """open_db (called from __init__) should lazily create the 3 standard groups via
+def test_open_db_creates_all_default_groups_on_a_fresh_database(mock_credentials):
+    """open_db (called from __init__) should lazily create the 4 standard groups via
     _get_group() when they don't exist yet - this is what replaces the old eager
     _create_db_set_default() group creation."""
 
@@ -375,7 +379,7 @@ def test_open_db_creates_all_three_default_groups_on_a_fresh_database(mock_crede
         Kee(password="test_password")
 
         created_names = [call.args[1] for call in mock_db.add_group.call_args_list]
-        assert created_names == ["Paramètres", "Serveurs", "Utilisateurs"]
+        assert created_names == ["Paramètres", "Serveurs", "Utilisateurs", "OidcProviders"]
 
 
 # ================================================================================

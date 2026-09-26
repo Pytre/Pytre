@@ -1,4 +1,5 @@
 argon2-cffi>=25.1.0
+authlib>=1.8
 cryptography>=46.0.3
 httpx2>=2.9.1
 keyring>=25.7.0

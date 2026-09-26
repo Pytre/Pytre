@@ -2,7 +2,7 @@
 Tests for Pytre/context.py
 
 AppContext is the app-level composition root: it lazily builds and caches
-Kee, Settings, Servers and Users on first access, guarded by a per-attribute
+Kee, Settings, Servers, Users and OidcProviders on first access, guarded by a per-attribute
 lock for thread safety.
 
 UserContext is the per-user composition root: it lazily builds and caches
@@ -33,17 +33,20 @@ def mock_app_dependencies():
         patch("Pytre_Core.context.Settings") as MockSettings,
         patch("Pytre_Core.context.Servers") as MockServers,
         patch("Pytre_Core.context.Users") as MockUsers,
+        patch("Pytre_Core.context.OidcProviders") as MockOidcProviders,
     ):
         MockKee.return_value = Mock(name="kee_instance")
         MockSettings.return_value = Mock(name="settings_instance")
         MockServers.return_value = Mock(name="servers_instance")
         MockUsers.return_value = Mock(name="users_instance")
+        MockOidcProviders.return_value = Mock(name="oidc_providers_instance")
 
         yield {
             "Kee": MockKee,
             "Settings": MockSettings,
             "Servers": MockServers,
             "Users": MockUsers,
+            "OidcProviders": MockOidcProviders,
         }
 
 
@@ -113,6 +116,30 @@ def test_users_receives_kee(mock_app_dependencies):
 
     mock_app_dependencies["Users"].assert_called_once_with(ctx.kee)
     assert users is mock_app_dependencies["Users"].return_value
+
+
+@pytest.mark.unit
+def test_oidc_providers_receives_kee(mock_app_dependencies):
+    """Regression: the property once asked _get_or_create() for "oidc" while the attribute was
+    declared as "oidcs" - the dynamic attributes created by LazyContext are invisible to static
+    checks, so only actually reading the property could catch the mismatch."""
+    ctx = AppContext()
+
+    oidc_providers = ctx.oidc_providers
+
+    mock_app_dependencies["OidcProviders"].assert_called_once_with(ctx.kee)
+    assert oidc_providers is mock_app_dependencies["OidcProviders"].return_value
+
+
+@pytest.mark.unit
+def test_oidc_providers_is_built_lazily_and_cached(mock_app_dependencies):
+    ctx = AppContext()
+
+    oidc_providers1 = ctx.oidc_providers
+    oidc_providers2 = ctx.oidc_providers
+
+    mock_app_dependencies["OidcProviders"].assert_called_once()
+    assert oidc_providers1 is oidc_providers2
 
 
 @pytest.mark.unit

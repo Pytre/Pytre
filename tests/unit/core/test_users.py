@@ -8,9 +8,9 @@ REGRESSION TESTS:
 
 import pytest
 import csv
+import json
 from datetime import datetime, timezone
-from pathlib import Path
-from unittest.mock import Mock, call, patch, MagicMock
+from unittest.mock import Mock, call, patch
 from uuid import UUID
 
 from pykeepass.entry import Entry
@@ -23,6 +23,7 @@ from Pytre_Core.users import (
     UserField,
     get_dummy_hash,
     hash_password,
+    load_oidc_link,
     verify_password,
 )
 
@@ -1011,6 +1012,29 @@ def test_auth_type_from_value_is_case_insensitive():
 
 
 @pytest.mark.unit
+def test_auth_type_oidc_is_displayed_in_capitals_and_read_back():
+    """str() feeds the webui select and the desktop client's combobox, whose text is then read
+    back through from_value() - "OIDC" (not "Oidc") must round-trip."""
+    assert str(AuthType.OIDC) == "OIDC"
+    assert AuthType.from_value(str(AuthType.OIDC)) is AuthType.OIDC
+    assert AuthType.from_value("oidc") is AuthType.OIDC
+
+
+@pytest.mark.unit
+def test_auth_type_other_types_keep_their_title_case_display():
+    assert str(AuthType.BASIC) == "Basic"
+    assert str(AuthType.NONE) == "None"
+
+
+@pytest.mark.unit
+def test_oidc_link_is_a_reserved_key_and_never_a_dynamic_custom_attribute():
+    assert UserField.OIDC_LINK.db_key in UserField.reserved_keys()
+    assert UserField.OIDC_LINK.db_key in UserField.custom_keys()
+    # in the CSV ({issuer, sub} only, see the csv_import/csv_export tests) but not EXCLUDED/REQUIRED/PASSWORD
+    assert UserField.OIDC_LINK.csv_status is _CsvStatus.OPTIONAL
+
+
+@pytest.mark.unit
 def test_auth_type_from_value_returns_none_for_unknown_value():
     assert AuthType.from_value("not_a_real_type") is None
 
@@ -1151,6 +1175,64 @@ def test_user_save_writes_password_hash_auth_type_and_changed_at(mock_kee):
     assert len(changed_at_calls) == 1
     assert user.password_changed_at is not None
     assert changed_at_calls[0].args[1] == user.password_changed_at.isoformat()
+
+
+@pytest.mark.unit
+def test_user_save_and_load_round_trip_the_oidc_link(mock_kee):
+    """User.save()/_load_from_entry() must serialize/deserialize oidc_link as JSON (a real
+    pykeepass Entry only accepts a str for a custom property), not pass the dataclass straight
+    through - and the value read back must match what was saved, byte for byte."""
+    from Pytre_Core.users import OidcLink
+
+    users = Users(mock_kee)
+    user = User(users, detect_user=False)
+    user.username = "jdoe"
+    user.oidc_link = OidcLink(issuer="https://idp.example.com", sub="sub-abc", refresh_token="rt-abc", last_verified=None)
+
+    new_entry = Mock()
+    new_entry.uuid = "new-uuid"
+    mock_kee.db.add_entry = Mock(return_value=new_entry)
+
+    user.save()
+
+    written = next(c.args[1] for c in new_entry.set_custom_property.call_args_list if c.args[0] == "oidc_link")
+    assert json.loads(written) == {
+        "issuer": "https://idp.example.com",
+        "sub": "sub-abc",
+        "refresh_token": "rt-abc",
+        "last_verified": "",
+    }
+
+    new_entry.custom_properties = ["oidc_link"]
+    new_entry.get_custom_property = Mock(return_value=written)
+    reloaded = User(users, entry=new_entry)
+
+    assert reloaded.oidc_link == user.oidc_link
+
+
+@pytest.mark.unit
+def test_user_default_oidc_link_is_none(mock_kee):
+    users = Users(mock_kee)
+    user = User(users, detect_user=False)
+
+    assert user.oidc_link is None
+
+
+@pytest.mark.unit
+def test_user_save_writes_empty_oidc_link_when_none(mock_kee):
+    """A user with no OIDC link must store an empty string, not the literal word "None" or a
+    JSON null - load_oidc_link("") already treats an empty string as "no link"."""
+    users = Users(mock_kee)
+    user = User(users, detect_user=False)
+    user.username = "jdoe"
+
+    new_entry = Mock()
+    new_entry.uuid = "new-uuid"
+    mock_kee.db.add_entry = Mock(return_value=new_entry)
+
+    user.save()
+
+    new_entry.set_custom_property.assert_any_call("oidc_link", "", protect=True)
 
 
 @pytest.mark.unit
@@ -1605,7 +1687,7 @@ def test_csv_import_keeps_existing_password_when_column_empty(tmp_path, mock_kee
 
 
 @pytest.mark.unit
-def test_csv_export_includes_auth_and_password_hash_when_requested(mock_kee, tmp_path):
+def test_csv_export_includes_password_hash_when_requested(mock_kee, tmp_path):
     entry = Mock()
     entry.username = "jdoe"
     entry.title = "John Doe"
@@ -1627,14 +1709,16 @@ def test_csv_export_includes_auth_and_password_hash_when_requested(mock_kee, tmp
     lines = output_file.read_text(encoding="utf-8-sig").splitlines()
     header = lines[0].split(";")
     row = lines[1].split(";")
-    assert header == ["Id", "Auth", "Password Hash", "Description", "Admin", "Groups", "Login Message"]
+    assert header == ["Id", "Description", "Admin", "Groups", "Login Message", "Auth", "Password Hash", "Oidc Link"]
     assert len(row) == len(header)  # regression: header/data column count used to drift apart
     assert dict(zip(header, row))["Password Hash"] == "the-hash"
     assert dict(zip(header, row))["Auth"] == "basic"
 
 
 @pytest.mark.unit
-def test_csv_export_excludes_auth_and_password_hash_by_default(mock_kee, tmp_path):
+def test_csv_export_always_includes_auth_and_oidc_link_but_excludes_password_hash_by_default(mock_kee, tmp_path):
+    """Auth and Oidc Link are _CsvStatus.OPTIONAL - always present, unlike Password Hash which is
+    _CsvStatus.PASSWORD and only ever exported when pwd_infos=True is explicitly requested."""
     entry = Mock()
     entry.username = "jdoe"
     entry.title = "John Doe"
@@ -1650,9 +1734,333 @@ def test_csv_export_excludes_auth_and_password_hash_by_default(mock_kee, tmp_pat
     users.csv_export(output_file)
 
     header = output_file.read_text(encoding="utf-8-sig").splitlines()[0]
-    assert "Auth" not in header
+    assert "Auth" in header
+    assert "Oidc Link" in header
     assert "Password Hash" not in header
     assert "the-hash" not in output_file.read_text(encoding="utf-8-sig")
+
+
+# ================================================================================
+# CSV import/export - oidc link ({issuer, sub} only, never refresh_token/last_verified)
+# ================================================================================
+
+
+@pytest.mark.unit
+def test_csv_import_writes_a_new_oidc_link(tmp_path, mock_kee):
+    new_entry = Mock()
+    new_entry.title = ""
+    new_entry.username = ""
+    new_entry.password = ""
+    new_entry.tags = []
+    new_entry.get_custom_property = Mock(return_value=None)
+    new_entry.set_custom_property = Mock()
+    mock_kee.db.add_entry = Mock(return_value=new_entry)
+
+    csv_file = tmp_path / "oidc.csv"
+    csv_file.write_text(
+        "id;description;admin;groups;login message;oidc link\n"
+        'newuser;New User;0;;;{"issuer": "https://idp.example.com", "sub": "sub-abc"}\n',
+        encoding="latin-1",
+    )
+
+    users = Users(mock_kee)
+    users.csv_import(csv_file)
+
+    oidc_calls = [c for c in new_entry.set_custom_property.call_args_list if c.args[0] == "oidc_link"]
+    assert len(oidc_calls) == 1
+    assert oidc_calls[0].kwargs.get("protect") is True
+    stored = json.loads(oidc_calls[0].args[1])
+    assert stored == {"issuer": "https://idp.example.com", "sub": "sub-abc", "refresh_token": "", "last_verified": ""}
+
+
+@pytest.mark.unit
+def test_csv_import_never_treats_the_oidc_link_column_as_a_password(tmp_path, mock_kee):
+    """Regression guard: this column was briefly routed through the same loop as PWD/PWD_HASH and
+    silently overwrote the real password with a hash of the JSON content."""
+    entry = Mock()
+    entry.username = "pwuser"
+    entry.password = "existing-hash"
+    entry.title = ""
+    entry.tags = []
+    entry.custom_properties = []
+    entry.get_custom_property = Mock(return_value="")
+    entry.set_custom_property = Mock()
+    mock_kee.grp_users.entries = [entry]
+
+    csv_file = tmp_path / "oidc.csv"
+    csv_file.write_text(
+        'id;description;admin;groups;login message;oidc link\n'
+        'pwuser;;0;;;{"issuer": "https://idp.example.com", "sub": "sub-abc"}\n',
+        encoding="latin-1",
+    )
+
+    users = Users(mock_kee)
+    users.csv_import(csv_file)
+
+    assert entry.password == "existing-hash"
+
+
+@pytest.mark.unit
+def test_csv_import_does_not_rewrite_an_unchanged_oidc_link(tmp_path, mock_kee):
+    """csv_import() only writes the oidc link back when something actually changed - submitting
+    the same issuer+sub must not touch refresh_token/last_verified at all."""
+    existing = json.dumps(
+        {
+            "issuer": "https://idp.example.com",
+            "sub": "sub-abc",
+            "refresh_token": "rt-keep",
+            "last_verified": "2026-01-01T00:00:00+00:00",
+        }
+    )
+    entry = Mock()
+    entry.username = "existinguser"
+    entry.password = ""
+    entry.title = ""
+    entry.tags = []
+    entry.custom_properties = []
+    entry.get_custom_property = Mock(side_effect=lambda name: existing if name == "oidc_link" else "")
+    entry.set_custom_property = Mock()
+    mock_kee.grp_users.entries = [entry]
+
+    csv_file = tmp_path / "oidc.csv"
+    csv_file.write_text(
+        "id;description;admin;groups;login message;oidc link\n"
+        'existinguser;;0;;;{"issuer": "https://idp.example.com", "sub": "sub-abc"}\n',
+        encoding="latin-1",
+    )
+
+    users = Users(mock_kee)
+    users.csv_import(csv_file)
+
+    assert "oidc_link" not in [c.args[0] for c in entry.set_custom_property.call_args_list]
+
+
+@pytest.mark.unit
+def test_csv_import_resets_refresh_token_when_the_sub_changes(tmp_path, mock_kee):
+    existing = json.dumps(
+        {
+            "issuer": "https://idp.example.com",
+            "sub": "sub-old",
+            "refresh_token": "rt-stale",
+            "last_verified": "2026-01-01T00:00:00+00:00",
+        }
+    )
+    entry = Mock()
+    entry.username = "existinguser"
+    entry.password = ""
+    entry.title = ""
+    entry.tags = []
+    entry.custom_properties = []
+    entry.get_custom_property = Mock(side_effect=lambda name: existing if name == "oidc_link" else "")
+    entry.set_custom_property = Mock()
+    mock_kee.grp_users.entries = [entry]
+
+    csv_file = tmp_path / "oidc.csv"
+    csv_file.write_text(
+        "id;description;admin;groups;login message;oidc link\n"
+        'existinguser;;0;;;{"issuer": "https://idp.example.com", "sub": "sub-new"}\n',
+        encoding="latin-1",
+    )
+
+    users = Users(mock_kee)
+    users.csv_import(csv_file)
+
+    written = next(c.args[1] for c in entry.set_custom_property.call_args_list if c.args[0] == "oidc_link")
+    stored = json.loads(written)
+    assert stored["issuer"] == "https://idp.example.com"
+    assert stored["sub"] == "sub-new"
+    assert stored["refresh_token"] == ""
+    assert stored["last_verified"] == ""
+
+
+@pytest.mark.unit
+def test_csv_import_resets_refresh_token_when_the_issuer_changes(tmp_path, mock_kee):
+    """A different issuer with the same sub is still treated as a brand new link - a sub recycled
+    by a different IdP must never inherit the old link's refresh_token."""
+    existing = json.dumps(
+        {
+            "issuer": "https://old-idp.example.com",
+            "sub": "sub-abc",
+            "refresh_token": "rt-stale",
+            "last_verified": "2026-01-01T00:00:00+00:00",
+        }
+    )
+    entry = Mock()
+    entry.username = "existinguser"
+    entry.password = ""
+    entry.title = ""
+    entry.tags = []
+    entry.custom_properties = []
+    entry.get_custom_property = Mock(side_effect=lambda name: existing if name == "oidc_link" else "")
+    entry.set_custom_property = Mock()
+    mock_kee.grp_users.entries = [entry]
+
+    csv_file = tmp_path / "oidc.csv"
+    csv_file.write_text(
+        "id;description;admin;groups;login message;oidc link\n"
+        'existinguser;;0;;;{"issuer": "https://new-idp.example.com", "sub": "sub-abc"}\n',
+        encoding="latin-1",
+    )
+
+    users = Users(mock_kee)
+    users.csv_import(csv_file)
+
+    written = next(c.args[1] for c in entry.set_custom_property.call_args_list if c.args[0] == "oidc_link")
+    stored = json.loads(written)
+    assert stored == {"issuer": "https://new-idp.example.com", "sub": "sub-abc", "refresh_token": "", "last_verified": ""}
+
+
+@pytest.mark.unit
+def test_csv_import_ignores_a_blank_sub_for_an_already_linked_issuer(tmp_path, mock_kee):
+    """Regression guard: an explicit "" sub for the already-linked issuer must be a no-op - not an
+    accidental unlink, and not a wipe of refresh_token/last_verified."""
+    existing = json.dumps(
+        {
+            "issuer": "https://idp.example.com",
+            "sub": "sub-real",
+            "refresh_token": "rt-real",
+            "last_verified": "2026-01-01T00:00:00+00:00",
+        }
+    )
+    entry = Mock()
+    entry.username = "existinguser"
+    entry.password = ""
+    entry.title = ""
+    entry.tags = []
+    entry.custom_properties = []
+    entry.get_custom_property = Mock(side_effect=lambda name: existing if name == "oidc_link" else "")
+    entry.set_custom_property = Mock()
+    mock_kee.grp_users.entries = [entry]
+
+    csv_file = tmp_path / "oidc.csv"
+    csv_file.write_text(
+        'id;description;admin;groups;login message;oidc link\n'
+        'existinguser;;0;;;{"issuer": "https://idp.example.com", "sub": ""}\n',
+        encoding="latin-1",
+    )
+
+    users = Users(mock_kee)
+    users.csv_import(csv_file)
+
+    assert "oidc_link" not in [c.args[0] for c in entry.set_custom_property.call_args_list]
+
+
+@pytest.mark.unit
+def test_csv_import_without_the_oidc_link_column_leaves_existing_link_untouched(tmp_path, mock_kee):
+    existing = json.dumps(
+        {"issuer": "https://idp.example.com", "sub": "sub-abc", "refresh_token": "rt-keep", "last_verified": ""}
+    )
+    entry = Mock()
+    entry.username = "existinguser"
+    entry.password = ""
+    entry.title = ""
+    entry.tags = []
+    entry.custom_properties = []
+    entry.get_custom_property = Mock(side_effect=lambda name: existing if name == "oidc_link" else "")
+    entry.set_custom_property = Mock()
+    mock_kee.grp_users.entries = [entry]
+
+    csv_file = tmp_path / "no_oidc.csv"
+    csv_file.write_text("id;description;admin;groups;login message\nexistinguser;;0;;\n", encoding="latin-1")
+
+    users = Users(mock_kee)
+    users.csv_import(csv_file)
+
+    assert "oidc_link" not in [c.args[0] for c in entry.set_custom_property.call_args_list]
+
+
+@pytest.mark.unit
+def test_csv_import_ignores_a_blank_oidc_link_cell(tmp_path, mock_kee):
+    """A blank cell (as opposed to the column being entirely absent from the row) must also
+    preserve any existing link, same as the password column's own blank-means-preserve rule."""
+    existing = json.dumps(
+        {"issuer": "https://idp.example.com", "sub": "sub-abc", "refresh_token": "rt-keep", "last_verified": ""}
+    )
+    entry = Mock()
+    entry.username = "existinguser"
+    entry.password = ""
+    entry.title = ""
+    entry.tags = []
+    entry.custom_properties = []
+    entry.get_custom_property = Mock(side_effect=lambda name: existing if name == "oidc_link" else "")
+    entry.set_custom_property = Mock()
+    mock_kee.grp_users.entries = [entry]
+
+    csv_file = tmp_path / "blank_oidc.csv"
+    csv_file.write_text("id;description;admin;groups;login message;oidc link\nexistinguser;;0;;;\n", encoding="latin-1")
+
+    users = Users(mock_kee)
+    users.csv_import(csv_file)
+
+    assert "oidc_link" not in [c.args[0] for c in entry.set_custom_property.call_args_list]
+
+
+@pytest.mark.unit
+def test_csv_export_never_includes_the_refresh_token(mock_kee, tmp_path):
+    stored = json.dumps(
+        {
+            "issuer": "https://idp.example.com",
+            "sub": "sub-abc",
+            "refresh_token": "super-secret-rt",
+            "last_verified": "2026-01-01T00:00:00+00:00",
+        }
+    )
+    entry = Mock()
+    entry.username = "jdoe"
+    entry.title = "John Doe"
+    entry.password = "the-hash"
+    entry.tags = []
+    entry.custom_properties = []
+    entry.get_custom_property = Mock(side_effect=lambda name: stored if name == "oidc_link" else "")
+    mock_kee.grp_users.entries = [entry]
+
+    users = Users(mock_kee)
+    output_file = tmp_path / "export.csv"
+    users.csv_export(output_file)
+
+    content = output_file.read_text(encoding="utf-8-sig")
+    assert "super-secret-rt" not in content
+
+    rows = list(csv.reader(content.splitlines(), delimiter=";", quotechar='"'))
+    header, row = rows[0], rows[1]
+    exported_link = dict(zip(header, row))["Oidc Link"]
+    assert json.loads(exported_link) == {"issuer": "https://idp.example.com", "sub": "sub-abc"}
+
+
+@pytest.mark.unit
+def test_csv_export_oidc_link_is_blank_when_there_is_none(mock_kee, tmp_path):
+    entry = Mock()
+    entry.username = "jdoe"
+    entry.title = "John Doe"
+    entry.password = ""
+    entry.tags = []
+    entry.custom_properties = []
+    entry.get_custom_property = Mock(return_value="")
+    mock_kee.grp_users.entries = [entry]
+
+    users = Users(mock_kee)
+    output_file = tmp_path / "export.csv"
+    users.csv_export(output_file)
+
+    rows = list(csv.reader(output_file.read_text(encoding="utf-8-sig").splitlines(), delimiter=";", quotechar='"'))
+    header, row = rows[0], rows[1]
+    assert dict(zip(header, row))["Oidc Link"] == ""
+
+
+@pytest.mark.unit
+def test_load_oidc_link_ignores_a_non_dict_json_value():
+    """Regression guard: a malformed "oidc link" cell (e.g. a JSON array) must not crash the
+    whole import/export - just yield no link for that entry."""
+    assert load_oidc_link("[1, 2, 3]") is None
+    assert load_oidc_link("not json") is None
+    assert load_oidc_link("") is None
+
+
+@pytest.mark.unit
+def test_load_oidc_link_ignores_a_link_with_no_issuer():
+    """A stored/CSV value with a sub but no issuer isn't a usable link - the dedicated issuer
+    guard in load_oidc_link() must treat it as None, not a half-valid OidcLink."""
+    assert load_oidc_link(json.dumps({"sub": "sub-abc"})) is None
 
 
 # ================================================================================
@@ -1671,8 +2079,13 @@ def test_user_field_label_title_cases_multi_word_columns():
 def test_user_field_csv_status_splits_standard_from_auth_password_columns():
     """Regression: csv_status is an _CsvStatus member (always truthy), so `if c.csv_status` /
     `if not c.csv_status` are vacuous checks that don't actually discriminate anything - must
-    compare against a specific status instead."""
+    compare against a specific status instead.
+
+    AUTH_TYPE/OIDC_LINK are _CsvStatus.OPTIONAL (self-contained columns with their own
+    dedicated parsing block, always included) - only PWD/PWD_HASH are _CsvStatus.PASSWORD (the
+    only two fields meant to flow through csv_import()'s raw password-hashing loop)."""
     required = {c for c in UserField if c.csv_status is _CsvStatus.REQUIRED}
+    password = {c for c in UserField if c.csv_status is _CsvStatus.PASSWORD}
     optional = {c for c in UserField if c.csv_status is _CsvStatus.OPTIONAL}
 
     assert required == {
@@ -1682,7 +2095,8 @@ def test_user_field_csv_status_splits_standard_from_auth_password_columns():
         UserField.GROUPS,
         UserField.LOGIN_MSG,
     }
-    assert optional == {UserField.AUTH_TYPE, UserField.PWD, UserField.PWD_HASH}
+    assert password == {UserField.PWD, UserField.PWD_HASH}
+    assert optional == {UserField.AUTH_TYPE, UserField.OIDC_LINK}
 
 
 @pytest.mark.unit
@@ -1691,7 +2105,7 @@ def test_user_field_pwd_changed_at_is_excluded_but_a_known_custom_key():
     must still be recognized as a predefined KeePass custom property, not a dynamic one."""
     assert UserField.PWD_CHANGED_AT.csv_status is _CsvStatus.EXCLUDED
     assert UserField.PWD_CHANGED_AT not in {c for c in UserField if c.csv_status is _CsvStatus.REQUIRED}
-    assert UserField.PWD_CHANGED_AT not in {c for c in UserField if c.csv_status is _CsvStatus.OPTIONAL}
+    assert UserField.PWD_CHANGED_AT not in {c for c in UserField if c.csv_status is _CsvStatus.PASSWORD}
     assert UserField.PWD_CHANGED_AT.db_key in UserField.custom_keys()
 
 

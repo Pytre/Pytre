@@ -20,9 +20,10 @@ def test_admin_home_returns_ok(admin_client):
     response = admin_client.get("/admin")
 
     assert response.status_code == 200
-    assert "Users management" in response.text
-    assert "Servers management" in response.text
-    assert "Queries management" in response.text
+    assert "Users" in response.text
+    assert "Servers" in response.text
+    assert "Queries" in response.text
+    assert "SSO providers" in response.text
     assert "General settings" in response.text
     assert '<img src="/admin/static/logo.png"' in response.text
 

@@ -275,7 +275,7 @@ class Servers:
 
     def find_entry_by_uuid(self, uuid: str) -> Entry | None:
         if self.kee.db is None:
-            raise RuntimeError("Database not opened, can't find user by uuid")
+            raise RuntimeError("Database not opened, can't find server entry by uuid")
         if self.kee_grp is None:
             raise ValueError("No KeePass group selected, cannot find server entry by uuid")
 
@@ -388,6 +388,9 @@ class Server:
     def save(self, save_db: bool = True) -> bool:
         """Updates the server's entry in memory. If `save_db` is False then save_db() is not called -
         the caller is responsible for persisting the change."""
+
+        if self.servers.kee_grp is None:
+            raise ValueError("No KeePass group selected, cannot save server")
 
         if not self.id or self.id == "":
             raise ValueError("Server must have an id")

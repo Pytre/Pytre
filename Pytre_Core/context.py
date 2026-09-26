@@ -1,17 +1,14 @@
 from collections.abc import Callable
 from threading import Lock
-from typing import TypeVar
 
 from Pytre_Core.kee import Kee
 from Pytre_Core.settings import Settings
 from Pytre_Core.servers import Servers
+from Pytre_Core.oidc_providers import OidcProviders
 from Pytre_Core.users import Users, User
-from Pytre_Core.user_prefs import UserPrefs, PrefsEnum
+from Pytre_Core.user_prefs import UserPrefs
 from Pytre_Core.logs_user import UserLogs
 from Pytre_Core.remotes import Remotes
-
-
-T = TypeVar("T")
 
 
 class LazyContext:
@@ -22,7 +19,7 @@ class LazyContext:
             setattr(self, f"_{attr}", None)
             self._locks[attr] = Lock()
 
-    def _get_or_create(self, name: str, factory: Callable[[], T]) -> T:
+    def _get_or_create[T](self, name: str, factory: Callable[[], T]) -> T:
         value = getattr(self, f"_{name}")
 
         if value is None:
@@ -39,7 +36,7 @@ class AppContext(LazyContext):
     def __init__(self, master_key: str = ""):
         """`master_key` is the key to access keepass database"""
 
-        attributes = ("kee", "settings", "servers", "users")
+        attributes = ("kee", "settings", "servers", "users", "oidc_providers")
         super().__init__(attributes=attributes)
 
         self._master_key = master_key
@@ -59,6 +56,10 @@ class AppContext(LazyContext):
     @property
     def users(self) -> Users:
         return self._get_or_create("users", lambda: Users(self.kee))
+
+    @property
+    def oidc_providers(self) -> OidcProviders:
+        return self._get_or_create("oidc_providers", lambda: OidcProviders(self.kee))
 
 
 class UserContext(LazyContext):

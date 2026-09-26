@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-import logging
-import secrets
-import os
-import getpass
-
 import csv
 import io
+import getpass
+import json
+import logging
+import os
+import secrets
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
 from uuid import UUID
@@ -29,8 +30,38 @@ def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__)
     _log(msg, level=level, sublogger=sublogger)
 
 
+@dataclass
+class OidcLink:
+    issuer: str
+    sub: str
+    refresh_token: str = ""
+    last_verified: datetime | None = None
+
+    def to_dict(self, for_export: bool = False) -> dict[str, str]:
+        """Only include issuer and sub if `for_export` is True"""
+        if for_export:
+            return {"issuer": self.issuer, "sub": self.sub}
+
+        return {
+            "issuer": self.issuer,
+            "sub": self.sub,
+            "refresh_token": self.refresh_token,
+            "last_verified": self.last_verified.isoformat() if self.last_verified else "",
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, str]) -> OidcLink:
+        return OidcLink(
+            issuer=data.get("issuer", ""),
+            sub=data.get("sub", ""),
+            refresh_token=data.get("refresh_token", ""),
+            last_verified=datetime.fromisoformat(d) if (d := data.get("last_verified")) else None,
+        )
+
+
 class _CsvStatus(Enum):
     REQUIRED = "required"
+    PASSWORD = "password"
     OPTIONAL = "optional"
     EXCLUDED = "excluded"
 
@@ -54,9 +85,10 @@ class UserField(Enum):
     LOGIN_MSG = (_CsvStatus.REQUIRED, "login message", _DbKind.CUSTOM, "msg_login")
 
     AUTH_TYPE = (_CsvStatus.OPTIONAL, "auth", _DbKind.CUSTOM, "auth_type")
-    PWD = (_CsvStatus.OPTIONAL, "password", _DbKind.NATIVE, "password")
-    PWD_HASH = (_CsvStatus.OPTIONAL, "password hash", _DbKind.NATIVE, "password")
+    OIDC_LINK = (_CsvStatus.OPTIONAL, "oidc link", _DbKind.CUSTOM, "oidc_link")
 
+    PWD = (_CsvStatus.PASSWORD, "password", _DbKind.NATIVE, "password")
+    PWD_HASH = (_CsvStatus.PASSWORD, "password hash", _DbKind.NATIVE, "password")
     PWD_CHANGED_AT = (_CsvStatus.EXCLUDED, "", _DbKind.CUSTOM, "password_changed_at")  # set via password_hash setter
 
     def __init__(self, csv_status: _CsvStatus, csv_header: str, db_kind: _DbKind, db_key: str):
@@ -118,7 +150,7 @@ class Users:
 
         return admin_exists
 
-    def get_all_users(self, reload: bool = True) -> list:
+    def get_all_users(self, reload: bool = True) -> list[User]:
         if self.kee_grp is None:
             raise ValueError("No KeePass group selected, cannot get all users")
 
@@ -295,7 +327,7 @@ class Users:
 
         # define expected columns
         cols_std = [c.csv_header for c in UserField if c.csv_status is _CsvStatus.REQUIRED]
-        cols_pwd = [c for c in UserField if c.csv_status is _CsvStatus.OPTIONAL]
+        cols_pwd = [c for c in UserField if c.csv_status is _CsvStatus.PASSWORD]
         cols_cust = {col: col.lower() for col in self.get_cust_attribs_list()}
         cols_required = cols_std + list(cols_cust.values())
 
@@ -344,20 +376,39 @@ class Users:
                 else:
                     u_entry.set_custom_property(UserField.ADMIN.db_key, "false")
 
-                csv_col = UserField.LOGIN_MSG
-                u_entry.set_custom_property(csv_col.db_key, row[csv_col.csv_header].strip())
+                login_msg_field = UserField.LOGIN_MSG
+                u_entry.set_custom_property(login_msg_field.db_key, row[login_msg_field.csv_header].strip())
+
+                # update optional infos
+                auth_field = UserField.AUTH_TYPE
+                if auth_field.csv_header in row:
+                    value = row[auth_field.csv_header].strip()
+                    auth_type = AuthType.from_value(value)
+                    if auth_type is None:
+                        log(f"Row {row_num} ignored : '{value}' is not a valid auth type", logging.WARNING)
+                        continue
+                    u_entry.set_custom_property(auth_field.db_key, auth_type.value)
+
+                oidc_field = UserField.OIDC_LINK
+                if oidc_field.csv_header in row:
+                    saved_link = load_oidc_link(u_entry.get_custom_property(oidc_field.db_key) or "")
+                    loaded_link = load_oidc_link(row[oidc_field.csv_header].strip() or "")
+
+                    new_link: dict | str = ""
+                    if not loaded_link:
+                        new_link = ""
+                    elif not saved_link or loaded_link.issuer != saved_link.issuer:
+                        new_link = OidcLink(loaded_link.issuer, loaded_link.sub).to_dict()
+                    elif loaded_link.sub != "" and loaded_link.sub != saved_link.sub:
+                        new_link = OidcLink(loaded_link.issuer, loaded_link.sub).to_dict()
+
+                    if new_link:
+                        u_entry.set_custom_property(oidc_field.db_key, json.dumps(new_link), protect=True)
 
                 # update password related infos
                 for col in cols_pwd_in_csv:
                     value = row[col.csv_header].strip()
-
-                    if col is UserField.AUTH_TYPE:
-                        auth_type = AuthType.from_value(value)
-                        if auth_type is None:
-                            log(f"Row {row_num} ignored : '{value}' is not a valid auth type", logging.WARNING)
-                            continue
-                        u_entry.set_custom_property(col.db_key, auth_type.value)
-                    elif not value == "":  # avoid overwriting password for an existing user when no value
+                    if not value == "":  # avoid overwriting password for an existing user when no value
                         u_entry.password = value if col is UserField.PWD_HASH else hash_password(value)
 
                 # update groups using csv.reader to parse imported string
@@ -395,12 +446,13 @@ class Users:
 
         # Determine which attr to saves
         attr_std = [c for c in UserField if c.csv_status is _CsvStatus.REQUIRED]
-        attr_pwd = [UserField.AUTH_TYPE, UserField.PWD_HASH]
+        attr_optional = [c for c in UserField if c.csv_status is _CsvStatus.OPTIONAL]
         attr_cust = self.get_cust_attribs_list()
 
-        attr_to_export = attr_std + attr_cust
         if pwd_infos:
-            attr_to_export[1:1] = attr_pwd
+            attr_optional[1:1] = [UserField.PWD_HASH]
+
+        attr_to_export = attr_std + attr_optional + attr_cust
 
         # Create and add header row to rows
         header = [attr.label if isinstance(attr, UserField) else attr for attr in attr_to_export]
@@ -433,6 +485,9 @@ class Users:
                 elif isinstance(attr, UserField) and attr.db_kind is _DbKind.NATIVE:
                     assert attr.db_key is not None
                     value = getattr(u_entry, attr.db_key) or ""
+                elif attr is UserField.OIDC_LINK:
+                    link = load_oidc_link(u_entry.get_custom_property(attr.db_key) or "")
+                    value = json.dumps(link.to_dict(for_export=True)) if link else ""
                 elif isinstance(attr, UserField):  # db_kind == "custom"
                     value = u_entry.get_custom_property(attr.db_key)
                 else:
@@ -472,15 +527,28 @@ class Users:
         entry = self.kee.db.find_entries(uuid=UUID(uuid), first=True)
         return User(self, entry=entry) if entry and isinstance(entry, Entry) else None
 
+    def find_user_by_oidc_link(self, issuer: str, sub: str) -> User | None:
+        if self.kee_grp is None:
+            raise ValueError("No KeePass group selected, cannot find user from oidc link")
+
+        db_key = UserField.OIDC_LINK.db_key
+        for entry in self.kee_grp.entries:
+            link = load_oidc_link(entry.get_custom_property(db_key) or "")
+            if link is not None and link.issuer == issuer and link.sub == sub:
+                return User(self, entry=entry)
+
+        return None
+
 
 class AuthType(Enum):
     """Authentication types to identify how to interpret User.password_hash."""
 
     NONE = "none"
     BASIC = "basic"
+    OIDC = "oidc"
 
     def __str__(self):
-        return self.value.title()
+        return "OIDC" if self is AuthType.OIDC else self.value.title()
 
     @classmethod
     def from_value(cls, value: str) -> AuthType | None:
@@ -499,6 +567,8 @@ class User:
         self._pwd_hash: str = ""
         self._pwd_changed_at: datetime | None = None
         self.auth_type: AuthType = AuthType.NONE
+        self.oidc_link: OidcLink | None = None
+
         self.exists: bool = False
         self.is_authorized: bool = False
 
@@ -609,6 +679,8 @@ class User:
                     self._pwd_changed_at = datetime.fromisoformat(value) if value else None
                 except ValueError:
                     self._pwd_changed_at = None
+            elif property == UserField.OIDC_LINK.db_key:
+                self.oidc_link = load_oidc_link(value)
             elif property == UserField.LOGIN_MSG.db_key:
                 self.msg_login = value
             else:
@@ -660,11 +732,13 @@ class User:
 
         admin_val = "true" if self.admin else "false"
         pwd_changed_at_val = self._pwd_changed_at.isoformat() if self._pwd_changed_at else ""
+        oidc_link = json.dumps(self.oidc_link.to_dict()) if self.oidc_link else ""
 
         u_entry.set_custom_property(UserField.ADMIN.db_key, admin_val)
         u_entry.set_custom_property(UserField.LOGIN_MSG.db_key, self.msg_login)
         u_entry.set_custom_property(UserField.AUTH_TYPE.db_key, self.auth_type.value)
         u_entry.set_custom_property(UserField.PWD_CHANGED_AT.db_key, pwd_changed_at_val)
+        u_entry.set_custom_property(UserField.OIDC_LINK.db_key, oidc_link, protect=True)
 
         for attr, val in self.attribs_cust.items():
             u_entry.set_custom_property(attr, val)
@@ -738,6 +812,30 @@ def verify_password(password: str, password_hash: str) -> bool:
         return _HASHER.verify(hash_to_use, password)
     except (VerifyMismatchError, InvalidHash):
         return False
+
+
+def load_oidc_link(json_dumps: str) -> OidcLink | None:
+    """Load an OidcLink dict from a json.dumps()."""
+
+    if json_dumps.strip() == "":
+        return
+
+    try:
+        json_loads = json.loads(json_dumps.strip())
+    except ValueError:
+        return
+
+    if not isinstance(json_loads, dict):
+        return
+
+    try:
+        oidc_link = OidcLink.from_dict(json_loads)
+    except (ValueError, AttributeError, TypeError):
+        err_msg = f"OIDC link load error from '{json_loads}'"
+        log(err_msg, logging.WARNING)
+        return
+
+    return oidc_link if oidc_link.issuer else None
 
 
 if __name__ == "__main__":

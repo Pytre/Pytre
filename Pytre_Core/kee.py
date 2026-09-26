@@ -20,6 +20,7 @@ class KeeGroup(Enum):
     SETTINGS = "Paramètres"
     SERVERS = "Serveurs"
     USERS = "Utilisateurs"
+    OIDC = "OidcProviders"
 
 
 def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__) -> None:
@@ -41,6 +42,7 @@ class Kee:
         self.grp_settings: Group | None = None
         self.grp_servers: Group | None = None
         self.grp_users: Group | None = None
+        self.grp_oidc: Group | None = None
 
         if not self.password:
             self.password = self.pwd_get()
@@ -72,6 +74,7 @@ class Kee:
         self.grp_settings = self._get_group(KeeGroup.SETTINGS.value)
         self.grp_servers = self._get_group(KeeGroup.SERVERS.value)
         self.grp_users = self._get_group(KeeGroup.USERS.value)
+        self.grp_oidc = self._get_group(KeeGroup.OIDC.value)
 
     def save_db(self):
         if self.db is None:

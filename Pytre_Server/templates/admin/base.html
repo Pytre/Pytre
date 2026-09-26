@@ -416,6 +416,10 @@
             margin-top: 36px; /* label + input's usual combined height, for a harmonious gap */
         }
         .login-form .form-actions button { width: 50%; padding-top: 12px; padding-bottom: 12px; }
+        .sso-divider { display: flex; align-items: center; gap: 10px; margin: 18px 0; color: var(--text-muted); font-size: 13px; }
+        .sso-divider::before, .sso-divider::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+        .sso-providers { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+        .sso-providers a.btn { width: 50%; padding-top: 12px; padding-bottom: 12px; text-align: center; margin-top: 0; }
         .form-actions { display: flex; align-items: center; gap: 8px; margin-top: 18px; }
         .form-actions button { margin-top: 0; min-width: 90px; text-align: center; }
         .error { color: var(--error-text); font-size: 13px; margin-top: 12px; }
@@ -485,8 +489,8 @@
             padding: 12px 16px;
         }
         .pytre-confirm-actions button { margin-top: 0; min-width: 90px; text-align: center; }
-        button.secondary { background: var(--btn-secondary-bg); color: var(--btn-secondary-text); }
-        button.secondary:hover { background: var(--btn-secondary-hover-bg); }
+        button.secondary, a.btn.secondary { background: var(--btn-secondary-bg); color: var(--btn-secondary-text); }
+        button.secondary:hover, a.btn.secondary:hover { background: var(--btn-secondary-hover-bg); }
 
         .pytre-modal-overlay {
             position: fixed;
@@ -539,11 +543,12 @@
                 </span>
             </a>
             <div class="sidebar-version">Version {{ app_version }}</div>
-            <a class="nav-link{% if request.url.path.startswith('/admin/queries') %} active{% endif %}" href="/admin/queries">Queries management</a>
-            <a class="nav-link{% if request.url.path.startswith('/admin/users') %} active{% endif %}" href="/admin/users">Users management</a>
-            <a class="nav-link{% if request.url.path.startswith('/admin/servers') %} active{% endif %}" href="/admin/servers">Servers management</a>
+            <a class="nav-link{% if request.url.path.startswith('/admin/queries') %} active{% endif %}" href="/admin/queries">Queries</a>
+            <a class="nav-link{% if request.url.path.startswith('/admin/users') %} active{% endif %}" href="/admin/users">Users</a>
+            <a class="nav-link{% if request.url.path.startswith('/admin/servers') %} active{% endif %}" href="/admin/servers">Servers</a>
+            <a class="nav-link{% if request.url.path.startswith('/admin/sso') %} active{% endif %}" href="/admin/sso">SSO providers</a>
             <a class="nav-link{% if request.url.path.startswith('/admin/settings') %} active{% endif %}" href="/admin/settings">General settings</a>
-            <a class="nav-link{% if request.url.path.startswith('/admin/master-key') %} active{% endif %}" href="/admin/master-key">Master key management</a>
+            <a class="nav-link{% if request.url.path.startswith('/admin/master-key') %} active{% endif %}" href="/admin/master-key">Master key</a>
             {% if request.state.admin_username is defined and request.state.admin_username != "local" %}
             <div class="sidebar-logout">
                 <button type="submit" form="admin-logout-form" class="sidebar-logout-text" title="Connected as {{ request.state.admin_username }}">Log out</button>

@@ -1,0 +1,110 @@
+{% extends "admin/base.html" %}
+{% block title %}{% if provider.uuid %}Edit SSO provider{% else %}New SSO provider{% endif %} — Pytre Server{% endblock %}
+{% block main_class %}main-flush{% endblock %}
+{% block content %}
+<div class="center-page">
+    <div class="form-panel wide" id="modal-root">
+        {% if error %}<p class="error form-error">{{ error }}</p>{% endif %}
+
+        <form
+            method="post"
+            id="sso-form"
+            action="{% if provider.uuid %}/admin/sso/{{ provider.uuid }}/edit{% else %}/admin/sso/new{% endif %}"
+            onsubmit="return pytreConfirmSubmit(event, '{% if provider.uuid %}Save changes to this provider?{% else %}Create this new provider?{% endif %}')"
+        >
+            <div class="form-col" style="flex: 4;">
+                <label for="label">Label</label>
+                <input type="text" id="label" name="label" value="{{ provider.raw_label }}" placeholder="{{ provider.label }}">
+            </div>
+            <div class="form-col" style="flex: 0 0 140px;">
+                <label for="enabled"></label>
+                <label class="checkbox-item">
+                    <input type="checkbox" id="enabled" name="enabled" value="1" {% if provider.enabled %}checked{% endif %} style="margin-top: 4px;">
+                    <span id="enabled-state-text">{{ "enabled" if provider.enabled else "disabled" }}</span>
+                </label>
+            </div>
+
+            <label for="issuer">Issuer</label>
+            <input type="text" id="issuer" name="issuer" value="{{ provider.issuer }}" required placeholder="https://idp.example.com">
+
+            <div class="form-row">
+                <div class="form-col">
+                    <label for="client_id">Client id</label>
+                    <input type="text" id="client_id" name="client_id" value="{{ provider.client_id }}" required>
+                </div>
+                <div class="form-col">
+                    <label for="client_secret">
+                        {% if provider.uuid %}Client secret (leave blank to keep the current one){% else %}Client secret{% endif %}
+                    </label>
+                    <div class="password-field">
+                        <input type="password" id="client_secret" name="client_secret" autocomplete="new-password">
+                        <button type="button" class="password-toggle" onclick="togglePasswordField(this)" title="Show/hide password">
+                            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="form-row">
+                <div class="form-col">
+                    <label for="scopes">Scopes</label>
+                    <input type="text" id="scopes" name="scopes" value="{{ provider.scopes }}">
+                </div>
+                <div class="form-col">
+                    <label for="username_claim">Username claim</label>
+                    <input type="text" id="username_claim" name="username_claim" value="{{ provider.username_claim }}">
+                </div>
+            </div>
+
+            <label for="public_base_url">Public base URL</label>
+            <input type="text" id="public_base_url" name="public_base_url" value="{{ provider.public_base_url }}" placeholder="https://pytre.example.com">
+
+            <label>Redirect URI to register with this identity provider</label>
+            <div class="field-static" id="redirect-uri-display"></div>
+        </form>
+
+        {% if provider.uuid %}
+        <form
+            method="post"
+            id="delete-form"
+            action="/admin/sso/{{ provider.uuid }}/delete"
+            onsubmit="return pytreConfirmSubmit(event, 'Delete SSO provider {{ provider.label }}?')"
+        ></form>
+        {% endif %}
+
+        <div class="form-actions">
+            <button type="submit" form="sso-form">Save</button>
+            {% if provider.uuid %}
+            <button type="submit" form="delete-form" class="danger">Delete</button>
+            {% endif %}
+            <button type="button" class="secondary" onclick="cancelFormDialog('/admin/sso')">Cancel</button>
+        </div>
+
+        <script>
+        (function () {
+            var enabledCheckbox = document.getElementById("enabled");
+            var enabledStateText = document.getElementById("enabled-state-text");
+            enabledCheckbox.addEventListener("change", function () {
+                enabledStateText.textContent = enabledCheckbox.checked ? "enabled" : "disabled";
+            });
+
+            var publicBaseUrlInput = document.getElementById("public_base_url");
+            var redirectUriDisplay = document.getElementById("redirect-uri-display");
+            function updateRedirectUri() {
+                var base = publicBaseUrlInput.value.replace(/\/+$/, "");
+                redirectUriDisplay.textContent = base ? base + "/admin/login/sso/callback" : "(fill in the public base URL above)";
+            }
+            publicBaseUrlInput.addEventListener("input", updateRedirectUri);
+            updateRedirectUri();
+
+            var ssoForm = document.getElementById("sso-form");
+            ssoForm.addEventListener("keydown", function (e) {
+                if (e.key === "Enter" && e.target.tagName !== "TEXTAREA") {
+                    e.preventDefault();
+                }
+            });
+        })();
+        </script>
+    </div>
+</div>
+{% endblock %}

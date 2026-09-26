@@ -160,7 +160,14 @@ def test_create_user_without_admin_checkbox_is_not_admin(isolated_admin_client):
 def test_edit_user_unchecking_admin_demotes_them(isolated_admin_client):
     isolated_admin_client.post(
         "/admin/users/new",
-        data={"username": "demote_me", "title": "", "admin": "1", "msg_login": "", "auth_type": "none", "password": ""},
+        data={
+            "username": "demote_me",
+            "title": "",
+            "admin": "1",
+            "msg_login": "",
+            "auth_type": "none",
+            "password": "",
+        },
         follow_redirects=False,
     )
     uuid = _find_uuid(isolated_admin_client.get("/admin/users").text, "demote_me")
@@ -243,7 +250,9 @@ def test_edit_user_new_password_is_hashed_and_verifiable(isolated_admin_client):
 
 
 def test_edit_unknown_uuid_redirects_to_list_with_error(isolated_admin_client):
-    response = isolated_admin_client.get("/admin/users/00000000-0000-0000-0000-000000000000/edit", follow_redirects=False)
+    response = isolated_admin_client.get(
+        "/admin/users/00000000-0000-0000-0000-000000000000/edit", follow_redirects=False
+    )
     assert response.status_code == 303
     assert response.headers["location"] == "/admin/users?error=User+not+found"
 
@@ -284,7 +293,9 @@ def test_bulk_delete_removes_all_selected(isolated_admin_client):
     uuid_a = _find_uuid(list_page.text, "bulk_a")
     uuid_b = _find_uuid(list_page.text, "bulk_b")
 
-    response = isolated_admin_client.post("/admin/users/delete", data={"uuids": [uuid_a, uuid_b]}, follow_redirects=False)
+    response = isolated_admin_client.post(
+        "/admin/users/delete", data={"uuids": [uuid_a, uuid_b]}, follow_redirects=False
+    )
     assert response.status_code == 303
     assert response.headers["location"] == "/admin/users?msg=2+user(s)+deleted"
 
@@ -366,3 +377,308 @@ def test_reload_users_route_explicitly_requests_a_reload_from_disk(isolated_admi
     isolated_admin_client.post("/admin/users/reload")
 
     assert True in calls
+
+
+# --- OIDC link (_apply_oidc_link(), SSO link provider picker in user_form.html) ---
+
+
+def _new_provider_data(issuer: str, **overrides) -> dict:
+    data = {
+        "label": "",
+        "issuer": issuer,
+        "client_id": "pytre-client",
+        "client_secret": "s3cret",
+        "scopes": "openid",
+        "username_claim": "preferred_username",
+        "public_base_url": "https://pytre.example.com",
+        "enabled": "1",
+    }
+    data.update(overrides)
+    return data
+
+
+def _create_provider(client, issuer: str, **overrides) -> str:
+    """Creates an OIDC provider via /admin/sso/new and returns its uuid."""
+    client.post("/admin/sso/new", data=_new_provider_data(issuer, **overrides), follow_redirects=False)
+    list_page = client.get("/admin/sso")
+    for row in list_page.text.split("<tr>"):
+        if f">{issuer}<" in row:
+            match = re.search(r"/admin/sso/([0-9a-f-]+)/edit", row)
+            assert match is not None
+            return match.group(1)
+    raise AssertionError(f"{issuer} not found in sso list page")
+
+
+def _create_user(client, username: str) -> str:
+    """Creates a blank user via /admin/users/new and returns its uuid."""
+    client.post(
+        "/admin/users/new",
+        data={"username": username, "title": "", "msg_login": "", "auth_type": "none", "password": ""},
+        follow_redirects=False,
+    )
+    list_page = client.get("/admin/users")
+    return _find_uuid(list_page.text, username)
+
+
+def _edit_user_data(username: str, **overrides) -> dict:
+    data = {"username": username, "title": "", "msg_login": "", "auth_type": "none", "password": ""}
+    data.update(overrides)
+    return data
+
+
+def test_edit_user_oidc_link_creates_a_fresh_unverified_link(isolated_admin_client):
+    issuer = "https://idp-new-link.example.com"
+    _create_provider(isolated_admin_client, issuer)
+    user_uuid = _create_user(isolated_admin_client, "sso_link_user")
+
+    isolated_admin_client.post(
+        f"/admin/users/{user_uuid}/edit",
+        data=_edit_user_data("sso_link_user", oidc_issuer=issuer, oidc_sub="sub-123"),
+        follow_redirects=False,
+    )
+
+    from Pytre_Core.context import AppContext
+
+    user = AppContext(master_key="password").users.find_user_by_uuid(user_uuid)
+    assert user is not None
+    link = user.oidc_link
+    assert link is not None
+    assert link.issuer == issuer
+    assert link.sub == "sub-123"
+    assert link.refresh_token == ""
+    assert link.last_verified is None
+
+
+def test_edit_user_oidc_link_unchanged_preserves_refresh_token_and_last_verified(isolated_admin_client):
+    """The admin form never submits refresh_token/last_verified (never displayed, see the
+    no-leak test below) - re-submitting the same issuer+sub must not silently wipe them."""
+    from datetime import datetime, timezone
+
+    from Pytre_Core.context import AppContext
+    from Pytre_Core.users import OidcLink
+
+    issuer = "https://idp-preserve.example.com"
+    _create_provider(isolated_admin_client, issuer)
+    user_uuid = _create_user(isolated_admin_client, "sso_preserve_user")
+
+    user = AppContext(master_key="password").users.find_user_by_uuid(user_uuid)
+    assert user is not None
+    verified_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    user.oidc_link = OidcLink(issuer=issuer, sub="sub-abc", refresh_token="rt-abc", last_verified=verified_at)
+    user.save()
+    # the app's own Users/Kee.db was opened earlier and doesn't see this out-of-band write on its
+    # own (see the Kee.db reload gotcha in the plan) - force it to resync from disk before editing.
+    isolated_admin_client.post("/admin/users/reload")
+
+    isolated_admin_client.post(
+        f"/admin/users/{user_uuid}/edit",
+        data=_edit_user_data("sso_preserve_user", oidc_issuer=issuer, oidc_sub="sub-abc"),  # unchanged
+        follow_redirects=False,
+    )
+
+    reloaded = AppContext(master_key="password").users.find_user_by_uuid(user_uuid)
+    assert reloaded is not None
+    link = reloaded.oidc_link
+    assert link is not None
+    assert link.sub == "sub-abc"
+    assert link.refresh_token == "rt-abc"
+    assert link.last_verified == verified_at
+
+
+def test_edit_user_oidc_sub_changed_resets_refresh_token_and_last_verified(isolated_admin_client):
+    """A hand-typed sub has no real refresh_token behind it - a changed/new sub must not keep
+    whatever secret was captured for the previous one."""
+    from datetime import datetime, timezone
+
+    from Pytre_Core.context import AppContext
+    from Pytre_Core.users import OidcLink
+
+    issuer = "https://idp-reset.example.com"
+    _create_provider(isolated_admin_client, issuer)
+    user_uuid = _create_user(isolated_admin_client, "sso_reset_user")
+
+    user = AppContext(master_key="password").users.find_user_by_uuid(user_uuid)
+    assert user is not None
+    user.oidc_link = OidcLink(
+        issuer=issuer, sub="old-sub", refresh_token="rt-old", last_verified=datetime(2026, 1, 1, tzinfo=timezone.utc)
+    )
+    user.save()
+    isolated_admin_client.post("/admin/users/reload")
+
+    isolated_admin_client.post(
+        f"/admin/users/{user_uuid}/edit",
+        data=_edit_user_data("sso_reset_user", oidc_issuer=issuer, oidc_sub="new-sub"),
+        follow_redirects=False,
+    )
+
+    reloaded = AppContext(master_key="password").users.find_user_by_uuid(user_uuid)
+    assert reloaded is not None
+    link = reloaded.oidc_link
+    assert link is not None
+    assert link.sub == "new-sub"
+    assert link.refresh_token == ""
+    assert link.last_verified is None
+
+
+def test_edit_user_oidc_link_changed_provider_resets_refresh_token(isolated_admin_client):
+    """Switching the selected provider (even keeping the same sub) must also drop the old
+    secrets - a sub recycled by a different IdP must never inherit the previous link's
+    refresh_token."""
+    from datetime import datetime, timezone
+
+    from Pytre_Core.context import AppContext
+    from Pytre_Core.users import OidcLink
+
+    old_issuer = "https://idp-old.example.com"
+    new_issuer = "https://idp-new.example.com"
+    _create_provider(isolated_admin_client, old_issuer)
+    _create_provider(isolated_admin_client, new_issuer)
+    user_uuid = _create_user(isolated_admin_client, "sso_switch_user")
+
+    user = AppContext(master_key="password").users.find_user_by_uuid(user_uuid)
+    assert user is not None
+    user.oidc_link = OidcLink(
+        issuer=old_issuer, sub="sub-abc", refresh_token="rt-old", last_verified=datetime(2026, 1, 1, tzinfo=timezone.utc)
+    )
+    user.save()
+    isolated_admin_client.post("/admin/users/reload")
+
+    isolated_admin_client.post(
+        f"/admin/users/{user_uuid}/edit",
+        data=_edit_user_data("sso_switch_user", oidc_issuer=new_issuer, oidc_sub="sub-abc"),
+        follow_redirects=False,
+    )
+
+    reloaded = AppContext(master_key="password").users.find_user_by_uuid(user_uuid)
+    assert reloaded is not None
+    link = reloaded.oidc_link
+    assert link is not None
+    assert link.issuer == new_issuer
+    assert link.sub == "sub-abc"
+    assert link.refresh_token == ""
+    assert link.last_verified is None
+
+
+def test_edit_user_oidc_sub_blank_removes_the_link(isolated_admin_client):
+    from Pytre_Core.context import AppContext
+    from Pytre_Core.users import OidcLink
+
+    issuer = "https://idp-remove.example.com"
+    _create_provider(isolated_admin_client, issuer)
+    user_uuid = _create_user(isolated_admin_client, "sso_remove_user")
+
+    user = AppContext(master_key="password").users.find_user_by_uuid(user_uuid)
+    assert user is not None
+    user.oidc_link = OidcLink(issuer=issuer, sub="to-be-removed")
+    user.save()
+    isolated_admin_client.post("/admin/users/reload")
+
+    isolated_admin_client.post(
+        f"/admin/users/{user_uuid}/edit",
+        data=_edit_user_data("sso_remove_user", oidc_issuer=issuer, oidc_sub=""),
+        follow_redirects=False,
+    )
+
+    reloaded = AppContext(master_key="password").users.find_user_by_uuid(user_uuid)
+    assert reloaded is not None
+    assert reloaded.oidc_link is None
+
+
+def test_edit_user_blank_provider_also_removes_the_link(isolated_admin_client):
+    """The provider <select> has a blank option - picking it (leaving the sub as-is) must be
+    treated the same as a fully blank form: no link, not a half-saved sub with no issuer."""
+    from Pytre_Core.context import AppContext
+    from Pytre_Core.users import OidcLink
+
+    issuer = "https://idp-blank-provider.example.com"
+    _create_provider(isolated_admin_client, issuer)
+    user_uuid = _create_user(isolated_admin_client, "sso_blank_provider_user")
+
+    user = AppContext(master_key="password").users.find_user_by_uuid(user_uuid)
+    assert user is not None
+    user.oidc_link = OidcLink(issuer=issuer, sub="to-be-removed")
+    user.save()
+    isolated_admin_client.post("/admin/users/reload")
+
+    isolated_admin_client.post(
+        f"/admin/users/{user_uuid}/edit",
+        data=_edit_user_data("sso_blank_provider_user", oidc_issuer="", oidc_sub="to-be-removed"),
+        follow_redirects=False,
+    )
+
+    reloaded = AppContext(master_key="password").users.find_user_by_uuid(user_uuid)
+    assert reloaded is not None
+    assert reloaded.oidc_link is None
+
+
+def test_edit_user_omitted_oidc_fields_also_remove_the_link(isolated_admin_client):
+    """If oidc_issuer/oidc_sub are absent from the submission entirely, the server must treat
+    that the same as a blank value, not as "leave it alone"."""
+    from Pytre_Core.context import AppContext
+    from Pytre_Core.users import OidcLink
+
+    issuer = "https://idp-omit.example.com"
+    _create_provider(isolated_admin_client, issuer)
+    user_uuid = _create_user(isolated_admin_client, "sso_omit_user")
+
+    user = AppContext(master_key="password").users.find_user_by_uuid(user_uuid)
+    assert user is not None
+    user.oidc_link = OidcLink(issuer=issuer, sub="to-be-removed")
+    user.save()
+    isolated_admin_client.post("/admin/users/reload")
+
+    isolated_admin_client.post(
+        f"/admin/users/{user_uuid}/edit",
+        data=_edit_user_data("sso_omit_user"),  # no oidc_issuer/oidc_sub keys at all
+        follow_redirects=False,
+    )
+
+    reloaded = AppContext(master_key="password").users.find_user_by_uuid(user_uuid)
+    assert reloaded is not None
+    assert reloaded.oidc_link is None
+
+
+def test_edit_user_oidc_link_renders_in_the_form_without_leaking_the_refresh_token(isolated_admin_client):
+    from datetime import datetime, timezone
+
+    from Pytre_Core.context import AppContext
+    from Pytre_Core.users import OidcLink
+
+    issuer = "https://idp-display.example.com"
+    _create_provider(isolated_admin_client, issuer, label="Display IdP")
+    user_uuid = _create_user(isolated_admin_client, "sso_display_user")
+
+    user = AppContext(master_key="password").users.find_user_by_uuid(user_uuid)
+    assert user is not None
+    user.oidc_link = OidcLink(
+        issuer=issuer, sub="displayed-sub", refresh_token="super-secret-rt",
+        last_verified=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+    user.save()
+    isolated_admin_client.post("/admin/users/reload")
+
+    edit_page = isolated_admin_client.get(f"/admin/users/{user_uuid}/edit").text
+    assert "Display IdP" in edit_page
+    assert f'value="{issuer}" selected' in edit_page
+    assert 'value="displayed-sub"' in edit_page
+    assert "super-secret-rt" not in edit_page
+
+
+def test_edit_user_oidc_link_shows_the_issuer_even_if_its_provider_was_deleted(isolated_admin_client):
+    """A link whose issuer no longer matches any configured provider must still be visible (and
+    its sub still editable) rather than silently disappearing from the dropdown."""
+    from Pytre_Core.context import AppContext
+    from Pytre_Core.users import OidcLink
+
+    _create_provider(isolated_admin_client, "https://still-configured.example.com")
+    user_uuid = _create_user(isolated_admin_client, "sso_orphan_user")
+
+    user = AppContext(master_key="password").users.find_user_by_uuid(user_uuid)
+    assert user is not None
+    user.oidc_link = OidcLink(issuer="https://deleted-idp.example.com", sub="orphan-sub")
+    user.save()
+    isolated_admin_client.post("/admin/users/reload")
+
+    edit_page = isolated_admin_client.get(f"/admin/users/{user_uuid}/edit").text
+    assert "https://deleted-idp.example.com" in edit_page
+    assert 'value="orphan-sub"' in edit_page

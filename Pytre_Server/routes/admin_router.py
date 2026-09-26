@@ -9,6 +9,7 @@ from Pytre_Server.routes.admin_master_key import router as admin_master_key_rout
 from Pytre_Server.routes.admin_queries import router as admin_queries_router
 from Pytre_Server.routes.admin_servers import router as admin_servers_router
 from Pytre_Server.routes.admin_settings import router as admin_settings_router
+from Pytre_Server.routes.admin_sso import router as admin_sso_router
 from Pytre_Server.routes.admin_users import router as admin_users_router
 
 
@@ -20,6 +21,7 @@ protected_router.include_router(admin_master_key_router)
 protected_router.include_router(admin_queries_router)
 protected_router.include_router(admin_servers_router)
 protected_router.include_router(admin_settings_router)
+protected_router.include_router(admin_sso_router)
 protected_router.include_router(admin_users_router)
 
 # create admin router and attach admin_auth_router and protected router

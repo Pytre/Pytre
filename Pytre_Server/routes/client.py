@@ -18,8 +18,10 @@ from Pytre_Core.sql_query.query import Query
 from Pytre_Core.sql_query.query_drivers_async import AsyncSqlConnectionError, AsyncSqlExecutionError, AsyncSqlResult
 
 from Pytre_Server.auth_token import create_token, decode_token, TokenType
+from Pytre_Server.oidc import OidcReverifyError, verify_still_active
 from Pytre_Server.result_streaming import stream_result_and_release
 from Pytre_Server.server_state import ServerResources, ServerState, get_server_state
+from Pytre_Server.routes.client_sso import router as client_sso_router
 
 
 def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__) -> None:
@@ -27,6 +29,7 @@ def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__)
 
 
 router = APIRouter()
+router.include_router(client_sso_router)
 
 
 class ExecuteRequest(BaseModel):
@@ -36,6 +39,10 @@ class ExecuteRequest(BaseModel):
     query_id: str
     template_hash: str  # to check for staleness
     parameters: dict[str, str] = Field(default_factory=dict)
+
+
+class AuthMethodsResponse(BaseModel):
+    sso_enabled: bool
 
 
 class LoginRequest(BaseModel):
@@ -54,6 +61,7 @@ class RefreshRequest(BaseModel):
 
 class RefreshResponse(BaseModel):
     access_token: str
+    refresh_token: str | None = None
 
 
 class ChangePasswordRequest(BaseModel):
@@ -89,7 +97,15 @@ def username_from_token(token: str, token_type: TokenType, state: ServerState) -
     issued_at = datetime.fromtimestamp(payload["iat"], tz=timezone.utc)
 
     user = UserContext(state.app_ctx.users, username=username).current_user
-    if not user.exists or (user.password_changed_at is not None and issued_at < user.password_changed_at):
+
+    if (
+        not user.exists
+        or user.auth_type is AuthType.NONE
+        or (user.password_changed_at is not None and issued_at < user.password_changed_at)
+    ):
+        if not user.exists or user.auth_type is AuthType.NONE:
+            reason = "unknown user" if not user.exists else "disabled user"
+            log(f"Rejected {token_type.name.lower()} token for '{username}': {reason}", logging.INFO)
         http_error = status.HTTP_401_UNAUTHORIZED
         raise HTTPException(status_code=http_error, detail=f"Invalid or expired {token_type.name.lower()} token")
 
@@ -115,6 +131,15 @@ async def health():
     """Return the health status of the server.
     Allows clients to do a quick check to confirm server is running."""
     return {"status": "ok"}
+
+
+@router.get("/auth-methods")
+async def auth_methods(state: ServerState = Depends(get_server_state)) -> AuthMethodsResponse:
+    """Lets the client know whether a single usable OIDC provider is configured, so its remote
+    config UI can offer SSO as a login method - no provider identification needed, the client
+    never picks one (see /login/sso/start)."""
+    usable = state.app_ctx.oidc_providers.get_usable_providers()
+    return AuthMethodsResponse(sso_enabled=len(usable) == 1)
 
 
 @router.post("/login")
@@ -144,14 +169,33 @@ async def login(request: LoginRequest, state: ServerState = Depends(get_server_s
     )
 
 
-@router.post("/refresh")
+@router.post("/refresh", response_model_exclude_none=True)
 async def refresh(request: RefreshRequest, state: ServerState = Depends(get_server_state)) -> RefreshResponse:
-    """Authenticate with a refresh token and return a token usable as a Bearer token on other routes."""
+    """Authenticate with a refresh token and return a token usable as a Bearer token on other routes.
+    For an OIDC user, this also periodically re-confirms with the IdP that the account is still active
+    (throttled) before minting a new access token  - and, when that check just ran and succeeded, rolls
+    the refresh token itself forward too. A continuously-active OIDC account never has to go through an
+    interactive browser login again."""
 
     username = username_from_token(request.refresh_token, TokenType.REFRESH, state)
 
+    user = UserContext(state.app_ctx.users, username=username).current_user
+    verified = False
+    if user.auth_type is AuthType.OIDC:
+        try:
+            verified = await verify_still_active(state.resources, state.app_ctx.oidc_providers, user)
+        except OidcReverifyError as e:
+            log(f"Rejected refresh token for '{username}': {e}", logging.INFO)
+            http_error = status.HTTP_401_UNAUTHORIZED
+            raise HTTPException(status_code=http_error, detail="Invalid or expired refresh token") from e
+
+    refresh_token = None
+    if verified:
+        refresh_token = create_token(username, state.app_ctx.settings.jwt_secret, TokenType.REFRESH)
+
     return RefreshResponse(
         access_token=create_token(username, state.app_ctx.settings.jwt_secret, TokenType.ACCESS),
+        refresh_token=refresh_token,
     )
 
 

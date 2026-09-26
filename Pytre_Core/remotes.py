@@ -16,6 +16,7 @@ import httpx2
 
 from Pytre_Core.keyring import KeyringCatalog
 from Pytre_Core.user_prefs import CONFIG_FOLDER
+from Pytre_Core.users import AuthType
 from Pytre_Core.utils import detect_encoding, log as _log
 
 
@@ -112,6 +113,13 @@ class RemoteHTTPStatusError(RemoteError):
 
 class RemoteAuthError(RemoteHTTPStatusError):
     """Raised on a failed login because of invalid credentials."""
+
+
+class RemoteSsoRequiredError(RemoteAuthError):
+    """Raised when a remote's auth_method is AuthType.OIDC and no refresh token is available/still
+    valid - the caller must trigger an interactive browser login (Pytre_Client.sso_login), Remote.login()
+    has no way to do this itself. Subclasses RemoteAuthError (not RemoteError directly) so existing
+    isinstance(last_error, RemoteAuthError) checks in Pytre_Client keep treating it as an auth problem."""
 
 
 class Remotes:
@@ -358,11 +366,24 @@ class Remote:
                 body = {"refresh_token": self.address.refresh_token}
                 response = httpx2.post(url=url_route, json=body, timeout=_REQUEST_TIMEOUT)
                 response.raise_for_status()
-                self.address.access_token = response.json()["access_token"]
+                data = response.json()
+                self.address.access_token = data["access_token"]
+                # an OIDC account whose was just reconfirmed active gets a new longer-lived refresh token
+                if (refresh_token := data.get("refresh_token")) is not None:
+                    self.address.refresh_token = refresh_token
+                    if self.remotes is not None:
+                        self.save(reload=False)
                 return True
             except (httpx2.RequestError, httpx2.HTTPStatusError) as e:
                 log(f"Failed to retrieve an acces token for {self.id} : {e}", logging.DEBUG)
                 self.address.access_token = ""
+
+        # an SSO remote has no password to fall back on - an interactive browser login is required
+        if self.address.auth_method is AuthType.OIDC:
+            msg = f"SSO session expired for {self.id}, interactive login required"
+            log(msg, logging.INFO)
+            self.last_error = RemoteSsoRequiredError(msg)
+            raise self.last_error
 
         # if retrieving access token failed then renew refresh token
         try:
@@ -372,6 +393,8 @@ class Remote:
             response.raise_for_status()
             self.address.refresh_token = response.json()["refresh_token"]
             self.address.access_token = response.json()["access_token"]
+            if self.remotes is not None:
+                self.save(reload=False)
         except httpx2.HTTPStatusError as e:
             detail = detail_from_response(e.response, str(e))
             err_msg = f"Login failed for {self.id} - check username/password : {detail}"
@@ -436,14 +459,16 @@ class Remote:
 
         return self.servers
 
-    def save(self) -> bool:
-        """Save remote to preferences. If a `previous_id` exists then it will allow overwriting."""
+    def save(self, reload: bool = True) -> bool:
+        """Save remote to preferences. If a `previous_id` exists then it will allow overwriting.
+        Set `reload` to False to skips re-reading `remotes_dict` from disk - safe only when
+        url/port/username aren't changing (e.g. to persist a new refresh token)."""
         if self.remotes is None:
             err_msg = f"Can't save remote without a remotes collection set"
             log(err_msg, logging.ERROR)
             raise RuntimeError(err_msg)
 
-        self.remotes.get_all_remotes(reload=True)
+        self.remotes.get_all_remotes(reload=reload)
 
         # controls
         if any((r for uuid, r in self.remotes.remotes_dict.items() if r.id == self.id and uuid != self.uuid)):
@@ -489,6 +514,7 @@ class RemoteAddress:
         url: str,
         port: int,
         username: str,
+        auth_method: AuthType = AuthType.BASIC,
         password: str = "",
         uuid: str = "",
         description: str = "",
@@ -499,6 +525,7 @@ class RemoteAddress:
         self.url: str = url
         self.port: int = port
         self.username: str = username
+        self.auth_method: AuthType = auth_method
         self.password: str = password
         self.description: str = description
         self.refresh_token: str = refresh_token
@@ -555,6 +582,16 @@ class RemoteAddress:
 
         return datetime.now(timezone.utc) < exp - min_remaining
 
+    def align_username(self) -> None:
+        """If access_token contains a sub (SSO mode) then use it to align username."""
+        try:
+            claims = jwt.decode(self.access_token, options={"verify_signature": False})
+        except jwt.InvalidTokenError:
+            return
+
+        if (sub := claims.get("sub")) and sub != self.username:
+            self.username = sub
+
     def build_url(self, route: str = "") -> str:
         """Builds the URL to access a Remote. Returns the base URL if `route` is empty."""
         return f"{self.url}:{self.port}{route}"
@@ -565,6 +602,7 @@ class RemoteAddress:
             "url": self.url,
             "port": self.port,
             "username": self.username,
+            "auth_method": self.auth_method.value,
             "encrypted_pwd": REMOTES_CIPHER.encrypt(self.password),
             "description": self.description,
             "allow_unsecure_channel": self.allow_unsecure_channel,
@@ -594,6 +632,7 @@ class RemoteAddress:
             "url": None,
             "port": None,
             "username": None,
+            "auth_method": None,
             "password": pwd_key,
             "description": None,
             "allow_unsecure_channel": None,
@@ -609,9 +648,13 @@ class RemoteAddress:
                 msg = f"{key} is required to create a RemoteAddress"
                 log(msg, logging.ERROR)
                 raise ValueError(msg)
-            # and convert None val for optional attributes
+            # special conversion for optional attributes
+            elif key == "auth_method":
+                auth_type = AuthType.from_value(str(val)) if val else None
+                val = auth_type if auth_type is not None and auth_type is not AuthType.NONE else AuthType.BASIC
             elif key == "allow_unsecure_channel":
                 val = str(val).lower() == "true" if val else False
+            # convert None val for other optional attributes
             else:
                 val = val if val else ""
 
@@ -622,15 +665,15 @@ class RemoteAddress:
                 log(msg, logging.ERROR)
                 raise ValueError(msg)
             elif key == "port":
-                msg = ""
-                if not str(val).isdigit():
-                    msg = f"port must be an integer to create a RemoteAddress, got {val}"
-                elif str(val) == "0":
-                    msg = f"port can't be 0 to create a RemoteAddress"
-                if msg:
+                val = str(val)
+                if val.isdigit() and val != "0":
+                    val = int(val)
+                else:
+                    msg_not_an_int = f"port must be an integer to create a RemoteAddress, got {val}"
+                    msg_port_0 = f"port can't be 0 to create a RemoteAddress"
+                    msg = msg_port_0 if val == "0" else msg_not_an_int
                     log(msg, logging.ERROR)
                     raise ValueError(msg)
-                val = int(val or 0)  # or 0 to pass type checking
             elif key == "password":
                 if pwd_key is not None:
                     val = REMOTES_CIPHER.decrypt(str(val))

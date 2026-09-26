@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 import jwt
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from Pytre_Core.context import UserContext
 from Pytre_Core.logs_central import ExecutionLogEntry
@@ -35,7 +35,7 @@ class ExecuteRequest(BaseModel):
     server_id: str
     query_id: str
     template_hash: str  # to check for staleness
-    parameters: dict[str, str] = {}
+    parameters: dict[str, str] = Field(default_factory=dict)
 
 
 class LoginRequest(BaseModel):

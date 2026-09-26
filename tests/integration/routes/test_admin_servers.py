@@ -52,8 +52,7 @@ def test_create_server_succeeds_and_appears_in_list(isolated_admin_client):
             "server": "",
             "login_timeout": "60",
             "timeout": "300",
-            "groups": ["sales"],
-            "new_groups": "it, ops",
+            "groups": ["sales", "it", "ops"],
         },
         follow_redirects=False,
     )
@@ -132,14 +131,18 @@ def test_create_server_trust_certificate_checkbox_round_trips(isolated_admin_cli
     assert "checked" not in checkbox.group(0)
 
 
-def test_create_server_blank_id_returns_422(isolated_admin_client):
-    """A submitted-but-empty required Form(...) field is treated as missing by FastAPI before
-    the route handler runs - the browser's `required` attribute is the real guard in normal use."""
+def test_create_server_blank_id_reports_error(isolated_admin_client):
+    """ServerForm accepts an empty string (a required Form(...) parameter would have been treated as
+    missing and answered with a 422), so the request reaches Server.save() and its own blank-id
+    check - the form is re-rendered with that message."""
     response = isolated_admin_client.post(
         "/admin/servers/new",
         data={"id": "", "description": "", "login": "", "password": "", "type": "SQL Server", "login_timeout": "60", "timeout": "300"},
     )
-    assert response.status_code == 422
+    assert response.status_code == 200
+    match = re.search(r'<p class="error form-error">(.*?)</p>', response.text)
+    assert match is not None
+    assert "must have an id" in match.group(1)
 
 
 def test_create_server_duplicate_id_reports_error(isolated_admin_client):

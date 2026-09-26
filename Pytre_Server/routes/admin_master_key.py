@@ -41,7 +41,7 @@ def master_key_set_form(request: Request, error: str | None = None) -> HTMLRespo
     return templates.TemplateResponse(request, "admin/master_key_set_form.html", {"error": error})
 
 
-@router.post("/reveal", response_model=None)
+@router.post("/reveal")
 def master_key_reveal() -> dict[str, str | None]:
     return {"value": get_master_key()}
 

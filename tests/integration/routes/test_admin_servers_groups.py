@@ -56,14 +56,12 @@ def test_groups_add_applies_existing_and_new_groups_to_multiple_servers(isolated
 
     # "existing" group must actually exist first - the seeded test DB has none by default
     isolated_admin_client.post(
-        "/admin/servers/groups/add",
-        data={"uuids": [uuid_a], "groups": [], "new_groups": "sales"},
-        follow_redirects=False,
+        "/admin/servers/groups/add", data={"uuids": [uuid_a], "groups": ["sales"]}, follow_redirects=False
     )
 
     response = isolated_admin_client.post(
         "/admin/servers/groups/add",
-        data={"uuids": [uuid_a, uuid_b], "groups": ["sales"], "new_groups": "brand_new_group"},
+        data={"uuids": [uuid_a, uuid_b], "groups": ["sales", "brand_new_group"]},
         follow_redirects=False,
     )
     assert response.status_code == 303
@@ -79,9 +77,7 @@ def test_groups_add_applies_existing_and_new_groups_to_multiple_servers(isolated
 
 def test_groups_add_without_any_group_reshows_form_with_error(isolated_admin_client):
     uuid = _create_server(isolated_admin_client, "grp_none")
-    response = isolated_admin_client.post(
-        "/admin/servers/groups/add", data={"uuids": [uuid], "groups": [], "new_groups": ""}
-    )
+    response = isolated_admin_client.post("/admin/servers/groups/add", data={"uuids": [uuid], "groups": []})
     assert response.status_code == 200
     assert "No group selected" in response.text
 
@@ -91,7 +87,7 @@ def test_groups_remove_removes_group_from_selected_servers(isolated_admin_client
     uuid_b = _create_server(isolated_admin_client, "rmgrp_b")
     isolated_admin_client.post(
         "/admin/servers/groups/add",
-        data={"uuids": [uuid_a, uuid_b], "groups": [], "new_groups": "temp_group"},
+        data={"uuids": [uuid_a, uuid_b], "groups": ["temp_group"]},
         follow_redirects=False,
     )
 

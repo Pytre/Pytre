@@ -77,7 +77,7 @@ def queries_list(
     return templates.TemplateResponse(request, "admin/queries_list.html", context)
 
 
-@router.post("/reload", response_class=RedirectResponse, response_model=None)
+@router.post("/reload", response_class=RedirectResponse)
 def queries_reload(request: Request, state: ServerState = Depends(get_server_state)) -> RedirectResponse:
     """Rebuilds the query catalog and swaps app.state.server for a new ServerState reusing the
     same resources (drivers, ignore_hash_until...) - never mutated in place, so a request already

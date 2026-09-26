@@ -8,9 +8,11 @@ import asyncio
 import os
 import tempfile
 from pathlib import Path
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile, status
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
 
 from Pytre_Core.users import AuthType, User, UserField, hash_password
@@ -21,9 +23,30 @@ from Pytre_Server.templating import templates
 router = APIRouter(prefix="/users")
 
 
-def _split_new_groups(new_groups: str) -> list[str]:
-    """Parses the free-text "add new group(s)" field - comma-separated, blanks dropped."""
-    return [g.strip() for g in new_groups.split(",") if g.strip()]
+class UserForm(BaseModel):
+    username: str
+    title: str = ""
+    admin: bool = False
+    msg_login: str = ""
+    auth_type: str
+    password: str = ""
+    groups: list[str] = Field(default_factory=list)
+
+    async def apply_to(self, user: User, attribs_cust: dict[str, str]) -> None:
+        """Copies the submitted values onto `user`.
+        Async because if a password is submitted it needs to be hashed (Argon2, deliberately slow) in a
+        worker thread, so the event loop stays free. `attribs_cust` are the custom attributes, read by
+        the caller from the raw form since their names are only known at runtime - they are merged into
+        the user's, the others are kept."""
+        user.username = self.username.strip()
+        user.title = self.title.strip()
+        user.admin = self.admin
+        user.msg_login = self.msg_login.strip()
+        user.auth_type = AuthType.from_value(self.auth_type) or AuthType.NONE
+        if self.password:
+            user.password_hash = await asyncio.to_thread(hash_password, self.password)
+        user.groups = self.groups
+        user.attribs_cust.update(attribs_cust)
 
 
 def _form_context(state: ServerState, user: User) -> dict:
@@ -62,7 +85,7 @@ def users_list(
     return templates.TemplateResponse(request, "admin/users_list.html", context)
 
 
-@router.post("/reload", response_class=RedirectResponse, response_model=None)
+@router.post("/reload", response_class=RedirectResponse)
 def users_reload() -> RedirectResponse:
     return RedirectResponse(url="/admin/users?msg=Users+reloaded", status_code=status.HTTP_303_SEE_OTHER)
 
@@ -79,25 +102,18 @@ def user_new_form(request: Request, state: ServerState = Depends(get_server_stat
 @router.post("/new", response_class=HTMLResponse, response_model=None)
 async def user_new_submit(
     request: Request,
+    user_form: Annotated[UserForm, Form()],
     state: ServerState = Depends(get_server_state),
-    username: str = Form(...),
-    title: str = Form(""),
-    admin: str | None = Form(None),
-    msg_login: str = Form(""),
-    auth_type: str = Form(...),
-    password: str = Form(""),
-    groups: list[str] = Form(default_factory=list),
-    new_groups: str = Form(""),
 ) -> HTMLResponse | RedirectResponse:
     user = User(state.app_ctx.users, detect_user=False)
-    return await _save_user(
-        request, state, user, username, title, admin, msg_login, auth_type, password, groups, new_groups
-    )
+    return await _save_user(request, state, user, user_form)
 
 
 @router.get("/{uuid}/edit", response_class=HTMLResponse, response_model=None)
 def user_edit_form(
-    uuid: str, request: Request, state: ServerState = Depends(get_server_state)
+    uuid: str,
+    request: Request,
+    state: ServerState = Depends(get_server_state),
 ) -> HTMLResponse | RedirectResponse:
     user = state.app_ctx.users.find_user_by_uuid(uuid)
     if user is None:
@@ -109,54 +125,32 @@ def user_edit_form(
 async def user_edit_submit(
     uuid: str,
     request: Request,
+    user_form: Annotated[UserForm, Form()],
     state: ServerState = Depends(get_server_state),
-    username: str = Form(...),
-    title: str = Form(""),
-    admin: str | None = Form(None),
-    msg_login: str = Form(""),
-    auth_type: str = Form(...),
-    password: str = Form(""),
-    groups: list[str] = Form(default_factory=list),
-    new_groups: str = Form(""),
 ) -> HTMLResponse | RedirectResponse:
     user = state.app_ctx.users.find_user_by_uuid(uuid)
     if user is None:
         return RedirectResponse(url="/admin/users?error=User+not+found", status_code=status.HTTP_303_SEE_OTHER)
-    return await _save_user(
-        request, state, user, username, title, admin, msg_login, auth_type, password, groups, new_groups
-    )
+    return await _save_user(request, state, user, user_form)
 
 
 async def _save_user(
     request: Request,
     state: ServerState,
     user: User,
-    username: str,
-    title: str,
-    admin: str | None,
-    msg_login: str,
-    auth_type: str,
-    password: str,
-    groups: list[str],
-    new_groups: str,
+    user_form: UserForm,
 ) -> HTMLResponse | RedirectResponse:
     """Applies submitted form values onto `user` and saves it. Shared by create and edit -
     `user` is either a blank new User or one just loaded via find_user_by_uuid()."""
-    user.username = username.strip()
-    user.title = title.strip()
-    user.admin = admin is not None
-    user.msg_login = msg_login.strip()
-    user.auth_type = AuthType.from_value(auth_type) or AuthType.NONE
-    if password:
-        user.password_hash = await asyncio.to_thread(hash_password, password)
-
-    user.groups = list(groups) + _split_new_groups(new_groups)
-
     # dynamic custom-attribute fields aren't declared as individual Form(...) params since the
     # set of names is only known at runtime - read directly from the raw form data instead
     form_data = await request.form()
-    for name in state.app_ctx.users.get_cust_attribs_list():
-        user.attribs_cust[name] = str(form_data.get(f"attrib__{name}", "")).strip()
+    attribs_cust = {
+        name: str(form_data.get(f"attrib__{name}", "")).strip() for name in state.app_ctx.users.get_cust_attribs_list()
+    }
+
+    # update user with form submitted values
+    await user_form.apply_to(user, attribs_cust)
 
     try:
         await asyncio.to_thread(user.save)
@@ -187,7 +181,8 @@ def user_delete(uuid: str, state: ServerState = Depends(get_server_state)) -> Re
 
 @router.post("/delete")
 def users_delete_bulk(
-    uuids: list[str] = Form(default_factory=list), state: ServerState = Depends(get_server_state)
+    uuids: list[str] = Form(default_factory=list),
+    state: ServerState = Depends(get_server_state),
 ) -> RedirectResponse:
     """Mirrors UsersWindow._delete_after_msg()'s counted success/failure summary."""
     nb_ok = 0
@@ -228,10 +223,8 @@ def users_groups_add_submit(
     state: ServerState = Depends(get_server_state),
     uuids: list[str] = Form(...),
     groups: list[str] = Form(default_factory=list),
-    new_groups: str = Form(""),
 ) -> HTMLResponse | RedirectResponse:
-    groups_to_add = list(groups) + _split_new_groups(new_groups)
-    if not groups_to_add:
+    if not groups:
         context = {
             "mode": "add",
             "uuids": uuids,
@@ -240,7 +233,7 @@ def users_groups_add_submit(
         }
         return templates.TemplateResponse(request, "admin/users_groups_form.html", context)
 
-    state.app_ctx.users.users_add_groups(uuids, groups_to_add)
+    state.app_ctx.users.users_add_groups(uuids, groups)
     return RedirectResponse(url="/admin/users?msg=Groups+assigned", status_code=status.HTTP_303_SEE_OTHER)
 
 
@@ -287,7 +280,9 @@ def users_attributes_page(request: Request, state: ServerState = Depends(get_ser
 
 @router.post("/attributes/add", response_class=HTMLResponse, response_model=None)
 def users_attributes_add(
-    request: Request, state: ServerState = Depends(get_server_state), name: str = Form(...)
+    request: Request,
+    state: ServerState = Depends(get_server_state),
+    name: str = Form(...),
 ) -> HTMLResponse | RedirectResponse:
     name = name.strip()
     attribs = state.app_ctx.users.get_cust_attribs_list()
@@ -332,7 +327,9 @@ def users_import_form(request: Request) -> HTMLResponse:
 
 @router.post("/import", response_class=HTMLResponse, response_model=None)
 async def users_import_submit(
-    request: Request, state: ServerState = Depends(get_server_state), file: UploadFile = File(...)
+    request: Request,
+    state: ServerState = Depends(get_server_state),
+    file: UploadFile = File(...),
 ) -> HTMLResponse | RedirectResponse:
     tmp_path: str | None = None
     try:

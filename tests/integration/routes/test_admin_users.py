@@ -67,8 +67,7 @@ def test_create_user_succeeds_and_appears_in_list(isolated_admin_client):
             "msg_login": "Welcome",
             "auth_type": "basic",
             "password": "s3cret!",
-            "groups": ["sales"],
-            "new_groups": "it, ops",
+            "groups": ["sales", "it", "ops"],
         },
         follow_redirects=False,
     )
@@ -81,16 +80,18 @@ def test_create_user_succeeds_and_appears_in_list(isolated_admin_client):
     assert "it" in list_page.text and "ops" in list_page.text
 
 
-def test_create_user_blank_username_returns_422(isolated_admin_client):
-    """A submitted-but-empty required Form(...) field is treated as missing by FastAPI before
-    the route handler runs - the browser's `required` attribute is the real guard against this
-    in normal use. Documents actual behavior rather than User.save()'s own blank-username check,
-    which is unreachable through this route as a result."""
+def test_create_user_blank_username_reports_error(isolated_admin_client):
+    """UserForm accepts an empty string (a required Form(...) parameter would have been treated as
+    missing and answered with a 422), so the request reaches User.save() and its own blank-username
+    check - the form is re-rendered with that message."""
     response = isolated_admin_client.post(
         "/admin/users/new",
         data={"username": "", "title": "", "msg_login": "", "auth_type": "none", "password": ""},
     )
-    assert response.status_code == 422
+    assert response.status_code == 200
+    match = re.search(r'<p class="error form-error">(.*?)</p>', response.text)
+    assert match is not None
+    assert "Username" in match.group(1)
 
 
 def test_create_user_duplicate_username_reports_error(isolated_admin_client):
@@ -137,6 +138,42 @@ def test_edit_user_updates_fields_including_admin_promotion(isolated_admin_clien
     edit_page = isolated_admin_client.get(f"/admin/users/{uuid}/edit")
     assert 'value="After"' in edit_page.text
     assert 'name="admin" value="1" checked' in edit_page.text
+
+
+def test_create_user_without_admin_checkbox_is_not_admin(isolated_admin_client):
+    """Regression: an unchecked checkbox sends no field at all, so UserForm.admin must fall back to
+    False - testing it against None (as the former `str | None` parameter allowed) made every
+    saved user an admin."""
+    isolated_admin_client.post(
+        "/admin/users/new",
+        data={"username": "plain_user", "title": "", "msg_login": "", "auth_type": "none", "password": ""},
+        follow_redirects=False,
+    )
+    uuid = _find_uuid(isolated_admin_client.get("/admin/users").text, "plain_user")
+
+    edit_page = isolated_admin_client.get(f"/admin/users/{uuid}/edit")
+
+    assert 'name="admin" value="1"' in edit_page.text  # the checkbox itself is rendered
+    assert 'name="admin" value="1" checked' not in edit_page.text
+
+
+def test_edit_user_unchecking_admin_demotes_them(isolated_admin_client):
+    isolated_admin_client.post(
+        "/admin/users/new",
+        data={"username": "demote_me", "title": "", "admin": "1", "msg_login": "", "auth_type": "none", "password": ""},
+        follow_redirects=False,
+    )
+    uuid = _find_uuid(isolated_admin_client.get("/admin/users").text, "demote_me")
+    assert 'name="admin" value="1" checked' in isolated_admin_client.get(f"/admin/users/{uuid}/edit").text
+
+    isolated_admin_client.post(
+        f"/admin/users/{uuid}/edit",
+        data={"username": "demote_me", "title": "", "msg_login": "", "auth_type": "none", "password": ""},
+        follow_redirects=False,
+    )
+
+    edit_page = isolated_admin_client.get(f"/admin/users/{uuid}/edit")
+    assert 'name="admin" value="1" checked' not in edit_page.text
 
 
 def test_edit_user_blank_password_preserves_existing_hash(isolated_admin_client):

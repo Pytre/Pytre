@@ -7,10 +7,12 @@ import asyncio
 import os
 import tempfile
 from pathlib import Path
+from typing import Annotated
 from urllib.parse import quote_plus
 
 from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile, status
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
 
 from Pytre_Core.servers import Server, ServerType
@@ -21,9 +23,39 @@ from Pytre_Server.templating import templates
 router = APIRouter(prefix="/servers")
 
 
-def _split_new_groups(new_groups: str) -> list[str]:
-    """Parses the free-text "add new group(s)" field - comma-separated, blanks dropped."""
-    return [g.strip() for g in new_groups.split(",") if g.strip()]
+class ServerForm(BaseModel):
+    id: str
+    description: str = ""
+    login: str = ""
+    password: str = ""
+    type: str
+    charset: str = ""
+    database: str = ""
+    host: str = ""
+    port: str = ""
+    server: str = ""
+    login_timeout: int
+    timeout: int
+    trust_server_certificate: bool = False
+    groups: list[str] = Field(default_factory=list)
+
+    def apply_to(self, server: Server) -> None:
+        """Copies the submitted values onto `server`."""
+        server.id = self.id.strip()
+        server.description = self.description.strip()
+        server.user = self.login.strip()
+        if self.password:
+            server.password = self.password
+        server.type = ServerType(self.type).name if self.type in ServerType else ServerType.mssql.name
+        server.charset = self.charset.strip()
+        server.database = self.database.strip()
+        server.host = self.host.strip()
+        server.port = self.port.strip()
+        server.server = self.server.strip()
+        server.login_timeout = self.login_timeout
+        server.timeout = self.timeout
+        server.trust_server_certificate = self.trust_server_certificate
+        server.grp_authorized = self.groups
 
 
 def _form_context(state: ServerState, server: Server) -> dict:
@@ -60,7 +92,7 @@ def servers_list(
     return templates.TemplateResponse(request, "admin/servers_list.html", context)
 
 
-@router.post("/reload", response_class=RedirectResponse, response_model=None)
+@router.post("/reload", response_class=RedirectResponse)
 async def servers_reload(state: ServerState = Depends(get_server_state)) -> RedirectResponse:
     try:
         reset_count = await _reload_servers(state)
@@ -84,44 +116,11 @@ def server_new_form(request: Request, state: ServerState = Depends(get_server_st
 @router.post("/new", response_class=HTMLResponse, response_model=None)
 async def server_new_submit(
     request: Request,
+    server_form: Annotated[ServerForm, Form()],
     state: ServerState = Depends(get_server_state),
-    id: str = Form(...),
-    description: str = Form(""),
-    login: str = Form(""),
-    password: str = Form(""),
-    type: str = Form(...),
-    charset: str = Form(""),
-    database: str = Form(""),
-    host: str = Form(""),
-    port: str = Form(""),
-    server: str = Form(""),
-    login_timeout: int = Form(""),
-    timeout: int = Form(""),
-    trust_server_certificate: str | None = Form(None),
-    groups: list[str] = Form(default_factory=list),
-    new_groups: str = Form(""),
 ) -> HTMLResponse | RedirectResponse:
     server_obj = Server(state.app_ctx.servers)
-    return await _save_server(
-        request,
-        state,
-        server_obj,
-        id=id,
-        description=description,
-        login=login,
-        password=password,
-        type=type,
-        charset=charset,
-        database=database,
-        host=host,
-        port=port,
-        server=server,
-        login_timeout=login_timeout,
-        timeout=timeout,
-        trust_server_certificate=trust_server_certificate,
-        groups=groups,
-        new_groups=new_groups,
-    )
+    return await _save_server(request, state, server_obj, server_form)
 
 
 @router.get("/{uuid}/edit", response_class=HTMLResponse, response_model=None)
@@ -138,85 +137,21 @@ def server_edit_form(
 async def server_edit_submit(
     uuid: str,
     request: Request,
+    server_form: Annotated[ServerForm, Form()],
     state: ServerState = Depends(get_server_state),
-    id: str = Form(...),
-    description: str = Form(""),
-    login: str = Form(""),
-    password: str = Form(""),
-    type: str = Form(...),
-    charset: str = Form(""),
-    database: str = Form(""),
-    host: str = Form(""),
-    port: str = Form(""),
-    server: str = Form(""),
-    login_timeout: int = Form(""),
-    timeout: int = Form(""),
-    trust_server_certificate: str | None = Form(None),
-    groups: list[str] = Form(default_factory=list),
-    new_groups: str = Form(""),
 ) -> HTMLResponse | RedirectResponse:
     server_obj = state.app_ctx.servers.find_server_by_uuid(uuid)
     if server_obj is None:
         return RedirectResponse(url="/admin/servers?error=Server+not+found", status_code=status.HTTP_303_SEE_OTHER)
-    return await _save_server(
-        request,
-        state,
-        server_obj,
-        id=id,
-        description=description,
-        login=login,
-        password=password,
-        type=type,
-        charset=charset,
-        database=database,
-        host=host,
-        port=port,
-        server=server,
-        login_timeout=login_timeout,
-        timeout=timeout,
-        trust_server_certificate=trust_server_certificate,
-        groups=groups,
-        new_groups=new_groups,
-    )
+    return await _save_server(request, state, server_obj, server_form)
 
 
 async def _save_server(
-    request: Request,
-    state: ServerState,
-    server_obj: Server,
-    id: str = Form(...),
-    description: str = Form(""),
-    login: str = Form(""),
-    password: str = Form(""),
-    type: str = Form(...),
-    charset: str = Form(""),
-    database: str = Form(""),
-    host: str = Form(""),
-    port: str = Form(""),
-    server: str = Form(""),
-    login_timeout: int = Form(""),
-    timeout: int = Form(""),
-    trust_server_certificate: str | None = Form(None),
-    groups: list[str] = Form(default_factory=list),
-    new_groups: str = Form(""),
+    request: Request, state: ServerState, server_obj: Server, server_form: ServerForm
 ) -> HTMLResponse | RedirectResponse:
     """Applies submitted form values onto `server_obj` and saves it. Shared by create and edit -
     `server_obj` is either a blank new Server or one just loaded via find_server_by_uuid()."""
-    server_obj.id = id.strip()
-    server_obj.description = description.strip()
-    server_obj.user = login.strip()
-    if password:
-        server_obj.password = password
-    server_obj.type = ServerType(type).name if type in ServerType else ServerType.mssql.name
-    server_obj.charset = charset.strip()
-    server_obj.database = database.strip()
-    server_obj.host = host.strip()
-    server_obj.port = port.strip()
-    server_obj.server = server.strip()
-    server_obj.login_timeout = login_timeout
-    server_obj.timeout = timeout
-    server_obj.trust_server_certificate = trust_server_certificate is not None
-    server_obj.grp_authorized = groups + _split_new_groups(new_groups)
+    server_form.apply_to(server_obj)
 
     try:
         await asyncio.to_thread(server_obj.save)
@@ -291,10 +226,8 @@ def servers_groups_add_submit(
     state: ServerState = Depends(get_server_state),
     uuids: list[str] = Form(...),
     groups: list[str] = Form(default_factory=list),
-    new_groups: str = Form(""),
 ) -> HTMLResponse | RedirectResponse:
-    groups_to_add = list(groups) + _split_new_groups(new_groups)
-    if not groups_to_add:
+    if not groups:
         context = {
             "mode": "add",
             "uuids": uuids,
@@ -303,7 +236,7 @@ def servers_groups_add_submit(
         }
         return templates.TemplateResponse(request, "admin/servers_groups_form.html", context)
 
-    state.app_ctx.servers.servers_add_groups(uuids, groups_to_add)
+    state.app_ctx.servers.servers_add_groups(uuids, groups)
     return RedirectResponse(url="/admin/servers?msg=Groups+assigned", status_code=status.HTTP_303_SEE_OTHER)
 
 

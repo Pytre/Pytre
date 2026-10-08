@@ -1,6 +1,8 @@
 import asyncio
+import json
 import logging
 import traceback
+from collections.abc import AsyncGenerator
 from datetime import datetime, timezone
 
 import jwt
@@ -19,7 +21,7 @@ from Pytre_Core.sql_query.query_drivers_async import AsyncSqlConnectionError, As
 
 from Pytre_Server.auth_token import create_token, decode_token, TokenType
 from Pytre_Server.oidc import OidcReverifyError, verify_still_active
-from Pytre_Server.result_streaming import stream_result_and_release
+from Pytre_Server.result_streaming import DisconnectAware, stream_result_ndjson
 from Pytre_Server.server_state import ServerResources, ServerState, get_server_state
 from Pytre_Server.routes.client_sso import router as client_sso_router
 
@@ -268,37 +270,17 @@ async def execute_query(
     exec_config = query.get_exec_config(request.server_id, file_output=False)
     template, params = exec_config.cmd_template, exec_config.cmd_parameters
 
-    # cap how many requests user can have running at once (execute + streaming)
+    # cap how many requests user can have running at once
     semaphore = resources._get_user_semaphore(state.max_concurrency_per_user, username)
     if semaphore.locked():
         http_error = status.HTTP_429_TOO_MANY_REQUESTS
         raise HTTPException(status_code=http_error, detail="Too many concurrent requests, try again later")
 
-    # execute the requested query on the server's shared, pooled driver
-    await semaphore.acquire()
+    await semaphore.acquire()  # released by _run_query()
 
-    result, start_time = await _run_query(state, resources, request, username, template, params, semaphore)
-
-    # prepare a log entry
-    log_entry = ExecutionLogEntry(
-        server_id=request.server_id,
-        user_id=user_ctx.current_user.username,
-        user_name=user_ctx.current_user.title,
-        query_id=request.query_id,
-        start=start_time,
-        parameters=request.parameters,
-    )
-
-    # stream result
+    # stream result - sends pings while the query is executing then NDJSON columns/rows once it completes
     return StreamingResponse(
-        stream_result_and_release(
-            result,
-            http_request,
-            semaphore,
-            state.chunk_size,
-            resources.execution_logs,
-            log_entry,
-        ),
+        _run_query(state, resources, request, user_ctx, template, params, semaphore, http_request),
         media_type="application/x-ndjson",
     )
 
@@ -364,38 +346,84 @@ async def _run_query(
     state: ServerState,
     resources: ServerResources,
     request: ExecuteRequest,
-    username: str,
+    user_ctx: UserContext,
     template: str,
     params: dict,
     semaphore: asyncio.Semaphore,
-) -> tuple[AsyncSqlResult, datetime]:
-    """Executes the query on the server's shared, pooled driver. `semaphore` must already be
-    acquired by the caller - only released here on failure (kept held on success until
-    streaming completes, released by stream_result_and_release())."""
+    http_request: DisconnectAware,
+) -> AsyncGenerator[str]:
+    """Executes the query on the server's shared, pooled driver, sending a `{"__ping__": true}` NDJSON
+    line every state.heartbeat_secs while it's still running (0 disables), then streams the NDJSON
+    result (_stream_result_ndjson). Releases `semaphore` once done, whichever way this ends.
 
-    success: bool = False
-    try:
-        server = state.app_ctx.servers.servers_dict[request.server_id]
+    The query doesn't stream incrementally - the whole result is materialized before returning, so the
+    HTTP connection to the client is completely silent for the entire query duration. Some network devices
+    (NAT/firewall/proxy) cut an idle connection after a few minutes of silence even though both sides are
+    fine - the ping keeps bytes flowing on it regardless of how long the query takes.
+
+    Also lets the server notice a client disconnecting during query execution. Can't abort the SQL
+    Server-side query either way (driver limitation) - the background task is still awaited to completion
+    so the pooled connection is returned properly. Its result is just discarded."""
+
+    query_id = request.query_id
+    server_id = request.server_id
+    username = user_ctx.current_user.username
+    server = state.app_ctx.servers.servers_dict[request.server_id]
+
+    async def execute() -> tuple[AsyncSqlResult, datetime]:
         async with resources.use_driver(server) as driver:
             start_time = datetime.now()
-            result = await driver.execute(template, params)
-        success = True
-    except AsyncSqlConnectionError as e:
-        log(f"Server unavailable on server '{request.server_id}' (user {username}) : {e}", logging.WARNING)
-        http_error = status.HTTP_503_SERVICE_UNAVAILABLE
-        raise HTTPException(status_code=http_error, detail=f"Server unavailable: {e}") from e
-    except AsyncSqlExecutionError as e:
-        msg = f"SQL error for query '{request.query_id}' on server '{request.server_id}' (user {username}): {e}"
-        log(msg, logging.ERROR)
-        http_error = status.HTTP_500_INTERNAL_SERVER_ERROR
-        raise HTTPException(status_code=http_error, detail=f"SQL error: {e}") from e
-    except Exception as e:
-        msg = f"Unexpected error for query '{request.query_id}' on server '{request.server_id}' (user {username}): "
-        log(f"{msg} {type(e).__name__}: {e}\n{traceback.format_exc()}", logging.ERROR)
-        http_error = status.HTTP_500_INTERNAL_SERVER_ERROR
-        raise HTTPException(status_code=http_error, detail=f"Unexpected error: {e}") from e
-    finally:
-        if not success:
-            semaphore.release()
+            return await driver.execute(template, params), start_time
 
-    return result, start_time
+    try:
+        task = asyncio.create_task(execute())
+        try:
+            # emit an heartbeat while waiting for query to finish execution
+            if state.heartbeat_secs > 0:
+                while True:
+                    done, _pending = await asyncio.wait({task}, timeout=state.heartbeat_secs)
+                    if task in done:
+                        break
+                    if await http_request.is_disconnected():
+                        log(
+                            f"User '{username}' disconnected while query '{query_id}' on server '{server_id}' "
+                            "was still executing.",
+                            logging.INFO,
+                        )
+                        await asyncio.gather(task, return_exceptions=True)
+                        return
+                    yield json.dumps({"__ping__": True}) + "\n"
+            # retrieve result generator and start_time
+            result, start_time = await task
+        except AsyncSqlConnectionError as e:
+            log(f"Server unavailable on server '{server_id}' (user {username}) : {e}", logging.WARNING)
+            yield json.dumps({"__error__": {"type": type(e).__name__, "message": f"Server unavailable: {e}"}}) + "\n"
+            return
+        except AsyncSqlExecutionError as e:
+            msg = f"SQL error for query '{query_id}' on server '{server_id}' (user {username}): {e}"
+            log(msg, logging.ERROR)
+            yield json.dumps({"__error__": {"type": type(e).__name__, "message": f"SQL error: {e}"}}) + "\n"
+            return
+        except Exception as e:
+            msg = f"Unexpected error for query '{query_id}' on server '{server_id}' (user {username}): "
+            log(f"{msg} {type(e).__name__}: {e}\n{traceback.format_exc()}", logging.ERROR)
+            yield json.dumps({"__error__": {"type": type(e).__name__, "message": f"Unexpected error: {e}"}}) + "\n"
+            return
+
+        # create log_entry
+        log_entry = ExecutionLogEntry(
+            server_id=server_id,
+            user_id=username,
+            user_name=user_ctx.current_user.title,
+            query_id=query_id,
+            start=start_time,
+            parameters=request.parameters,
+        )
+
+        # stream query result
+        async for chunk in stream_result_ndjson(
+            result, http_request, state.chunk_size, resources.execution_logs, log_entry
+        ):
+            yield chunk
+    finally:
+        semaphore.release()

@@ -307,6 +307,7 @@ class ServerState:
     query_catalog: QueryCatalog
     chunk_size: int  # rows to stream to client in a chunk
     max_concurrency_per_user: int  # concurrent requests allowed per user
+    heartbeat_secs: int = 30  # seconds between NDJSON pings while a query executes, 0 to disable
     resources: ServerResources = field(default_factory=ServerResources)
 
 

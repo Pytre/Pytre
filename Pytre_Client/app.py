@@ -701,7 +701,7 @@ class App(tk.Toplevel):
                     log(msg, level, sublogger)
                 elif msg_type == ExecResultMsg.START_TIMER:
                     self.start_time = datetime.now()
-                    self.exec_timer(wait_in_sec=60)
+                    self.exec_timer(wait_in_sec=15)
                 elif msg_type == ExecResultMsg.STOP_TIMER:
                     self.exec_timer(stop=True)
                 elif msg_type == ExecResultMsg.RESULT:

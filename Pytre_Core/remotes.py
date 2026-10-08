@@ -745,7 +745,15 @@ class RemoteServer:
 
                 lines = response.iter_lines()
                 first_line = next(lines, None)
-                col_names = json.loads(first_line)["__columns__"] if first_line is not None else []
+                while first_line is not None and "__ping__" in json.loads(first_line):
+                    first_line = next(lines, None)  # keep alive sent while the query is still running
+
+                if first_line is None:
+                    col_names: tuple = ()
+                else:
+                    first_record = json.loads(first_line)
+                    self._raise_if_error(first_record)
+                    col_names = first_record["__columns__"]
 
                 yield RemoteCursor(tuple(col_names), self._iter_records(lines))
                 break
@@ -756,11 +764,14 @@ class RemoteServer:
                 continue
 
             record = json.loads(line)
-            if "__error__" in record:
-                error = record["__error__"]
-                raise RemoteExecutionError(f"{error['type']}: {error['message']}")
+            self._raise_if_error(record)
 
             yield tuple(decode_row_value(v) for v in record["__row__"])
+
+    def _raise_if_error(self, record: dict) -> None:
+        if "__error__" in record:
+            error = record["__error__"]
+            raise RemoteExecutionError(f"{error['type']}: {error['message']}")
 
     def get_serialized_queries(self) -> list[dict]:
         """Fetches queries exposed by this remote server. Called on demand and not eagerly.

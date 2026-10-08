@@ -198,14 +198,17 @@ def test_execute_rejects_stale_hash_once_exemption_expired(client, auth_headers)
     assert response.status_code == 409
 
 
-def test_execute_returns_503_when_pool_saturated(client, auth_headers, monkeypatch):
+def test_execute_reports_pool_saturated_as_ndjson_error(client, auth_headers, monkeypatch):
     """AsyncSqlConnectionError from driver.execute() (e.g. pool exhausted, connection_timeout_secs
-    elapsed) must surface as a clean 503, not an unhandled 500 - and must not leak the
-    caller's concurrency slot (the per-user semaphore must be released, not left locked).
+    elapsed) must surface as a {"__error__": ...} NDJSON line, not an HTTP error status - the
+    response has already started (200) by the time this is known, since _run_query may have
+    already sent "__ping__" lines while waiting for the query. Must not leak the caller's
+    concurrency slot either way (the per-user semaphore must be released, not left locked).
     The driver itself is monkeypatched, so no real docker connection is attempted - the
     fastmssql -> AsyncSqlConnectionError translation itself is unit-tested separately in
     tests/unit/core/test_query_drivers_async.py."""
     import hashlib
+    import json
 
     from Pytre_Core.sql_query.query_drivers_async import AsyncSqlConnectionError, FastMssqlDriver
 
@@ -228,15 +231,19 @@ def test_execute_returns_503_when_pool_saturated(client, auth_headers, monkeypat
         headers=auth_headers,
     )
 
-    assert response.status_code == 503
+    assert response.status_code == 200
+    error = json.loads(response.text.splitlines()[0])["__error__"]
+    assert error["type"] == "AsyncSqlConnectionError"
+    assert error["message"] == "Server unavailable: Connection pool timeout - all connections are busy."
     assert not client.app.state.server.resources.user_semaphores[TEST_USERNAME].locked()
 
 
-def test_execute_returns_503_when_server_unreachable(client, auth_headers, monkeypatch):
+def test_execute_reports_server_unreachable_as_ndjson_error(client, auth_headers, monkeypatch):
     """AsyncSqlConnectionError from the initial connect() (server down/unreachable) must also
-    surface as 503, not an unhandled 500 - same semaphore-leak concern as above. The driver
-    itself is monkeypatched, so no real docker connection is attempted."""
+    surface as a {"__error__": ...} NDJSON line - same reasoning and semaphore-leak concern
+    as above. The driver itself is monkeypatched, so no real docker connection is attempted."""
     import hashlib
+    import json
 
     from Pytre_Core.sql_query.query_drivers_async import AsyncSqlConnectionError, FastMssqlDriver
 
@@ -259,7 +266,10 @@ def test_execute_returns_503_when_server_unreachable(client, auth_headers, monke
         headers=auth_headers,
     )
 
-    assert response.status_code == 503
+    assert response.status_code == 200
+    error = json.loads(response.text.splitlines()[0])["__error__"]
+    assert error["type"] == "AsyncSqlConnectionError"
+    assert error["message"] == "Server unavailable: Failed to connect: connection refused."
     assert not client.app.state.server.resources.user_semaphores[TEST_USERNAME].locked()
 
 

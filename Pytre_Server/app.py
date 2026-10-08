@@ -27,7 +27,9 @@ async def _lifespan(app: FastAPI):
         state.resources.execution_logs.stop()
 
 
-def create_app(master_key: str, chunk_size: int = 2000, max_concurrency_per_user: int = 4) -> FastAPI:
+def create_app(
+    master_key: str, chunk_size: int = 2000, max_concurrency_per_user: int = 4, heartbeat_secs: int = 30
+) -> FastAPI:
     """Build and configure the FastAPI app"""
 
     app = FastAPI(title="Pytre Server", lifespan=_lifespan)
@@ -42,6 +44,7 @@ def create_app(master_key: str, chunk_size: int = 2000, max_concurrency_per_user
         query_catalog=QueryCatalog.load(_app_ctx.settings.queries_folder),
         chunk_size=chunk_size,
         max_concurrency_per_user=max_concurrency_per_user,
+        heartbeat_secs=heartbeat_secs,
         resources=ServerResources(execution_logs=execution_logs),
     )
 

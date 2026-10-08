@@ -2,7 +2,6 @@
 Tests for Pytre_Server/result_streaming.py
 """
 
-import asyncio
 import json
 from datetime import date, datetime
 from decimal import Decimal
@@ -11,7 +10,7 @@ from unittest.mock import Mock
 import pytest
 
 from Pytre_Core.logs_central import ExecutionLogEntry
-from Pytre_Server.result_streaming import stream_result_and_release, _stream_result_ndjson
+from Pytre_Server.result_streaming import stream_result_ndjson
 
 
 @pytest.fixture
@@ -101,7 +100,7 @@ async def test_stream_ndjson_always_emits_columns_line_first():
     result = _FakeResult([], columns=["id"])
 
     chunks = await _collect(
-        _stream_result_ndjson(result, _FakeRequest(), chunk_size=3, execution_logs=None, log_entry=_make_log_entry())
+        stream_result_ndjson(result, _FakeRequest(), chunk_size=3, execution_logs=None, log_entry=_make_log_entry())
     )
 
     assert len(chunks) == 1
@@ -116,7 +115,7 @@ async def test_stream_ndjson_falls_back_to_empty_columns_when_result_has_no_rows
     result = _FakeResult([], columns_error=ValueError("No column information available"))
 
     chunks = await _collect(
-        _stream_result_ndjson(result, _FakeRequest(), chunk_size=3, execution_logs=None, log_entry=_make_log_entry())
+        stream_result_ndjson(result, _FakeRequest(), chunk_size=3, execution_logs=None, log_entry=_make_log_entry())
     )
 
     assert len(chunks) == 1
@@ -130,7 +129,7 @@ async def test_stream_ndjson_single_chunk_when_under_chunk_size():
     result = _FakeResult(rows, columns=["id"])
 
     chunks = await _collect(
-        _stream_result_ndjson(result, _FakeRequest(), chunk_size=3, execution_logs=None, log_entry=_make_log_entry())
+        stream_result_ndjson(result, _FakeRequest(), chunk_size=3, execution_logs=None, log_entry=_make_log_entry())
     )
 
     assert json.loads(chunks[0]) == {"__columns__": ["id"]}
@@ -146,7 +145,7 @@ async def test_stream_ndjson_splits_into_multiple_chunks():
     result = _FakeResult(rows, columns=["id"])
 
     chunks = await _collect(
-        _stream_result_ndjson(result, _FakeRequest(), chunk_size=3, execution_logs=None, log_entry=_make_log_entry())
+        stream_result_ndjson(result, _FakeRequest(), chunk_size=3, execution_logs=None, log_entry=_make_log_entry())
     )
 
     assert json.loads(chunks[0]) == {"__columns__": ["id"]}
@@ -164,7 +163,7 @@ async def test_stream_ndjson_each_chunk_ends_with_newline():
     result = _FakeResult(rows, columns=["id"])
 
     chunks = await _collect(
-        _stream_result_ndjson(result, _FakeRequest(), chunk_size=3, execution_logs=None, log_entry=_make_log_entry())
+        stream_result_ndjson(result, _FakeRequest(), chunk_size=3, execution_logs=None, log_entry=_make_log_entry())
     )
 
     assert all(chunk.endswith("\n") for chunk in chunks)
@@ -177,9 +176,7 @@ async def test_stream_ndjson_preserves_row_content():
     result = _FakeResult(rows, columns=["title", "x3_id"])
 
     chunks = await _collect(
-        _stream_result_ndjson(
-            result, _FakeRequest(), chunk_size=10, execution_logs=None, log_entry=_make_log_entry()
-        )
+        stream_result_ndjson(result, _FakeRequest(), chunk_size=10, execution_logs=None, log_entry=_make_log_entry())
     )
 
     lines = chunks[1].splitlines()
@@ -198,9 +195,7 @@ async def test_stream_ndjson_wraps_decimal_and_datetime_values():
     result = _FakeResult(rows, columns=["amount", "created"])
 
     chunks = await _collect(
-        _stream_result_ndjson(
-            result, _FakeRequest(), chunk_size=10, execution_logs=None, log_entry=_make_log_entry()
-        )
+        stream_result_ndjson(result, _FakeRequest(), chunk_size=10, execution_logs=None, log_entry=_make_log_entry())
     )
 
     decoded = json.loads(chunks[1].splitlines()[0])
@@ -215,9 +210,7 @@ async def test_stream_ndjson_passes_through_json_native_types_unwrapped():
     result = _FakeResult(rows, columns=["name", "count", "ratio", "active", "note"])
 
     chunks = await _collect(
-        _stream_result_ndjson(
-            result, _FakeRequest(), chunk_size=10, execution_logs=None, log_entry=_make_log_entry()
-        )
+        stream_result_ndjson(result, _FakeRequest(), chunk_size=10, execution_logs=None, log_entry=_make_log_entry())
     )
 
     decoded = json.loads(chunks[1].splitlines()[0])
@@ -234,9 +227,7 @@ async def test_stream_ndjson_wraps_plain_date_values():
     result = _FakeResult(rows, columns=["day"])
 
     chunks = await _collect(
-        _stream_result_ndjson(
-            result, _FakeRequest(), chunk_size=10, execution_logs=None, log_entry=_make_log_entry()
-        )
+        stream_result_ndjson(result, _FakeRequest(), chunk_size=10, execution_logs=None, log_entry=_make_log_entry())
     )
 
     decoded = json.loads(chunks[1].splitlines()[0])
@@ -249,9 +240,7 @@ async def test_stream_ndjson_emits_error_line_when_row_conversion_fails():
     result = _FakeResult([_FailingRow()], columns=["id"])
 
     chunks = await _collect(
-        _stream_result_ndjson(
-            result, _FakeRequest(), chunk_size=10, execution_logs=None, log_entry=_make_log_entry()
-        )
+        stream_result_ndjson(result, _FakeRequest(), chunk_size=10, execution_logs=None, log_entry=_make_log_entry())
     )
 
     assert len(chunks) == 2  # columns chunk, then the error line
@@ -266,9 +255,7 @@ async def test_stream_ndjson_flushes_successful_rows_before_error():
     result = _FakeResult(rows, columns=["id"])
 
     chunks = await _collect(
-        _stream_result_ndjson(
-            result, _FakeRequest(), chunk_size=10, execution_logs=None, log_entry=_make_log_entry()
-        )
+        stream_result_ndjson(result, _FakeRequest(), chunk_size=10, execution_logs=None, log_entry=_make_log_entry())
     )
 
     # columns chunk, then everything read before the failure, then the error line
@@ -288,7 +275,7 @@ async def test_stream_ndjson_stops_early_when_client_disconnects():
     request = _FakeRequest(disconnect_after=0)
 
     chunks = await _collect(
-        _stream_result_ndjson(result, request, chunk_size=3, execution_logs=None, log_entry=_make_log_entry())
+        stream_result_ndjson(result, request, chunk_size=3, execution_logs=None, log_entry=_make_log_entry())
     )
 
     # columns chunk, then only the first data chunk (3 rows) - the 2nd/3rd chunks never happen
@@ -306,7 +293,7 @@ async def test_stream_ndjson_checks_disconnection_once_per_chunk_not_per_row():
     request = _FakeRequest()
 
     await _collect(
-        _stream_result_ndjson(result, request, chunk_size=3, execution_logs=None, log_entry=_make_log_entry())
+        stream_result_ndjson(result, request, chunk_size=3, execution_logs=None, log_entry=_make_log_entry())
     )
 
     assert request.calls == 3
@@ -326,7 +313,7 @@ async def test_stream_ndjson_logs_execution_on_successful_completion():
     log_entry = _make_log_entry()
 
     await _collect(
-        _stream_result_ndjson(result, _FakeRequest(), chunk_size=10, execution_logs=execution_logs, log_entry=log_entry)
+        stream_result_ndjson(result, _FakeRequest(), chunk_size=10, execution_logs=execution_logs, log_entry=log_entry)
     )
 
     assert execution_logs.log_execution.call_count == 1
@@ -345,9 +332,7 @@ async def test_stream_ndjson_does_not_log_when_execution_logs_is_none():
 
     # Should not raise
     await _collect(
-        _stream_result_ndjson(
-            result, _FakeRequest(), chunk_size=10, execution_logs=None, log_entry=_make_log_entry()
-        )
+        stream_result_ndjson(result, _FakeRequest(), chunk_size=10, execution_logs=None, log_entry=_make_log_entry())
     )
 
 
@@ -358,7 +343,7 @@ async def test_stream_ndjson_does_not_log_on_row_conversion_error():
     execution_logs = Mock()
 
     await _collect(
-        _stream_result_ndjson(
+        stream_result_ndjson(
             result, _FakeRequest(), chunk_size=10, execution_logs=execution_logs, log_entry=_make_log_entry()
         )
     )
@@ -377,90 +362,7 @@ async def test_stream_ndjson_does_not_log_when_client_disconnects_early():
     request = _FakeRequest(disconnect_after=0)
 
     await _collect(
-        _stream_result_ndjson(
-            result, request, chunk_size=3, execution_logs=execution_logs, log_entry=_make_log_entry()
-        )
+        stream_result_ndjson(result, request, chunk_size=3, execution_logs=execution_logs, log_entry=_make_log_entry())
     )
 
     assert not execution_logs.log_execution.called
-
-
-# ------------------------------------------------------------------------------
-# stream_result_and_release
-# ------------------------------------------------------------------------------
-
-
-@pytest.mark.unit
-@pytest.mark.anyio
-async def test_stream_result_and_release_releases_after_normal_completion():
-    rows = [_FakeRow({"id": str(i)}) for i in range(3)]
-    result = _FakeResult(rows, columns=["id"])
-    semaphore = asyncio.Semaphore(1)
-    await semaphore.acquire()
-    assert semaphore.locked()
-
-    await _collect(
-        stream_result_and_release(
-            result, _FakeRequest(), semaphore, chunk_size=10, execution_logs=None, log_entry=_make_log_entry()
-        )
-    )
-
-    assert not semaphore.locked()
-
-
-@pytest.mark.unit
-@pytest.mark.anyio
-async def test_stream_result_and_release_releases_when_client_disconnects():
-    rows = [_FakeRow({"id": str(i)}) for i in range(9)]
-    result = _FakeResult(rows, columns=["id"])
-    semaphore = asyncio.Semaphore(1)
-    await semaphore.acquire()
-
-    await _collect(
-        stream_result_and_release(
-            result,
-            _FakeRequest(disconnect_after=0),
-            semaphore,
-            chunk_size=3,
-            execution_logs=None,
-            log_entry=_make_log_entry(),
-        )
-    )
-
-    assert not semaphore.locked()
-
-
-@pytest.mark.unit
-@pytest.mark.anyio
-async def test_stream_result_and_release_releases_when_row_conversion_fails():
-    rows = [_FakeRow({"id": "0"}), _FailingRow()]
-    result = _FakeResult(rows, columns=["id"])
-    semaphore = asyncio.Semaphore(1)
-    await semaphore.acquire()
-
-    await _collect(
-        stream_result_and_release(
-            result, _FakeRequest(), semaphore, chunk_size=10, execution_logs=None, log_entry=_make_log_entry()
-        )
-    )
-
-    assert not semaphore.locked()
-
-
-@pytest.mark.unit
-@pytest.mark.anyio
-async def test_stream_result_and_release_releases_when_closed_early():
-    """Simulates Starlette calling .aclose() on the generator before it's done (e.g. it
-    stops consuming for its own reasons) - the finally must still run via GeneratorExit."""
-    rows = [_FakeRow({"id": str(i)}) for i in range(7)]  # chunk_size=3 -> chunks of 3, 3, 1
-    result = _FakeResult(rows, columns=["id"])
-    semaphore = asyncio.Semaphore(1)
-    await semaphore.acquire()
-
-    gen = stream_result_and_release(
-        result, _FakeRequest(), semaphore, chunk_size=3, execution_logs=None, log_entry=_make_log_entry()
-    )
-    await gen.__anext__()  # consume only the columns chunk, all rows are left unread
-    await gen.aclose()
-
-    assert not semaphore.locked()

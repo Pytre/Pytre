@@ -30,6 +30,12 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument("--port", type=int, default=8000, help="Port to run the server on (default %(default)s)")
     parser.add_argument("--chunk-size", type=int, default=2000, help="Rows to stream to clients per NDJSON chunk")
     parser.add_argument("--max-concurrency-per-user", type=int, default=4, help="Max concurrent requests per user")
+    parser.add_argument(
+        "--heartbeat-secs",
+        type=int,
+        default=30,
+        help="Seconds between keep alive pings while a query executes, 0 disables (default %(default)s)",
+    )
     parser.add_argument("--log-file", type=Path, default=None, help="File to log messages to (disabled by default)")
     parser.add_argument(
         "--forwarded-allow-ips",
@@ -96,6 +102,7 @@ def start_server(args: argparse.Namespace):
             master_key=master_key,
             chunk_size=args.chunk_size,
             max_concurrency_per_user=args.max_concurrency_per_user,
+            heartbeat_secs=args.heartbeat_secs,
         ),
         host=args.host,
         port=args.port,

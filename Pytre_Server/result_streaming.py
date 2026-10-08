@@ -1,4 +1,3 @@
-import asyncio
 import json
 from collections.abc import AsyncGenerator
 from dataclasses import replace
@@ -17,24 +16,7 @@ class DisconnectAware(Protocol):
     async def is_disconnected(self) -> bool: ...
 
 
-async def stream_result_and_release(
-    result: AsyncSqlResult,
-    http_request: DisconnectAware,
-    semaphore: asyncio.Semaphore,
-    chunk_size: int,
-    execution_logs: ServerDriven | None,
-    log_entry: ExecutionLogEntry,
-) -> AsyncGenerator[str]:
-    """Delegates to _stream_result_ndjson, then releases the per-user semaphore
-    once streaming ends no matter the reason"""
-    try:
-        async for chunk in _stream_result_ndjson(result, http_request, chunk_size, execution_logs, log_entry):
-            yield chunk
-    finally:
-        semaphore.release()
-
-
-async def _stream_result_ndjson(
+async def stream_result_ndjson(
     result: AsyncSqlResult,
     http_request: DisconnectAware,
     chunk_size: int,

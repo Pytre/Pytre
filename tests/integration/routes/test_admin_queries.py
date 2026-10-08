@@ -103,6 +103,42 @@ def test_reload_queries_reports_a_failed_reload(admin_client, monkeypatch):
     assert "Reload failed: boom" in response.text
 
 
+def test_reload_queries_reports_a_build_error_in_the_flash_message(admin_client, tmp_path):
+    """A query whose file parses fine but fails to build into a Query (here: an invalid parameter
+    name) used to vanish silently from every user's /queries list, with nothing shown anywhere -
+    reload must now surface it too, not just a load_files()-level parse failure."""
+    (tmp_path / "BAD.sql").write_text("/*\ncode: BAD\n*/\nDECLARE\n@!X as int = 1  -- Desc|ENTRY\n;\nSELECT 1")
+    admin_client.app.state.server.app_ctx.settings.queries_folder = tmp_path
+
+    response = admin_client.post("/admin/queries/reload", follow_redirects=False)
+    response = admin_client.get(response.headers["location"])
+
+    assert "Queries reloaded (1 loaded, 1 error(s))" in response.text
+    assert "BAD.sql" in response.text
+
+
+def test_reload_queries_reports_no_errors_for_a_valid_query(admin_client, tmp_path):
+    (tmp_path / "GOOD.sql").write_text("/*\ncode: GOOD\n*/\nSELECT 1")
+    admin_client.app.state.server.app_ctx.settings.queries_folder = tmp_path
+
+    response = admin_client.post("/admin/queries/reload", follow_redirects=False)
+    response = admin_client.get(response.headers["location"])
+
+    assert "Queries reloaded (1 loaded)" in response.text
+
+
+def test_queries_list_shows_build_error_after_reload_without_the_flash_message(admin_client, tmp_path):
+    """The build-error banner must persist on a plain GET /admin/queries, not just the one
+    reload's flash redirect - it comes from the stored catalog, not a query-string message."""
+    (tmp_path / "BAD.sql").write_text("/*\ncode: BAD\n*/\nDECLARE\n@!X as int = 1  -- Desc|ENTRY\n;\nSELECT 1")
+    admin_client.app.state.server.app_ctx.settings.queries_folder = tmp_path
+    admin_client.post("/admin/queries/reload")
+
+    response = admin_client.get("/admin/queries")
+
+    assert "BAD.sql" in response.text
+
+
 # ------------------------------------------------------------------------------------------
 # Edit (hash exemption only)
 # ------------------------------------------------------------------------------------------

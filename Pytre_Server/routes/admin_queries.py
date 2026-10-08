@@ -11,8 +11,10 @@ from urllib.parse import quote_plus
 from fastapi import APIRouter, Depends, Form, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 
+from Pytre_Core.context import UserContext
 from Pytre_Core.sql_query.file_parser import FileParser
 from Pytre_Server.query_catalog import QueryCatalog
+from Pytre_Server.routes.admin_auth import require_admin_session
 from Pytre_Server.server_state import ServerState, get_server_state
 from Pytre_Server.templating import templates
 
@@ -70,7 +72,7 @@ def queries_list(
     rows = [_build_query_row(p, state.resources.ignore_hash_until) for p in state.query_catalog.parsers]
     context = {
         "rows": rows,
-        "load_errors": state.query_catalog.load_errors,
+        "load_errors": state.query_catalog.load_errors + state.query_catalog.build_errors,
         "msg": msg,
         "error": error,
     }
@@ -78,15 +80,26 @@ def queries_list(
 
 
 @router.post("/reload", response_class=RedirectResponse)
-def queries_reload(request: Request, state: ServerState = Depends(get_server_state)) -> RedirectResponse:
+def queries_reload(
+    request: Request,
+    admin_username: str = Depends(require_admin_session),
+    state: ServerState = Depends(get_server_state),
+) -> RedirectResponse:
     """Rebuilds the query catalog and swaps app.state.server for a new ServerState reusing the
     same resources (drivers, ignore_hash_until...) - never mutated in place, so a request already
-    in flight keeps a consistent view of whichever catalog it started with (see QueryCatalog)."""
+    in flight keeps a consistent view of whichever catalog it started with (see QueryCatalog).
+
+    Also builds a Query from every parser using the reloading admin's own identity to surface
+    structurally broken queries (bad param/template syntax...) - a broken query just silently
+    disappears from every user's /queries list, with nothing shown anywhere."""
     try:
         new_catalog = QueryCatalog.load(state.app_ctx.settings.queries_folder)
     except Exception as e:
         msg = f"Reload failed: {quote_plus(str(e))}"
         return RedirectResponse(url=f"/admin/queries?error={msg}", status_code=status.HTTP_303_SEE_OTHER)
+
+    admin_ctx = UserContext(state.app_ctx.users, username=admin_username)
+    new_catalog = new_catalog.with_build_errors(state.app_ctx, admin_ctx)
 
     request.app.state.server = ServerState(
         app_ctx=state.app_ctx,
@@ -97,8 +110,9 @@ def queries_reload(request: Request, state: ServerState = Depends(get_server_sta
         resources=state.resources,
     )
 
+    total_errors = new_catalog.load_errors + new_catalog.build_errors
     msg = f"Queries reloaded ({len(new_catalog.parsers)} loaded"
-    msg += f", {len(new_catalog.load_errors)} error(s)" if new_catalog.load_errors else ""
+    msg += f", {len(total_errors)} error(s)" if total_errors else ""
     msg += ")"
     return RedirectResponse(url=f"/admin/queries?msg={msg}", status_code=status.HTTP_303_SEE_OTHER)
 

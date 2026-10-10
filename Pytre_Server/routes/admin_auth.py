@@ -114,7 +114,7 @@ def require_admin_session(request: Request, state: ServerState = Depends(get_ser
     username = payload["sub"]
     issued_at = datetime.fromtimestamp(payload["iat"], tz=timezone.utc)
 
-    user = UserContext(state.app_ctx.users, username=username).current_user
+    user = UserContext(state.app_ctx.users, username=username).user
     if (
         not user.exists
         or not user.admin
@@ -187,7 +187,7 @@ def admin_login_submit(
             request, "admin/login.html", context, status_code=status.HTTP_429_TOO_MANY_REQUESTS
         )
 
-    user = UserContext(state.app_ctx.users, username=username).current_user
+    user = UserContext(state.app_ctx.users, username=username).user
     is_valid_admin = user.exists and user.auth_type == AuthType.BASIC and user.admin
     password_ok = verify_password(password, user.password_hash if is_valid_admin else "")
 

@@ -11,6 +11,7 @@ from unittest.mock import Mock, patch, MagicMock
 from multiprocessing import Queue, Event as proc_get_event
 from queue import Empty as QueueIsEmpty
 
+from Pytre_Core.context import AppMode
 from Pytre_Core.sql_query.execution_runner import ExecutionRunner, ProcessConfig
 
 
@@ -104,7 +105,7 @@ def fake_process_factory():
 def test_execution_runner_initialization(fake_process_factory):
     """ExecutionRunner should initialize with queues and events, and become ready"""
     with patch("Pytre_Core.sql_query.execution_runner.Process", side_effect=fake_process_factory):
-        runner = ExecutionRunner()
+        runner = ExecutionRunner(AppMode.HYBRID)
 
         assert runner.queue_task is not None
         assert runner.queue_result is not None
@@ -128,7 +129,7 @@ def test_execution_runner_stays_not_ready_if_child_signals_failure():
         return mock_proc
 
     with patch("Pytre_Core.sql_query.execution_runner.Process", side_effect=factory):
-        runner = ExecutionRunner()
+        runner = ExecutionRunner(AppMode.HYBRID)
         _wait_until(lambda: runner.creating_process is False)
 
     assert runner.process_ready is False
@@ -138,10 +139,28 @@ def test_execution_runner_stays_not_ready_if_child_signals_failure():
 def test_execution_runner_create_process(fake_process_factory):
     """ExecutionRunner should create process in background"""
     with patch("Pytre_Core.sql_query.execution_runner.Process", side_effect=fake_process_factory):
-        runner = ExecutionRunner()
+        runner = ExecutionRunner(AppMode.HYBRID)
 
         # Should have process
         _wait_until(lambda: runner.process is not None)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("app_mode", [AppMode.HYBRID, AppMode.CLIENT])
+def test_execution_runner_passes_app_mode_to_process(fake_process_factory, app_mode):
+    """The child process gets the main process' mode instead of detecting it on its own"""
+    captured_args = []
+
+    def factory(target=None, args: tuple = (), daemon=None):
+        captured_args.append(args)
+        return fake_process_factory(target=target, args=args, daemon=daemon)
+
+    with patch("Pytre_Core.sql_query.execution_runner.Process", side_effect=factory):
+        runner = ExecutionRunner(app_mode)
+        _wait_until(lambda: runner.process_ready is True)
+
+    assert captured_args[0] == (captured_args[0][0], app_mode)
+    assert runner.app_mode is app_mode
 
 
 # ================================================================================
@@ -153,7 +172,7 @@ def test_execution_runner_create_process(fake_process_factory):
 def test_execution_runner_kill_and_restart(fake_process_factory):
     """ExecutionRunner should terminate the process and recreate it"""
     with patch("Pytre_Core.sql_query.execution_runner.Process", side_effect=fake_process_factory):
-        runner = ExecutionRunner()
+        runner = ExecutionRunner(AppMode.HYBRID)
         _wait_until(lambda: runner.process_ready is True)
 
         old_process = cast(Mock, runner.process)
@@ -172,7 +191,7 @@ def test_execution_runner_kill_and_restart(fake_process_factory):
 def test_execution_runner_stop_process(fake_process_factory):
     """ExecutionRunner should signal stop via event"""
     with patch("Pytre_Core.sql_query.execution_runner.Process", side_effect=fake_process_factory):
-        runner = ExecutionRunner()
+        runner = ExecutionRunner(AppMode.HYBRID)
 
         # Should have stop_requested event
         assert runner.stop_requested is not None
@@ -187,7 +206,7 @@ def test_execution_runner_stop_process(fake_process_factory):
 def test_execution_runner_kill_and_restart_falls_back_to_kill(fake_process_factory):
     """kill_and_restart should escalate to kill() if terminate() didn't stop the process"""
     with patch("Pytre_Core.sql_query.execution_runner.Process", side_effect=fake_process_factory):
-        runner = ExecutionRunner()
+        runner = ExecutionRunner(AppMode.HYBRID)
         _wait_until(lambda: runner.process_ready is True)
 
         old_process = cast(Mock, runner.process)
@@ -205,7 +224,7 @@ def test_execution_runner_kill_and_restart_falls_back_to_kill(fake_process_facto
 def test_execution_runner_kill_and_restart_without_process(fake_process_factory):
     """kill_and_restart should log a warning and still recreate the process if none existed"""
     with patch("Pytre_Core.sql_query.execution_runner.Process", side_effect=fake_process_factory):
-        runner = ExecutionRunner()
+        runner = ExecutionRunner(AppMode.HYBRID)
         _wait_until(lambda: runner.process_ready is True)
 
         runner.process = None
@@ -224,7 +243,7 @@ def test_execution_runner_kill_and_restart_without_process(fake_process_factory)
 def test_input_task_raises_if_creating_process(fake_process_factory):
     """input_task should raise if a process is currently being created"""
     with patch("Pytre_Core.sql_query.execution_runner.Process", side_effect=fake_process_factory):
-        runner = ExecutionRunner()
+        runner = ExecutionRunner(AppMode.HYBRID)
         _wait_until(lambda: runner.process_ready is True)
 
         runner.creating_process = True
@@ -237,7 +256,7 @@ def test_input_task_raises_if_creating_process(fake_process_factory):
 def test_input_task_raises_if_not_ready(fake_process_factory):
     """input_task should raise if the process isn't ready yet"""
     with patch("Pytre_Core.sql_query.execution_runner.Process", side_effect=fake_process_factory):
-        runner = ExecutionRunner()
+        runner = ExecutionRunner(AppMode.HYBRID)
         _wait_until(lambda: runner.creating_process is False)
         runner.process_ready = False
 
@@ -249,7 +268,7 @@ def test_input_task_raises_if_not_ready(fake_process_factory):
 def test_input_task_recreates_process_if_dead(fake_process_factory):
     """input_task should recreate the process and raise if it's no longer alive"""
     with patch("Pytre_Core.sql_query.execution_runner.Process", side_effect=fake_process_factory):
-        runner = ExecutionRunner()
+        runner = ExecutionRunner(AppMode.HYBRID)
         _wait_until(lambda: runner.process_ready is True)
 
         process = cast(Mock, runner.process)
@@ -263,7 +282,7 @@ def test_input_task_recreates_process_if_dead(fake_process_factory):
 def test_input_task_queues_start_message(fake_process_factory):
     """input_task should put a 'start' message on the task queue"""
     with patch("Pytre_Core.sql_query.execution_runner.Process", side_effect=fake_process_factory):
-        runner = ExecutionRunner()
+        runner = ExecutionRunner(AppMode.HYBRID)
         _wait_until(lambda: runner.process_ready is True)
 
         runner.task_killed = True
@@ -285,7 +304,7 @@ def test_execution_runner_queues_are_multiprocessing_queues(fake_process_factory
     from multiprocessing.queues import Queue as MpQueue
 
     with patch("Pytre_Core.sql_query.execution_runner.Process", side_effect=fake_process_factory):
-        runner = ExecutionRunner()
+        runner = ExecutionRunner(AppMode.HYBRID)
 
         assert isinstance(runner.queue_task, MpQueue)
         assert isinstance(runner.queue_result, MpQueue)
@@ -300,7 +319,7 @@ def test_execution_runner_queues_are_multiprocessing_queues(fake_process_factory
 def test_execution_runner_has_lock(fake_process_factory):
     """ExecutionRunner should have lock for thread safety"""
     with patch("Pytre_Core.sql_query.execution_runner.Process", side_effect=fake_process_factory):
-        runner = ExecutionRunner()
+        runner = ExecutionRunner(AppMode.HYBRID)
 
         # Should have lock
         assert hasattr(runner, "_create_lock")
@@ -311,7 +330,7 @@ def test_execution_runner_has_lock(fake_process_factory):
 def test_execution_runner_prevents_concurrent_creation(fake_process_factory):
     """ExecutionRunner should not spawn a second process while one is already being created"""
     with patch("Pytre_Core.sql_query.execution_runner.Process", side_effect=fake_process_factory):
-        runner = ExecutionRunner()
+        runner = ExecutionRunner(AppMode.HYBRID)
         _wait_until(lambda: runner.process_ready is True)
 
         nb_created_before = len(fake_process_factory.created)
@@ -326,7 +345,7 @@ def test_execution_runner_prevents_concurrent_creation(fake_process_factory):
 def test_execution_runner_skips_creation_if_process_already_alive(fake_process_factory):
     """create_process should be a no-op if the current process is already alive"""
     with patch("Pytre_Core.sql_query.execution_runner.Process", side_effect=fake_process_factory):
-        runner = ExecutionRunner()
+        runner = ExecutionRunner(AppMode.HYBRID)
         _wait_until(lambda: runner.process_ready is True)
 
         nb_created_before = len(fake_process_factory.created)
@@ -360,7 +379,7 @@ def test_execution_runner_handles_process_init_timeout_and_kills_stuck_process()
         patch("Pytre_Core.sql_query.execution_runner.Process", side_effect=factory),
         patch("Pytre_Core.sql_query.execution_runner.Queue", side_effect=[Mock(), fake_result_queue]),
     ):
-        runner = ExecutionRunner()
+        runner = ExecutionRunner(AppMode.HYBRID)
         _wait_until(lambda: runner.creating_process is False)
 
     assert runner.process_ready is False
@@ -430,18 +449,39 @@ def test_execution_process_init_builds_context():
         patch("Pytre_Core.sql_query.execution_runner.UserContext") as MockUserContext,
         patch("Pytre_Core.sql_query.execution_runner.set_log_queue") as mock_set_log_queue,
     ):
-        mock_app_ctx = Mock()
+        mock_app_ctx = Mock(acts_as_server=True)
         MockAppContext.return_value = mock_app_ctx
         mock_user_ctx = Mock()
         MockUserContext.return_value = mock_user_ctx
 
-        proc = ExecutionProcess(config)
+        proc = ExecutionProcess(config, AppMode.HYBRID)
 
     mock_set_log_queue.assert_called_once_with(config.queue_result)
+    MockAppContext.assert_called_once_with(mode=AppMode.HYBRID)
     assert proc.app_ctx is mock_app_ctx
     assert proc.user_ctx is mock_user_ctx
     MockUserContext.assert_called_once_with(mock_app_ctx.users)
     assert proc.queue_task is config.queue_task
+
+
+@pytest.mark.unit
+def test_execution_process_init_in_client_mode_has_no_users_database():
+    """In CLIENT mode the user context is built without a users database - app_ctx.users is never touched"""
+    config = ProcessConfig(
+        queue_task=Mock(), queue_result=Mock(), stop_requested=proc_get_event(), cannot_stop=proc_get_event()
+    )
+
+    with (
+        patch("Pytre_Core.sql_query.execution_runner.AppContext") as MockAppContext,
+        patch("Pytre_Core.sql_query.execution_runner.UserContext") as MockUserContext,
+        patch("Pytre_Core.sql_query.execution_runner.set_log_queue"),
+    ):
+        MockAppContext.return_value = Mock(spec=["acts_as_server"], acts_as_server=False)
+
+        ExecutionProcess(config, AppMode.CLIENT)
+
+    MockAppContext.assert_called_once_with(mode=AppMode.CLIENT)
+    MockUserContext.assert_called_once_with(None)
 
 
 @pytest.mark.unit
@@ -453,6 +493,20 @@ def test_execution_process_start_aborts_if_kee_is_ko():
     proc.start()
 
     proc.queue_result.put.assert_called_once_with(False)
+
+
+@pytest.mark.unit
+def test_execution_process_start_in_client_mode_skips_database_check():
+    """Without a KeePass database there's nothing to check - the process must not touch app_ctx.kee"""
+    from queue import Queue as ThreadQueue
+
+    proc = _make_execution_process(queue_task=ThreadQueue())
+    proc.app_ctx = Mock(spec=["acts_as_server"], acts_as_server=False)
+    proc.queue_task.put(("stop", "", ""))
+
+    proc.start()
+
+    proc.queue_result.put.assert_any_call(True)
 
 
 @pytest.mark.unit
@@ -515,6 +569,26 @@ def test_execution_process_run_task_success():
 
 
 @pytest.mark.unit
+def test_execution_process_run_task_reloads_user_prefs_before_building_the_query():
+    """The process lives for the whole app session - prefs changed in the UI since it started
+    (csv format, cache folder...) must be picked up before the query and its config are built"""
+    proc = _make_execution_process()
+    proc.queue_result = Mock()
+    calls = []
+    proc.user_ctx.user_prefs.load = Mock(side_effect=lambda: calls.append("load"))
+
+    with (
+        patch("Pytre_Core.sql_query.execution_runner.Query") as MockQuery,
+        patch("Pytre_Core.sql_query.execution_runner.QueryExecute") as MockQueryExecute,
+    ):
+        MockQuery.deserialize = Mock(side_effect=lambda *args, **kwargs: calls.append("deserialize") or Mock())
+        MockQueryExecute.return_value.execute = Mock(return_value=(0, None))
+        proc.run_task("SRV1", {"name": "Q1"})
+
+    assert calls == ["load", "deserialize"]
+
+
+@pytest.mark.unit
 def test_execution_process_run_task_handles_error():
     """run_task should report an 'error' message and still send 'done' if execution raises"""
     proc = _make_execution_process()
@@ -539,7 +613,7 @@ def test_run_execution_process_starts_execution_process():
         mock_instance = Mock()
         MockExecProcess.return_value = mock_instance
 
-        run_execution_process(config)
+        run_execution_process(config, AppMode.CLIENT)
 
-    MockExecProcess.assert_called_once_with(config)
+    MockExecProcess.assert_called_once_with(config, AppMode.CLIENT)
     mock_instance.start.assert_called_once()

@@ -8,13 +8,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from datetime import datetime
 
-from Pytre_Core import old_files, settings, users, utils
+from Pytre_Core import old_files, utils
 from Pytre_Core.about import APP_NAME, APP_VERSION, APP_STATUS
-from Pytre_Core.context import AppContext, UserContext
+from Pytre_Core.context import AppContext, AppMode, UserContext, detect_client_mode
+from Pytre_Core.credentials import secret_key_available
 from Pytre_Core.logs_central import ClientDriven as CentralLogs
-from Pytre_Core.remotes import RemoteServer, Remotes, RemoteAuthError, RemoteSsoRequiredError
-from Pytre_Core.servers import Server, Servers
-from Pytre_Core.user_prefs import UserPrefs, PrefsEnum
+from Pytre_Core.remotes import RemoteServer, RemoteAuthError, RemoteSsoRequiredError
+from Pytre_Core.servers import Server
+from Pytre_Core.user_prefs import PrefEnum
 
 from Pytre_Core.sql_query.execution_runner import ExecutionRunner
 from Pytre_Core.sql_query.execution_msg import ExecResultMsg
@@ -64,21 +65,16 @@ class ParamWidgetGroup:
 
 
 class App(tk.Toplevel):
-    def __init__(self):
+    def __init__(self, mode: AppMode = AppMode.CLIENT):
         super().__init__()
         self.master.withdraw()  # type: ignore
         self.withdraw()  # hide until initialization is complete to avoid visual artifacts
 
         self.console_app: ConsoleWindow = ConsoleWindow(parent=self, hide=True)
 
-        self.app_ctx: AppContext = AppContext()
-        self.user_ctx: UserContext = UserContext(users=self.app_ctx.users)
+        self.app_ctx: AppContext = AppContext(mode=mode)
+        self.user_ctx: UserContext = UserContext(users=self.app_ctx.users if self.app_ctx.acts_as_server else None)
 
-        self.user: users.User = self.user_ctx.current_user
-        self.user_prefs: UserPrefs = self.user_ctx.user_prefs
-        self.app_settings: settings.Settings = self.app_ctx.settings
-        self.servers: Servers = self.app_ctx.servers
-        self.remotes: Remotes = self.user_ctx.remotes
         self.servers_dict: dict[str, Server | RemoteServer] = {}
         self.server_id: str = ""
         self._central_logs: CentralLogs | None = None
@@ -95,7 +91,7 @@ class App(tk.Toplevel):
         self.ensure_admin_exists()  # crée un admin si aucun n'existe
 
         self.process_running: bool = False
-        self.exec_runner: ExecutionRunner = ExecutionRunner()
+        self.exec_runner: ExecutionRunner = ExecutionRunner(self.app_ctx.mode)
         self.start_time: datetime | None = None
         self._timer_after_id: str | None = None
 
@@ -116,7 +112,10 @@ class App(tk.Toplevel):
         self.cache_folder_cleanup()
 
     def check_database_access(self, max_attempts=5):
-        kee = self.servers.kee
+        if not self.app_ctx.acts_as_server:
+            return
+
+        kee = self.app_ctx.servers.kee
         if not kee.is_ko:
             return
 
@@ -130,7 +129,7 @@ class App(tk.Toplevel):
                 messagebox.showerror(title, "Aucun mot de passe saisie.\nFermeture de l'application.")
                 break
             # si réussite ouverture de la base, on sort
-            if kee.pwd_try([pwd]):
+            if kee.pwd_try(pwd):
                 messagebox.showinfo(title, "Accès restauré.\nL'application va fermer, merci de la réouvrir.")
                 break
 
@@ -148,67 +147,70 @@ class App(tk.Toplevel):
         raise SystemExit
 
     def ensure_admin_exists(self):
-        if not self.user.users.users_admin_exists():
+        if self.app_ctx.acts_as_server and not self.app_ctx.users.users_admin_exists():
             msg = (
                 "Aucun administrateur n'existe !\n"
                 + "Vous allez être ajouté en tant qu'administrateur par défaut.\n"
                 + "Pensez à mettre à jour le mot de passe et les utilisateurs après."
             )
             messagebox.showinfo(title="Base créée", message=msg)
-            self.user.admin = True
-            self.user.save()
+            self.user_ctx.user.admin = True
+            self.user_ctx.user.save()
 
     def check_user_access(self):
-        if not self.user.is_authorized:
+        if not self.user_ctx.user.is_authorized:
             messagebox.showerror(
                 "Erreur",
                 "Vous n'êtes pas dans liste des utilisateurs autorisées !"
                 + "\nDonnées d'identification :"
-                + f"\n- User : {self.user.username}",
+                + f"\n- User : {self.user_ctx.user.username}",
                 parent=self,
             )
             self.app_exit()
             raise SystemExit
 
     def check_min_version(self):
-        queries_folder = Path(self.app_settings.queries_folder)
+        if not self.app_ctx.acts_as_server:
+            return  # version is controlled from the queries folder, which only exists in hybrid mode
+
+        queries_folder = Path(self.app_ctx.settings.queries_folder)
         if not queries_folder.is_dir():
             messagebox.showerror(
                 "Répertoire inexistant",
                 f"Répertoire des requêtes non trouvée :\n{queries_folder}",
                 parent=self,
             )
-            if not self.user.admin:
+            if not self.user_ctx.user.admin:
                 self.app_exit()
                 raise SystemExit
             return
 
         # récupération version minimum exigée pour l'application et les settings
         try:
-            min_app, min_settings, retrieve_failed = self.app_settings.get_min_version(queries_folder)
+            min_app, min_settings, retrieve_failed = self.app_ctx.settings.get_min_version(queries_folder)
         except ValueError as e:
             messagebox.showerror("Erreur", f"Erreur récupération versions mini : {e}", parent=self)
-            if not self.user.admin:
+            if not self.user_ctx.user.admin:
                 self.app_exit()
                 raise SystemExit
             return
 
         # vérification version settings
-        if not self.app_settings.ctrl_version(self.app_settings.settings_version, min_settings):
+        if not self.app_ctx.settings.ctrl_version(self.app_ctx.settings.settings_version, min_settings):
             messagebox.showerror(
                 "Version settings.db",
                 "Le fichier settings.db utilisé n'est pas à jour :"
-                f"\n  - Version utilisée : {self.app_settings.settings_version}"
+                f"\n  - Version utilisée : {self.app_ctx.settings.settings_version}"
                 f"\n  - Version mini : {min_settings}"
                 "\n\nMerci d'utiliser le fichier des settings à jour",
                 parent=self,
             )
-            if not self.user.admin:
+            if not self.user_ctx.user.admin:
                 self.app_exit()
                 raise SystemExit
 
         # vérification version application
-        if not self.app_settings.ctrl_version(APP_VERSION, min_app):
+        if not self.app_ctx.settings.ctrl_version(APP_VERSION, min_app):
             messagebox.showerror(
                 f"Version {APP_NAME}",
                 f"Votre version de {APP_NAME} n'est pas à jour :"
@@ -217,7 +219,7 @@ class App(tk.Toplevel):
                 "\n\nMerci d'utiliser une version à jour",
                 parent=self,
             )
-            if not self.user.admin:
+            if not self.user_ctx.user.admin:
                 self.app_exit()
                 raise SystemExit
 
@@ -232,8 +234,8 @@ class App(tk.Toplevel):
             )
 
     def cache_folder_cleanup(self):
-        cache_folder = self.user_prefs.get(PrefsEnum.cache_folder)
-        cache_number_of_days = self.app_settings.users_cache_expiration
+        cache_folder = self.user_ctx.user_prefs.get(PrefEnum.CACHE_FOLDER)
+        cache_number_of_days = self.user_ctx.user_prefs.get(PrefEnum.CACHE_DAYS)
 
         files = old_files.list_old_files(cache_folder, age_in_days=cache_number_of_days)
         if files:
@@ -249,7 +251,7 @@ class App(tk.Toplevel):
     def setup_app_identity(self):
         self.title(self.get_default_title())
 
-        icon_file = self.app_settings.app_path / "res" / "app.png"
+        icon_file = utils.get_app_path() / "res" / "app.png"
         icon_img = tk.PhotoImage(file=icon_file)
         self.iconphoto(True, icon_img)
         self.console_app.iconphoto(True, icon_img)  # setting icon for console is also needed
@@ -298,7 +300,7 @@ class App(tk.Toplevel):
         self.menu_query.add_separator()
         self.menu_query.add_command(
             label="Dossier cache...",
-            command=lambda: self.open_folder(self.user_prefs.get(PrefsEnum.cache_folder)),
+            command=lambda: self.open_folder(self.user_ctx.user_prefs.get(PrefEnum.CACHE_FOLDER)),
         )
         self.menu_query.add_separator()
         self.menu_query.add_command(label="Quitter", command=self.app_exit)
@@ -310,7 +312,7 @@ class App(tk.Toplevel):
         menubar.add_cascade(label="Préférences", menu=menu_prefs)
 
         menu_admin = None
-        if self.user.admin:
+        if self.app_ctx.acts_as_server and self.user_ctx.user.admin:
             menu_admin = tk.Menu(menubar, tearoff=False)
             menu_admin.add_command(label="Utilisateurs...", command=self.manage_users)
             menu_admin.add_command(label="Serveurs...", command=self.manage_servers)
@@ -322,7 +324,7 @@ class App(tk.Toplevel):
             self.menu_admin_queries = tk.Menu(menubar, tearoff=False)
             self.menu_admin_queries.add_command(
                 label="Dossier...",
-                command=lambda: self.open_folder(self.app_settings.queries_folder),
+                command=lambda: self.open_folder(self.app_ctx.settings.queries_folder),
             )
             self.menu_admin_queries.add_command(label="Liste orphelines", command=self.orphan_queries)
 
@@ -337,7 +339,7 @@ class App(tk.Toplevel):
 
         if theme_is_on():
             menus: list[tk.Menu] = [menubar, self.menu_query, menu_prefs, menu_about]
-            if self.user.admin and menu_admin is not None:
+            if self.user_ctx.user.admin and menu_admin is not None:
                 menus.extend([menu_admin, self.menu_admin_queries])
             set_menus(menus)
 
@@ -799,7 +801,7 @@ class App(tk.Toplevel):
 
         self.menu_query.entryconfig("Recharger", state="disable")
 
-        if self.user.admin:
+        if self.user_ctx.user.admin:
             self.menu_admin_queries.entryconfig("Liste orphelines", state="disable")
 
         self.servers_cb["state"] = "disable"
@@ -819,7 +821,7 @@ class App(tk.Toplevel):
 
         self.menu_query.entryconfig("Recharger", state="normal")
 
-        if self.user.admin:
+        if self.user_ctx.user.admin:
             self.menu_admin_queries.entryconfig("Liste orphelines", state="normal")
 
         self.servers_cb["state"] = "readonly"
@@ -855,7 +857,7 @@ class App(tk.Toplevel):
         self.queries_filter_text.set("")
 
         remote_target = remote_server
-        refresh_local = remote_server is None
+        refresh_local = remote_server is None and self.app_ctx.acts_as_server
         first_load = self._queries_first_load
 
         if remote_server:
@@ -873,7 +875,7 @@ class App(tk.Toplevel):
 
             if refresh_local:
                 try:
-                    folder = self.app_settings.queries_folder
+                    folder = self.app_ctx.settings.queries_folder
                     q, e = get_queries(self.app_ctx, self.user_ctx, folder)
                     queries_local, errors_local = {"local": q}, {"local": e}
                 except Exception as e:
@@ -881,7 +883,7 @@ class App(tk.Toplevel):
 
             if remote_target:
                 try:
-                    remote_target.get_serialized_queries()
+                    remote_target.get_serialized_queries(self.user_ctx.display_format)
                     q, e = build_queries_from_remote(self.app_ctx, self.user_ctx, remote_target)
 
                     remote_id = remote_target.description or remote_target.id_on_remote
@@ -906,18 +908,18 @@ class App(tk.Toplevel):
             self.queries_filter()
             self.tree_autosize()
 
-            # message d'accueil si initialisation de l'appli
+            # signaler l'absence de remote en mode client si initialisation de l'appli
             if self._queries_first_load:
                 self._queries_first_load = False
-                default_msg = f"Bonjour {self.user.title.split(' ')[0]} !" if self.user.title else "Bonjour !"
-                custom_msg = self.user.msg_login
-                self.output_msg(str(custom_msg or default_msg) + "\n", "1.0", "1.0")
+
+                if not self.app_ctx.acts_as_server and not self.user_ctx.remotes.remotes_dict:
+                    self.output_msg("Aucune remote, ajouter en une : Préférences -> Remotes...\n", "end")
 
             # liste des erreurs si problèmes rencontrés
             errors_msg: list[str] = errors.get("local", []) + errors.get("remote", [])
 
             if reload_remotes:  # récup des problèmes de récupération des serveurs par les remotes
-                for r in self.remotes.remotes_dict.values():
+                for r in self.user_ctx.remotes.remotes_dict.values():
                     if r.last_error:
                         errors_msg.append(str(r.last_error))
 
@@ -956,10 +958,12 @@ class App(tk.Toplevel):
 
     def refresh_servers(self, reload_servers: bool = False, reload_remotes: bool = False):
         # refresh servers_dict with local and remote servers
-        grp_authorized = self.user.groups if not self.user.admin else None
-        local_servers: dict = self.servers.get_all_servers(reload_servers, grp_authorized)
+        local_servers: dict = {}
+        if self.app_ctx.acts_as_server:
+            grp_authorized = self.user_ctx.user.groups if not self.user_ctx.user.admin else None
+            local_servers: dict = self.app_ctx.servers.get_all_servers(reload_servers, grp_authorized)
 
-        remote_servers: dict[str, RemoteServer] = self.remotes.get_all_servers(reload=reload_remotes)
+        remote_servers: dict[str, RemoteServer] = self.user_ctx.remotes.get_all_servers(reload=reload_remotes)
 
         self.servers_dict = local_servers | remote_servers
 
@@ -977,7 +981,7 @@ class App(tk.Toplevel):
         self.servers_cb["values"] = tuple(servers_name)
         if self.servers_dict:
             if self.servers_cb.current() == -1:
-                self.server_id = self.user_prefs.get(PrefsEnum.last_server)
+                self.server_id = self.user_ctx.user_prefs.get(PrefEnum.LAST_SERVER)
 
             pos = servers_id.index(self.server_id) if self.server_id in servers_id else 0
             self.server_id = servers_id[pos]
@@ -989,7 +993,7 @@ class App(tk.Toplevel):
             self.servers_label.grid_remove()
             self.servers_cb.grid_remove()
             self.left_frame.columnconfigure(1, weight=0)
-        elif not self.servers_cb.grid_remove():
+        else:
             self.servers_label.grid()
             self.servers_cb.grid()
             self.left_frame.columnconfigure(1, weight=1)
@@ -1039,8 +1043,8 @@ class App(tk.Toplevel):
     def get_central_logs(self) -> CentralLogs | None:
         if self._central_logs:
             return self._central_logs
-        elif self.app_settings.logs_are_on:
-            logs_folder = self.app_settings.logs_folder
+        elif self.app_ctx.acts_as_server and self.app_ctx.settings.logs_are_on:
+            logs_folder = self.app_ctx.settings.logs_folder
             self._central_logs = CentralLogs(logs_folder)
 
             return self._central_logs
@@ -1051,7 +1055,7 @@ class App(tk.Toplevel):
         if logs := self.get_central_logs():
             logs.stop()
 
-        self.user_prefs.set(PrefsEnum.last_server, self.server_id)
+        self.user_ctx.user_prefs.set(PrefEnum.LAST_SERVER, self.server_id)
 
         self.console_app.app_exit()
 
@@ -1073,13 +1077,13 @@ class App(tk.Toplevel):
             pass
 
     def open_folder(self, folder: str | Path):
-        if folder == self.user_prefs.get(PrefsEnum.cache_folder) and self.output_file:
+        if folder == self.user_ctx.user_prefs.get(PrefEnum.CACHE_FOLDER) and self.output_file:
             utils.showfile(self.output_file)
         else:
             utils.showfile(folder)
 
     def orphan_queries(self):
-        orphans = orphan_queries(self.app_ctx, self.user_ctx, self.app_settings.queries_folder)
+        orphans = orphan_queries(self.app_ctx, self.user_ctx, self.app_ctx.settings.queries_folder)
         if not orphans:
             self.output_msg("Aucune requête orpheline !")
         else:
@@ -1126,8 +1130,12 @@ class App(tk.Toplevel):
         server = self.servers_dict.get(self.server_id, None)
 
         # retrieve queries depending on whether server is local, remote cached or not
-        if isinstance(server, Server) or server is None:
-            self.queries = filter_queries(self.app_ctx.servers, self.queries_all_local, self.server_id, self.user)
+        if server is None:
+            self.queries = []
+        elif isinstance(server, Server):
+            self.queries = filter_queries(
+                self.app_ctx.servers, self.queries_all_local, self.server_id, self.user_ctx.user
+            )
         elif self.server_id in self.queries_by_remote_server:
             self.queries = self.queries_by_remote_server[self.server_id]
         else:
@@ -1284,7 +1292,7 @@ class App(tk.Toplevel):
         UserPrefsWindow(self.user_ctx.user_prefs, parent=self)
 
     def manage_settings(self):
-        SettingsWindow(self.app_ctx.settings, parent=self, on_close_callback=self.app_settings.reload)
+        SettingsWindow(self.app_ctx.settings, parent=self, on_close_callback=self.app_ctx.settings.reload)
 
     def manage_password(self):
         PasswordWindow(self.app_ctx.kee, parent=self)
@@ -1296,12 +1304,32 @@ class App(tk.Toplevel):
         AboutWindow(parent=self)
 
 
-def app_start():
+def app_start(mode: AppMode | None = None):
+    mode = mode or detect_client_mode()
+    if mode == AppMode.HYBRID and not secret_key_available():
+        show_hybrid_unavailable()
+        return
+
     try:
-        my_app = App()
+        my_app = App(mode)
         my_app.mainloop()
     except SystemExit:
         pass
+
+
+def show_hybrid_unavailable():
+    """Explains why this build can't open a shared settings database (built without credentials_secrets.py)"""
+    root = tk.Tk()
+    root.withdraw()
+    messagebox.showerror(
+        APP_NAME,
+        "Le mode hybride n'est pas disponible. Utilisez une version compilée avec la clé de votre"
+        " installation pour pouvoir l'utiliser."
+        "\nVous pouvez aussi lancer l'application depuis un dossier sans Pytre.db pour vous en servir"
+        " en tant que client pur.",
+        parent=root,
+    )
+    root.destroy()
 
 
 if __name__ == "__main__":

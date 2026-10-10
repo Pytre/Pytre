@@ -5,15 +5,24 @@ test - only the two tests doing a real SQL execution also need the local mssql-t
 container (marked with `requires_docker`).
 """
 
+import json
+
 import pytest
 
-from tests.integration.conftest import TEST_QUERY_ID, TEST_SERVER_ID, TEST_USERNAME, requires_docker
+from tests.integration.conftest import (
+    TEST_DISPLAY_FORMAT,
+    TEST_QUERY_ID,
+    TEST_SERVER_ID,
+    TEST_USERNAME,
+    requires_docker,
+)
 
 pytestmark = pytest.mark.integration
 
 
 def _get_real_hash(client, auth_headers, server_id: str, query_id: str) -> str:
-    response = client.get("/queries", params={"server_id": server_id}, headers=auth_headers)
+    params = {"server_id": server_id, "display_format": json.dumps(TEST_DISPLAY_FORMAT)}
+    response = client.get("/queries", params=params, headers=auth_headers)
     queries = {q["name"]: q for q in response.json()}
     return queries[query_id]["cmd_template"]
 
@@ -21,7 +30,6 @@ def _get_real_hash(client, auth_headers, server_id: str, query_id: str) -> str:
 @requires_docker
 def test_execute_returns_rows_with_correct_hash(client, auth_headers):
     import hashlib
-    import json
 
     template = _get_real_hash(client, auth_headers, TEST_SERVER_ID, TEST_QUERY_ID)
     template_hash = hashlib.sha256(template.encode("utf-8")).hexdigest()
@@ -32,7 +40,8 @@ def test_execute_returns_rows_with_correct_hash(client, auth_headers):
             "server_id": TEST_SERVER_ID,
             "query_id": TEST_QUERY_ID,
             "template_hash": template_hash,
-            "parameters": {"@1": ""},
+            "display_format": TEST_DISPLAY_FORMAT,
+            "display_parameters": {"@1": ""},
         },
         headers=auth_headers,
     )
@@ -68,7 +77,13 @@ def test_execute_only_builds_the_requested_query(client, auth_headers, monkeypat
 
     client.post(
         "/execute",
-        json={"server_id": TEST_SERVER_ID, "query_id": TEST_QUERY_ID, "template_hash": "x", "parameters": {"@1": ""}},
+        json={
+            "server_id": TEST_SERVER_ID,
+            "query_id": TEST_QUERY_ID,
+            "template_hash": "x",
+            "display_format": TEST_DISPLAY_FORMAT,
+            "display_parameters": {"@1": ""},
+        },
         headers=auth_headers,
     )
 
@@ -78,7 +93,12 @@ def test_execute_only_builds_the_requested_query(client, auth_headers, monkeypat
 def test_execute_rejects_unknown_query_id(client, auth_headers):
     response = client.post(
         "/execute",
-        json={"server_id": TEST_SERVER_ID, "query_id": "DOES_NOT_EXIST", "template_hash": "x"},
+        json={
+            "server_id": TEST_SERVER_ID,
+            "query_id": "DOES_NOT_EXIST",
+            "template_hash": "x",
+            "display_format": TEST_DISPLAY_FORMAT,
+        },
         headers=auth_headers,
     )
 
@@ -88,7 +108,12 @@ def test_execute_rejects_unknown_query_id(client, auth_headers):
 def test_execute_rejects_unknown_server_id(client, auth_headers):
     response = client.post(
         "/execute",
-        json={"server_id": "nope_server", "query_id": TEST_QUERY_ID, "template_hash": "x"},
+        json={
+            "server_id": "nope_server",
+            "query_id": TEST_QUERY_ID,
+            "template_hash": "x",
+            "display_format": TEST_DISPLAY_FORMAT,
+        },
         headers=auth_headers,
     )
 
@@ -102,6 +127,7 @@ def test_execute_rejects_stale_hash(client, auth_headers):
             "server_id": TEST_SERVER_ID,
             "query_id": TEST_QUERY_ID,
             "template_hash": "stale_hash_value",
+            "display_format": TEST_DISPLAY_FORMAT,
         },
         headers=auth_headers,
     )
@@ -124,7 +150,8 @@ def test_execute_rejects_parameter_mismatch(client, auth_headers):
             "server_id": TEST_SERVER_ID,
             "query_id": TEST_QUERY_ID,
             "template_hash": template_hash,
-            "parameters": {"@unknown": "x"},
+            "display_format": TEST_DISPLAY_FORMAT,
+            "display_parameters": {"@unknown": "x"},
         },
         headers=auth_headers,
     )
@@ -147,7 +174,8 @@ def test_execute_ignores_stale_hash_when_exempted(client, auth_headers):
             "server_id": TEST_SERVER_ID,
             "query_id": TEST_QUERY_ID,
             "template_hash": "stale_hash_value",
-            "parameters": {"@1": ""},
+            "display_format": TEST_DISPLAY_FORMAT,
+            "display_parameters": {"@1": ""},
         },
         headers=auth_headers,
     )
@@ -169,7 +197,8 @@ def test_execute_still_checks_parameters_when_hash_exempted(client, auth_headers
             "server_id": TEST_SERVER_ID,
             "query_id": TEST_QUERY_ID,
             "template_hash": "stale_hash_value",
-            "parameters": {"@unknown": "x"},
+            "display_format": TEST_DISPLAY_FORMAT,
+            "display_parameters": {"@unknown": "x"},
         },
         headers=auth_headers,
     )
@@ -191,6 +220,7 @@ def test_execute_rejects_stale_hash_once_exemption_expired(client, auth_headers)
             "server_id": TEST_SERVER_ID,
             "query_id": TEST_QUERY_ID,
             "template_hash": "stale_hash_value",
+            "display_format": TEST_DISPLAY_FORMAT,
         },
         headers=auth_headers,
     )
@@ -208,7 +238,6 @@ def test_execute_reports_pool_saturated_as_ndjson_error(client, auth_headers, mo
     fastmssql -> AsyncSqlConnectionError translation itself is unit-tested separately in
     tests/unit/core/test_query_drivers_async.py."""
     import hashlib
-    import json
 
     from Pytre_Core.sql_query.query_drivers_async import AsyncSqlConnectionError, FastMssqlDriver
 
@@ -226,7 +255,8 @@ def test_execute_reports_pool_saturated_as_ndjson_error(client, auth_headers, mo
             "server_id": TEST_SERVER_ID,
             "query_id": TEST_QUERY_ID,
             "template_hash": template_hash,
-            "parameters": {"@1": ""},
+            "display_format": TEST_DISPLAY_FORMAT,
+            "display_parameters": {"@1": ""},
         },
         headers=auth_headers,
     )
@@ -243,7 +273,6 @@ def test_execute_reports_server_unreachable_as_ndjson_error(client, auth_headers
     surface as a {"__error__": ...} NDJSON line - same reasoning and semaphore-leak concern
     as above. The driver itself is monkeypatched, so no real docker connection is attempted."""
     import hashlib
-    import json
 
     from Pytre_Core.sql_query.query_drivers_async import AsyncSqlConnectionError, FastMssqlDriver
 
@@ -261,7 +290,8 @@ def test_execute_reports_server_unreachable_as_ndjson_error(client, auth_headers
             "server_id": TEST_SERVER_ID,
             "query_id": TEST_QUERY_ID,
             "template_hash": template_hash,
-            "parameters": {"@1": ""},
+            "display_format": TEST_DISPLAY_FORMAT,
+            "display_parameters": {"@1": ""},
         },
         headers=auth_headers,
     )
@@ -290,7 +320,8 @@ def test_execute_rejects_when_user_at_concurrency_limit(client, auth_headers):
             "server_id": TEST_SERVER_ID,
             "query_id": TEST_QUERY_ID,
             "template_hash": template_hash,
-            "parameters": {"@1": ""},
+            "display_format": TEST_DISPLAY_FORMAT,
+            "display_parameters": {"@1": ""},
         },
         headers=auth_headers,
     )
@@ -310,9 +341,99 @@ def test_execute_rejects_invalid_parameter_value(client, auth_headers):
             "server_id": TEST_SERVER_ID,
             "query_id": TEST_QUERY_ID,
             "template_hash": template_hash,
-            "parameters": {"@1": "not-a-date"},
+            "display_format": TEST_DISPLAY_FORMAT,
+            "display_parameters": {"@1": "not-a-date"},
         },
         headers=auth_headers,
     )
 
     assert response.status_code == 400
+
+
+def _capture_sent_params(monkeypatch) -> dict:
+    """Patches the SQL driver so /execute stops right before the database, capturing the
+    SQL parameters it would have sent - no docker container needed."""
+    from Pytre_Core.sql_query.query_drivers_async import AsyncSqlConnectionError, FastMssqlDriver
+
+    captured = {}
+
+    async def _capture(self, template, params):
+        captured.update(params)
+        raise AsyncSqlConnectionError("stopped by test")
+
+    monkeypatch.setattr(FastMssqlDriver, "execute", _capture)
+    return captured
+
+
+@pytest.mark.parametrize(
+    ("date_format", "display_value"),
+    [
+        ("%d/%m/%Y", "10/03/2025"),
+        ("%m/%d/%Y", "03/10/2025"),
+        ("%Y-%m-%d", "2025-03-10"),
+    ],
+)
+def test_execute_parses_parameters_with_client_display_format(
+    client, auth_headers, monkeypatch, date_format, display_value
+):
+    """A date parameter is parsed with the display format sent by the client, not the server's one -
+    the same date typed in different formats reaches the database as the same value."""
+    import hashlib
+
+    captured = _capture_sent_params(monkeypatch)
+    template = _get_real_hash(client, auth_headers, TEST_SERVER_ID, TEST_QUERY_ID)
+    template_hash = hashlib.sha256(template.encode("utf-8")).hexdigest()
+
+    response = client.post(
+        "/execute",
+        json={
+            "server_id": TEST_SERVER_ID,
+            "query_id": TEST_QUERY_ID,
+            "template_hash": template_hash,
+            "display_format": {"date_format": date_format, "decimal_separator": ","},
+            "display_parameters": {"@1": display_value},
+        },
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 200
+    assert captured == {"@1": "2025-03-10"}
+
+
+def test_execute_rejects_missing_display_format(client, auth_headers):
+    response = client.post(
+        "/execute",
+        json={
+            "server_id": TEST_SERVER_ID,
+            "query_id": TEST_QUERY_ID,
+            "template_hash": "x",
+            "display_parameters": {"@1": ""},
+        },
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 422
+
+
+@pytest.mark.parametrize(
+    "display_format",
+    [
+        {"date_format": "%d/%m", "decimal_separator": ","},  # no year
+        {"date_format": "not-a-date", "decimal_separator": ","},
+        {"date_format": "%d/%m/%Y", "decimal_separator": ",,"},
+    ],
+)
+def test_execute_rejects_invalid_display_format(client, auth_headers, display_format):
+    response = client.post(
+        "/execute",
+        json={
+            "server_id": TEST_SERVER_ID,
+            "query_id": TEST_QUERY_ID,
+            "template_hash": "x",
+            "display_format": display_format,
+            "display_parameters": {"@1": ""},
+        },
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 422

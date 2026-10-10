@@ -1,7 +1,11 @@
+import codecs
+import csv
+import io
 import json
 import logging
 import shutil
 from dataclasses import dataclass
+from datetime import datetime
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -12,17 +16,42 @@ CACHE_FOLDER: Path = Path.home() / "Pytre" / ".temp_cache"
 CONFIG_FOLDER: Path = Path.home() / "Pytre"
 SETTING_FILE: Path = CONFIG_FOLDER / "Pytre_Settings.json"
 
+DEFAULT_DATE_FORMAT: str = "%d/%m/%Y"
+DEFAULT_DECIMAL_SEPARATOR: str = ","
+DEFAULT_CSV_DELIMITER: str = ";"
+DEFAULT_CSV_QUOTECHAR: str = '"'
+DEFAULT_CSV_ENCODING: str = "utf-8-sig"
+DEFAULT_CACHE_DAYS: int = 10
+
 
 def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__) -> None:
     _log(msg, level=level, sublogger=sublogger)
 
 
-class PrefsEnum(Enum):
-    """Names for json and to get/set attributes. Values for internal attribute name"""
+class PrefEnum(Enum):
+    """Values are tuple with name for json and name for internal attribute name"""
 
-    cache_folder = "_cache_folder"
-    save_as_folder = "_save_as_folder"
-    last_server = "_last_server"
+    DATE_FORMAT = ("date_format", "_date_format")
+    DECIMAL_SEPARATOR = ("decimal_separator", "_decimal_separator")
+    CSV_DELIMITER = ("csv_delimiter", "_csv_delimiter")
+    CSV_QUOTECHAR = ("csv_quotechar", "_csv_quotechar")
+    CSV_ENCODING = ("csv_encoding", "_csv_encoding")
+    CACHE_DAYS = ("cache_days", "_cache_days")
+    CACHE_FOLDER = ("cache_folder", "_cache_folder")
+    SAVE_AS_FOLDER = ("save_as_folder", "_save_as_folder")
+    LAST_SERVER = ("last_server", "_last_server")
+
+    def __init__(self, json_name: str, attr_name: str):
+        self.json_name: str = json_name
+        self.attr_name: str = attr_name
+
+    @classmethod
+    def from_json_name(cls, json_name: str) -> PrefEnum:
+        """Raises KeyError if `json_name` doesn't match any member"""
+        for member in cls:
+            if member.json_name == json_name:
+                return member
+        raise KeyError(json_name)
 
 
 class IssueType(Enum):
@@ -36,9 +65,100 @@ class Issue:
     msg: str
 
 
+@dataclass(frozen=True)
+class DisplayFormat:
+    """How an user types and reads values: used to parse and render query parameters and to format results.
+    Raises ValueError if a format is invalid."""
+
+    date_format: str = DEFAULT_DATE_FORMAT
+    decimal_separator: str = DEFAULT_DECIMAL_SEPARATOR
+
+    def __post_init__(self) -> None:
+        self.validate_date_format(self.date_format)
+        self.validate_decimal_separator(self.decimal_separator)
+
+    def to_dict(self) -> dict[str, str]:
+        return {"date_format": self.date_format, "decimal_separator": self.decimal_separator}
+
+    @staticmethod
+    def validate_date_format(date_format: str) -> bool:
+        """if not valid raise a ValueError"""
+        if not isinstance(date_format, str) or not date_format:
+            raise ValueError(f"Invalid date format: '{date_format}'")
+
+        test_date = datetime(2001, 2, 3)  # day as a valid month value and avoid strptime's defaults values (1/1/1900)
+
+        try:
+            formatted = test_date.strftime(date_format)
+            parsed = datetime.strptime(formatted, date_format)
+            if parsed.date() != test_date.date():
+                raise ValueError(f"Invalid date format: '{date_format}' does not round-trip")
+        except ValueError as e:
+            raise ValueError(f"Invalid date format: '{date_format}'") from e
+
+        return True
+
+    @staticmethod
+    def validate_decimal_separator(decimal_separator: str) -> bool:
+        """if not valid raise a ValueError"""
+        if not isinstance(decimal_separator, str) or len(decimal_separator) != 1:
+            raise ValueError(f"Invalid decimal separator: '{decimal_separator}' must be a single character")
+
+        return True
+
+
+@dataclass(frozen=True)
+class CsvFormat:
+    """How query results are written to a csv file. Raises ValueError if not usable."""
+
+    delimiter: str = DEFAULT_CSV_DELIMITER
+    quotechar: str = DEFAULT_CSV_QUOTECHAR
+    encoding: str = DEFAULT_CSV_ENCODING
+
+    def __post_init__(self) -> None:
+        self.validate_dialect(self.delimiter, self.quotechar)
+        self.validate_encoding(self.encoding)
+
+    @staticmethod
+    def validate_encoding(encoding: str) -> bool:
+        """if not valid raise a ValueError"""
+        try:
+            codecs.lookup(encoding)
+        except (LookupError, TypeError) as e:
+            raise ValueError(f"Unknown encoding format: '{encoding}'") from e
+
+        return True
+
+    @staticmethod
+    def validate_char(value: str) -> bool:
+        """Checks a csv delimiter or quote character, if not valid raise a ValueError.
+        To check both together use validate_dialect()."""
+        if not isinstance(value, str) or len(value) != 1 or value in "\r\n":
+            raise ValueError(f"Invalid csv character: '{value}' must be a single character and not a line break")
+
+        return True
+
+    @staticmethod
+    def validate_dialect(delimiter: str, quotechar: str) -> bool:
+        """Checks delimiter and quote character are usable together, if not raise a ValueError"""
+        try:
+            csv.writer(io.StringIO(), delimiter=delimiter, quotechar=quotechar, quoting=csv.QUOTE_MINIMAL)
+        except (TypeError, ValueError) as e:
+            raise ValueError(f"Invalid csv delimiter '{delimiter}' and quote character '{quotechar}' ({e})") from e
+
+        return True
+
+
 class UserPrefs:
     def __init__(self):
         self.file: Path = SETTING_FILE
+
+        self._date_format: str = DEFAULT_DATE_FORMAT
+        self._decimal_separator: str = DEFAULT_DECIMAL_SEPARATOR
+        self._csv_delimiter: str = DEFAULT_CSV_DELIMITER
+        self._csv_quotechar: str = DEFAULT_CSV_QUOTECHAR
+        self._csv_encoding: str = DEFAULT_CSV_ENCODING
+        self._cache_days: int = DEFAULT_CACHE_DAYS
         self._cache_folder: Path = CACHE_FOLDER
         self._save_as_folder: Path = Path.home()
         self._last_server: str = ""
@@ -47,6 +167,19 @@ class UserPrefs:
 
         self.load()
         self._change_cache_folder(self._cache_folder, init_load=True)  # make sure cache folder exists
+
+    @property
+    def display_format(self) -> DisplayFormat:
+        return DisplayFormat(date_format=self._date_format, decimal_separator=self._decimal_separator)
+
+    @property
+    def csv_format(self) -> CsvFormat:
+        """Always return a valid CsvFormat object. On invalid values return an object with default one."""
+        try:
+            return CsvFormat(delimiter=self._csv_delimiter, quotechar=self._csv_quotechar, encoding=self._csv_encoding)
+        except ValueError as e:
+            log(f"{e}, default csv format will be used", logging.WARNING)
+            return CsvFormat()
 
     def __repr__(self) -> str:
         return str(self.to_json())
@@ -123,7 +256,7 @@ class UserPrefs:
         """Handle for set(). Raises ValueError when _change_cache_folder() returns an ERROR Issue,
         otherwise returns a possibly empty warning string"""
 
-        pref_name = PrefsEnum.cache_folder.name
+        pref_name = PrefEnum.CACHE_FOLDER.json_name
         warning = ""
 
         old_cache_folder = self._cache_folder
@@ -144,36 +277,59 @@ class UserPrefs:
 
     def to_json(self) -> dict:
         return {
-            PrefsEnum.cache_folder.name: str(self._cache_folder),
-            PrefsEnum.save_as_folder.name: str(self._save_as_folder),
-            PrefsEnum.last_server.name: self._last_server,
+            PrefEnum.DATE_FORMAT.json_name: self._date_format,
+            PrefEnum.DECIMAL_SEPARATOR.json_name: self._decimal_separator,
+            PrefEnum.CSV_DELIMITER.json_name: self._csv_delimiter,
+            PrefEnum.CSV_QUOTECHAR.json_name: self._csv_quotechar,
+            PrefEnum.CSV_ENCODING.json_name: self._csv_encoding,
+            PrefEnum.CACHE_DAYS.json_name: self._cache_days,
+            PrefEnum.CACHE_FOLDER.json_name: str(self._cache_folder),
+            PrefEnum.SAVE_AS_FOLDER.json_name: str(self._save_as_folder),
+            PrefEnum.LAST_SERVER.json_name: self._last_server,
         }
 
-    def set(self, key: PrefsEnum, value: Any, save: bool = True, init_load: bool = False) -> str:
+    def set(self, key: PrefEnum, value: Any, save: bool = True, init_load: bool = False) -> str:
         warning = ""
 
-        if not isinstance(key, PrefsEnum):
+        if not isinstance(key, PrefEnum):
             raise TypeError(f"'{key}' n'est pas un PrefsEnum valide (type: {type(key).__name__})")
-        if not hasattr(self, key.value):
-            raise AttributeError(f"Attribut interne manquant : {key.value}")
+        if not hasattr(self, key.attr_name):
+            raise AttributeError(f"Attribut interne manquant : {key.attr_name}")
 
-        if key is PrefsEnum.cache_folder:
+        if key is PrefEnum.CACHE_FOLDER:
             warning = self._set_cache_folder(value, init_load=init_load)
-        elif key is PrefsEnum.save_as_folder:
+        elif key is PrefEnum.SAVE_AS_FOLDER:
             self._save_as_folder = Path(value) if value and Path(value).is_dir() else Path.home()
+        elif key is PrefEnum.DATE_FORMAT:
+            DisplayFormat.validate_date_format(value)
+            self._date_format = value
+        elif key is PrefEnum.DECIMAL_SEPARATOR:
+            DisplayFormat.validate_decimal_separator(value)
+            self._decimal_separator = value
+        elif key is PrefEnum.CSV_DELIMITER:
+            CsvFormat.validate_char(value)
+            self._csv_delimiter = value
+        elif key is PrefEnum.CSV_QUOTECHAR:
+            CsvFormat.validate_char(value)
+            self._csv_quotechar = value
+        elif key is PrefEnum.CSV_ENCODING:
+            CsvFormat.validate_encoding(value)
+            self._csv_encoding = value
+        elif key is PrefEnum.CACHE_DAYS:
+            self._cache_days = self.validate_cache_expiration_days(value)
         else:
-            setattr(self, key.value, value)
+            setattr(self, key.attr_name, value)
 
         if save and self.to_json() != self._cache:
             self.save()
 
         return warning
 
-    def get(self, key: PrefsEnum, default: Any = None) -> Any:
-        if not isinstance(key, PrefsEnum):
+    def get(self, key: PrefEnum, default: Any = None) -> Any:
+        if not isinstance(key, PrefEnum):
             raise TypeError(f"'{key}' n'est pas un PrefsEnum valide (type: {type(key).__name__})")
 
-        return getattr(self, key.value, default)
+        return getattr(self, key.attr_name, default)
 
     def load(self) -> None:
         json_dict = {}
@@ -185,15 +341,21 @@ class UserPrefs:
             except (json.JSONDecodeError, IOError) as e:
                 log(f"Erreur lors du chargement des préférences utilisateur : {e}", logging.WARNING)
 
-        for enum in PrefsEnum:
-            value = json_dict.get(enum.name, None)
+        for enum in PrefEnum:
+            value = json_dict.get(enum.json_name, None)
             if value is None:
                 continue
 
             try:
                 self.set(enum, value, save=False, init_load=True)
             except (TypeError, ValueError) as e:
-                log(f"Valeur invalide pour '{enum.name}': {value} ({e})", logging.WARNING)
+                log(f"Valeur invalide pour '{enum.json_name}': {value} ({e})", logging.WARNING)
+
+        try:
+            CsvFormat.validate_dialect(self._csv_delimiter, self._csv_quotechar)
+        except ValueError as e:
+            log(f"{e}, valeurs par défaut utilisées", logging.WARNING)
+            self._csv_delimiter, self._csv_quotechar = DEFAULT_CSV_DELIMITER, DEFAULT_CSV_QUOTECHAR
 
         self._cache = self.to_json()
 
@@ -211,6 +373,15 @@ class UserPrefs:
         self._cache = data
 
         return True
+
+    @staticmethod
+    def validate_cache_expiration_days(days: int | str) -> int:
+        """Returns `days` as an int, if not a positive or zero integer raise a ValueError"""
+        valid_int = isinstance(days, int) and not isinstance(days, bool) and days >= 0
+        if not (valid_int or (isinstance(days, str) and days.isdigit())):
+            raise ValueError(f"Invalid cache expiration: '{days}' must be a number of days")
+
+        return int(days)
 
 
 if __name__ == "__main__":

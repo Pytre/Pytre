@@ -15,7 +15,6 @@ from Pytre_Core.credentials import (
     crypt_to_file,
     decrypt_from_file,
     crypted_file_pwd_change,
-    crypted_file_pwd_history,
     crypted_file_pwd_get,
 )
 
@@ -186,83 +185,91 @@ def test_create_key_generates_valid_fernet_key(tmp_path):
 
 
 # ================================================================================
-# Password History Management
+# Key file (settings database password)
 # ================================================================================
 
 
-def test_crypted_file_pwd_change_creates_file(tmp_path, monkeypatch):
-    """crypted_file_pwd_change should create password history file"""
-    pwd_file = tmp_path / "pwd_history.enc"
-
-    # Mock the KEY_FILE constant
+@pytest.fixture
+def key_file(tmp_path, monkeypatch, test_encryption_key):
+    """KEY_FILE in tmp_path, encrypted with a test key rather than the developer's credentials_secrets.py"""
     import Pytre_Core.credentials as cred_module
-    monkeypatch.setattr(cred_module, "KEY_FILE", pwd_file)
 
+    pwd_file = tmp_path / "Pytre.key"
+    monkeypatch.setattr(cred_module, "KEY_FILE", pwd_file)
+    monkeypatch.setattr(cred_module, "_secret_key", lambda: test_encryption_key)
+    return pwd_file
+
+
+def test_crypted_file_pwd_change_creates_file(key_file):
     crypted_file_pwd_change("password123")
 
-    assert pwd_file.exists()
+    assert key_file.exists()
 
 
-def test_crypted_file_pwd_history_keeps_25_passwords(tmp_path, monkeypatch):
-    """Password history should keep maximum 25 passwords"""
-    pwd_file = tmp_path / "pwd_history.enc"
-
-    import Pytre_Core.credentials as cred_module
-    monkeypatch.setattr(cred_module, "KEY_FILE", pwd_file)
-
-    # Add 30 passwords
-    for i in range(30):
-        crypted_file_pwd_change(f"password{i}")
-
-    # Retrieve history
-    history = crypted_file_pwd_history()
-
-    # Should only keep 25 most recent
-    assert len(history) == 25
-    assert history[0] == "password29"  # Most recent first
-    assert history[-1] == "password5"  # Oldest kept
-
-
-def test_crypted_file_pwd_history_empty_file_returns_empty_list(tmp_path, monkeypatch):
-    """crypted_file_pwd_history should return empty list if file doesn't exist"""
-    nonexistent = tmp_path / "nonexistent.enc"
-
-    import Pytre_Core.credentials as cred_module
-    monkeypatch.setattr(cred_module, "KEY_FILE", nonexistent)
-
-    history = crypted_file_pwd_history()
-
-    assert history == []
-
-
-def test_crypted_file_pwd_get_returns_latest(tmp_path, monkeypatch):
-    """crypted_file_pwd_get should return the most recent password"""
-    pwd_file = tmp_path / "pwd_history.enc"
-
-    import Pytre_Core.credentials as cred_module
-    monkeypatch.setattr(cred_module, "KEY_FILE", pwd_file)
-
-    # Add passwords
+def test_crypted_file_pwd_get_returns_the_recorded_password(key_file):
     crypted_file_pwd_change("password1")
     crypted_file_pwd_change("password2")
-    crypted_file_pwd_change("password3")
 
-    # Get latest
-    latest = crypted_file_pwd_get()
-
-    assert latest == "password3"
+    assert crypted_file_pwd_get() == "password2"
 
 
-def test_crypted_file_pwd_get_empty_returns_empty_string(tmp_path, monkeypatch):
-    """crypted_file_pwd_get should return empty string if no password"""
-    nonexistent = tmp_path / "nonexistent.enc"
+def test_crypted_file_pwd_change_records_only_the_current_password(key_file, test_encryption_key):
+    crypted_file_pwd_change("password1")
+    crypted_file_pwd_change("password2")
+
+    assert decrypt_from_file(key_file, test_encryption_key) == "password2"
+
+
+def test_crypted_file_pwd_get_reads_first_line_of_a_legacy_history_file(key_file, test_encryption_key):
+    """Key files written by older versions hold a password history, the current password first"""
+    crypt_to_file(key_file, test_encryption_key, "current\nold1\nold2")
+
+    assert crypted_file_pwd_get() == "current"
+
+
+def test_crypted_file_pwd_get_without_key_file_returns_empty_string(key_file):
+    assert crypted_file_pwd_get() == ""
+
+
+# ================================================================================
+# credentials_secrets.py is optional (pure client mode)
+# ================================================================================
+
+
+@pytest.fixture
+def without_credentials_secrets(monkeypatch):
+    """Simulates a missing Pytre_Core/credentials_secrets.py - importing it raises ImportError"""
+    import sys
+
+    monkeypatch.setitem(sys.modules, "Pytre_Core.credentials_secrets", None)
+
+
+@pytest.mark.usefixtures("without_credentials_secrets")
+def test_credentials_module_imports_without_credentials_secrets():
+    import importlib
 
     import Pytre_Core.credentials as cred_module
-    monkeypatch.setattr(cred_module, "KEY_FILE", nonexistent)
 
-    result = crypted_file_pwd_get()
+    importlib.reload(cred_module)  # module level code must not need the secret key
 
-    assert result == ""
+
+@pytest.mark.usefixtures("without_credentials_secrets")
+def test_crypted_file_pwd_get_without_key_file_doesnt_need_credentials_secrets(tmp_path, monkeypatch):
+    import Pytre_Core.credentials as cred_module
+
+    monkeypatch.setattr(cred_module, "KEY_FILE", tmp_path / "Pytre.key")
+
+    assert crypted_file_pwd_get() == ""
+
+
+@pytest.mark.usefixtures("without_credentials_secrets")
+def test_crypted_file_pwd_change_without_credentials_secrets_raises_explicit_error(tmp_path, monkeypatch):
+    import Pytre_Core.credentials as cred_module
+
+    monkeypatch.setattr(cred_module, "KEY_FILE", tmp_path / "Pytre.key")
+
+    with pytest.raises(RuntimeError, match="credentials_secrets.py is missing"):
+        crypted_file_pwd_change("password123")
 
 
 # ================================================================================

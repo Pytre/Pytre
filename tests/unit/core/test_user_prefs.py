@@ -2,15 +2,27 @@
 Tests for Pytre/user_prefs.py
 
 REGRESSION TESTS:
-- Input validation in user preferences (folder paths)
+- Input validation in user preferences (folder paths, date format, decimal separator, csv format)
 """
 
+import dataclasses
 import pytest
 import json
 from pathlib import Path
-from unittest.mock import patch, mock_open
 
-from Pytre_Core.user_prefs import UserPrefs, PrefsEnum, CACHE_FOLDER
+from Pytre_Core.user_prefs import (
+    DEFAULT_CACHE_DAYS,
+    DEFAULT_CSV_DELIMITER,
+    DEFAULT_CSV_ENCODING,
+    DEFAULT_CSV_QUOTECHAR,
+    DEFAULT_DATE_FORMAT,
+    DEFAULT_DECIMAL_SEPARATOR,
+    CACHE_FOLDER,
+    CsvFormat,
+    DisplayFormat,
+    PrefEnum,
+    UserPrefs,
+)
 
 
 @pytest.fixture
@@ -48,10 +60,10 @@ def test_set_save_as_folder_validates_path(tmp_path):
     nonexistent = tmp_path / "nonexistent"
 
     # Set non-existent path
-    prefs.set(PrefsEnum.save_as_folder, nonexistent, save=False)
+    prefs.set(PrefEnum.SAVE_AS_FOLDER, nonexistent, save=False)
 
     # Should fallback to home directory
-    assert prefs.get(PrefsEnum.save_as_folder) == Path.home()
+    assert prefs.get(PrefEnum.SAVE_AS_FOLDER) == Path.home()
 
 
 @pytest.mark.regression
@@ -61,9 +73,9 @@ def test_set_save_as_folder_accepts_valid_directory(tmp_path):
     valid_dir = tmp_path / "valid"
     valid_dir.mkdir()
 
-    prefs.set(PrefsEnum.save_as_folder, valid_dir, save=False)
+    prefs.set(PrefEnum.SAVE_AS_FOLDER, valid_dir, save=False)
 
-    assert prefs.get(PrefsEnum.save_as_folder) == valid_dir
+    assert prefs.get(PrefEnum.SAVE_AS_FOLDER) == valid_dir
 
 
 @pytest.mark.regression
@@ -79,7 +91,7 @@ def test_set_cache_folder_nonexistent_raises_error(tmp_path):
     new_folder = tmp_path / "new_cache"
 
     with pytest.raises(ValueError, match="Dossier non valide"):
-        prefs.set(PrefsEnum.cache_folder, new_folder, save=False)
+        prefs.set(PrefEnum.CACHE_FOLDER, new_folder, save=False)
 
     assert not new_folder.exists()
 
@@ -107,6 +119,24 @@ def test_get_invalid_key_raises_typeerror():
         prefs.get("not_an_enum")  # type: ignore
 
 
+@pytest.mark.unit
+@pytest.mark.usefixtures("isolated_paths")
+@pytest.mark.parametrize("pref", list(PrefEnum), ids=lambda pref: pref.name)
+def test_pref_enum_matches_user_prefs(pref):
+    """Each member must point to an existing UserPrefs attribute and be saved under its json_name"""
+    prefs = UserPrefs()
+
+    assert hasattr(prefs, pref.attr_name)
+    assert pref.json_name in prefs.to_json()
+    assert PrefEnum.from_json_name(pref.json_name) is pref
+
+
+@pytest.mark.unit
+def test_pref_enum_from_json_name_unknown_raises_keyerror():
+    with pytest.raises(KeyError):
+        PrefEnum.from_json_name("unknown_pref")
+
+
 # ================================================================================
 # Get/Set Functionality
 # ================================================================================
@@ -117,9 +147,9 @@ def test_set_and_get_last_server():
     """Should be able to set and get last_server"""
     prefs = UserPrefs()
 
-    prefs.set(PrefsEnum.last_server, "TEST_SERVER", save=False)
+    prefs.set(PrefEnum.LAST_SERVER, "TEST_SERVER", save=False)
 
-    assert prefs.get(PrefsEnum.last_server) == "TEST_SERVER"
+    assert prefs.get(PrefEnum.LAST_SERVER) == "TEST_SERVER"
 
 
 @pytest.mark.unit
@@ -128,9 +158,9 @@ def test_get_with_default():
     prefs = UserPrefs()
 
     # Reset to ensure clean state
-    prefs.set(PrefsEnum.last_server, "", save=False)
+    prefs.set(PrefEnum.LAST_SERVER, "", save=False)
 
-    result = prefs.get(PrefsEnum.last_server, "default_value")
+    result = prefs.get(PrefEnum.LAST_SERVER, "default_value")
 
     # Should return actual value (empty string), not default
     # because key exists
@@ -142,9 +172,9 @@ def test_set_cache_folder_empty_uses_default(tmp_path):
     """Empty cache_folder should use default CACHE_FOLDER"""
     prefs = UserPrefs()
 
-    prefs.set(PrefsEnum.cache_folder, None, save=False)
+    prefs.set(PrefEnum.CACHE_FOLDER, None, save=False)
 
-    assert prefs.get(PrefsEnum.cache_folder) == CACHE_FOLDER
+    assert prefs.get(PrefEnum.CACHE_FOLDER) == CACHE_FOLDER
 
 
 @pytest.mark.unit
@@ -152,9 +182,9 @@ def test_set_save_as_folder_empty_uses_home():
     """Empty save_as_folder should use home directory"""
     prefs = UserPrefs()
 
-    prefs.set(PrefsEnum.save_as_folder, None, save=False)
+    prefs.set(PrefEnum.SAVE_AS_FOLDER, None, save=False)
 
-    assert prefs.get(PrefsEnum.save_as_folder) == Path.home()
+    assert prefs.get(PrefEnum.SAVE_AS_FOLDER) == Path.home()
 
 
 # ================================================================================
@@ -173,6 +203,12 @@ def test_to_json_returns_dict():
     assert "cache_folder" in result
     assert "save_as_folder" in result
     assert "last_server" in result
+    assert "date_format" in result
+    assert "decimal_separator" in result
+    assert "csv_delimiter" in result
+    assert "csv_quotechar" in result
+    assert "csv_encoding" in result
+    assert "cache_days" in result
 
 
 @pytest.mark.unit
@@ -185,7 +221,7 @@ def test_save_creates_json_file(tmp_path, monkeypatch):
     monkeypatch.setattr(prefs, "file", test_file)
 
     # Set some values
-    prefs.set(PrefsEnum.last_server, "MY_SERVER", save=False)
+    prefs.set(PrefEnum.LAST_SERVER, "MY_SERVER", save=False)
 
     # Save
     success = prefs.save()
@@ -223,8 +259,8 @@ def test_load_reads_json_file(tmp_path, monkeypatch):
     prefs.load()
 
     # Verify
-    assert prefs.get(PrefsEnum.last_server) == "LOADED_SERVER"
-    assert prefs.get(PrefsEnum.save_as_folder) == tmp_path
+    assert prefs.get(PrefEnum.LAST_SERVER) == "LOADED_SERVER"
+    assert prefs.get(PrefEnum.SAVE_AS_FOLDER) == tmp_path
 
 
 @pytest.mark.unit
@@ -241,7 +277,7 @@ def test_load_handles_missing_file():
     prefs.load()
 
     # Should have default values
-    assert prefs.get(PrefsEnum.last_server) == ""
+    assert prefs.get(PrefEnum.LAST_SERVER) == ""
 
 
 @pytest.mark.unit
@@ -259,7 +295,7 @@ def test_load_handles_invalid_json(tmp_path, monkeypatch):
     prefs.load()
 
     # Should have default values
-    assert prefs.get(PrefsEnum.last_server) == ""
+    assert prefs.get(PrefEnum.LAST_SERVER) == ""
 
 
 # ================================================================================
@@ -275,7 +311,7 @@ def test_set_with_save_true_saves_to_file(tmp_path, monkeypatch):
     monkeypatch.setattr(prefs, "file", test_file)
 
     # Set with save=True (default)
-    prefs.set(PrefsEnum.last_server, "AUTO_SAVED")
+    prefs.set(PrefEnum.LAST_SERVER, "AUTO_SAVED")
 
     # File should exist
     assert test_file.exists()
@@ -295,7 +331,7 @@ def test_set_with_save_false_does_not_save(tmp_path, monkeypatch):
     monkeypatch.setattr(prefs, "file", test_file)
 
     # Set with save=False
-    prefs.set(PrefsEnum.last_server, "NOT_SAVED", save=False)
+    prefs.set(PrefEnum.LAST_SERVER, "NOT_SAVED", save=False)
 
     # File should not exist
     assert not test_file.exists()
@@ -314,7 +350,7 @@ def test_set_only_saves_if_changed(tmp_path, monkeypatch):
     monkeypatch.setattr(prefs, "file", test_file)
 
     # First save
-    prefs.set(PrefsEnum.last_server, "SERVER1")
+    prefs.set(PrefEnum.LAST_SERVER, "SERVER1")
     mtime1 = test_file.stat().st_mtime
 
     # Wait a tiny bit
@@ -323,7 +359,7 @@ def test_set_only_saves_if_changed(tmp_path, monkeypatch):
     time.sleep(0.01)
 
     # Set same value again
-    prefs.set(PrefsEnum.last_server, "SERVER1")
+    prefs.set(PrefEnum.LAST_SERVER, "SERVER1")
     mtime2 = test_file.stat().st_mtime
 
     # File should NOT have been modified (cache prevents redundant save)
@@ -410,7 +446,7 @@ def test_change_cache_folder_creation_failure_falls_back_to_default(tmp_path, mo
     bad_path = tmp_path / "forbidden"
     prefs._change_cache_folder(bad_path, init_load=True)
 
-    assert prefs.get(PrefsEnum.cache_folder) == CACHE_FOLDER
+    assert prefs.get(PrefEnum.CACHE_FOLDER) == CACHE_FOLDER
 
 
 @pytest.mark.regression
@@ -437,6 +473,368 @@ def test_legacy_cache_folder_equal_to_config_folder_triggers_migration(isolated_
     assert cache_folder.exists(), "the new default cache folder should have been created"
     assert not old_export.exists(), "the CSV should have been moved out of CONFIG_FOLDER"
     assert (cache_folder / "old_export.csv").exists(), "the CSV should now live in the cache folder"
-    assert prefs.get(PrefsEnum.cache_folder) == cache_folder
+    assert prefs.get(PrefEnum.CACHE_FOLDER) == cache_folder
 
 
+# ================================================================================
+# DisplayFormat
+# ================================================================================
+
+
+@pytest.mark.unit
+def test_display_format_defaults():
+    display_format = DisplayFormat()
+
+    assert display_format.date_format == DEFAULT_DATE_FORMAT
+    assert display_format.decimal_separator == DEFAULT_DECIMAL_SEPARATOR
+
+
+@pytest.mark.unit
+def test_display_format_to_dict():
+    display_format = DisplayFormat(date_format="%Y-%m-%d", decimal_separator=".")
+
+    assert display_format.to_dict() == {"date_format": "%Y-%m-%d", "decimal_separator": "."}
+    assert DisplayFormat(**display_format.to_dict()) == display_format
+
+
+@pytest.mark.unit
+def test_display_format_is_frozen():
+    display_format = DisplayFormat()
+
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        setattr(display_format, "date_format", "%Y-%m-%d")
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("date_format", ["%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y", "%m/%d/%Y"])
+def test_validate_date_format_valid(date_format):
+    assert DisplayFormat.validate_date_format(date_format) is True
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "date_format",
+    [
+        "not-a-date",  # no usable directive
+        "%m/%Y",  # missing day
+        "%d/%m",  # missing year
+        "yyyy-MM-dd",  # not a strftime format
+        "",
+        None,
+    ],
+)
+def test_validate_date_format_invalid_raises_error(date_format):
+    with pytest.raises(ValueError, match="Invalid date format"):
+        DisplayFormat.validate_date_format(date_format)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("decimal_separator", [",", ".", "'"])
+def test_validate_decimal_separator_valid(decimal_separator):
+    assert DisplayFormat.validate_decimal_separator(decimal_separator) is True
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("decimal_separator", ["", ",,", None, 1])
+def test_validate_decimal_separator_invalid_raises_error(decimal_separator):
+    with pytest.raises(ValueError, match="Invalid decimal separator"):
+        DisplayFormat.validate_decimal_separator(decimal_separator)
+
+
+@pytest.mark.unit
+def test_display_format_rejects_invalid_values_on_creation():
+    with pytest.raises(ValueError, match="Invalid date format"):
+        DisplayFormat(date_format="%d/%m")
+    with pytest.raises(ValueError, match="Invalid decimal separator"):
+        DisplayFormat(decimal_separator=",,")
+
+
+# ================================================================================
+# UserPrefs - date format / decimal separator
+# ================================================================================
+
+
+@pytest.mark.unit
+@pytest.mark.usefixtures("isolated_paths")
+def test_display_format_defaults_when_not_in_prefs_file():
+    prefs = UserPrefs()
+
+    assert prefs.display_format == DisplayFormat()
+
+
+@pytest.mark.unit
+@pytest.mark.usefixtures("isolated_paths")
+def test_set_date_format_and_decimal_separator_updates_display_format():
+    prefs = UserPrefs()
+
+    prefs.set(PrefEnum.DATE_FORMAT, "%Y-%m-%d", save=False)
+    prefs.set(PrefEnum.DECIMAL_SEPARATOR, ".", save=False)
+
+    assert prefs.get(PrefEnum.DATE_FORMAT) == "%Y-%m-%d"
+    assert prefs.get(PrefEnum.DECIMAL_SEPARATOR) == "."
+    assert prefs.display_format == DisplayFormat(date_format="%Y-%m-%d", decimal_separator=".")
+
+
+@pytest.mark.unit
+@pytest.mark.usefixtures("isolated_paths")
+def test_set_invalid_date_format_raises_and_keeps_previous_value():
+    prefs = UserPrefs()
+
+    with pytest.raises(ValueError, match="Invalid date format"):
+        prefs.set(PrefEnum.DATE_FORMAT, "not-a-date", save=False)
+
+    assert prefs.get(PrefEnum.DATE_FORMAT) == DEFAULT_DATE_FORMAT
+
+
+@pytest.mark.unit
+@pytest.mark.usefixtures("isolated_paths")
+def test_set_invalid_decimal_separator_raises_and_keeps_previous_value():
+    prefs = UserPrefs()
+
+    with pytest.raises(ValueError, match="Invalid decimal separator"):
+        prefs.set(PrefEnum.DECIMAL_SEPARATOR, ",,", save=False)
+
+    assert prefs.get(PrefEnum.DECIMAL_SEPARATOR) == DEFAULT_DECIMAL_SEPARATOR
+
+
+@pytest.mark.unit
+def test_date_format_and_decimal_separator_saved_and_reloaded(isolated_paths):
+    _config_folder, _cache_folder, setting_file = isolated_paths
+
+    prefs = UserPrefs()
+    prefs.set(PrefEnum.DATE_FORMAT, "%Y-%m-%d", save=False)
+    prefs.set(PrefEnum.DECIMAL_SEPARATOR, ".", save=False)
+    assert prefs.save() is True
+
+    data = json.loads(setting_file.read_text(encoding="utf-8"))
+    assert data["date_format"] == "%Y-%m-%d"
+    assert data["decimal_separator"] == "."
+
+    reloaded = UserPrefs()
+    assert reloaded.display_format == DisplayFormat(date_format="%Y-%m-%d", decimal_separator=".")
+
+
+@pytest.mark.unit
+def test_load_invalid_date_format_and_decimal_separator_use_defaults(isolated_paths):
+    """Invalid values in the prefs file are ignored, defaults are kept"""
+    _config_folder, _cache_folder, setting_file = isolated_paths
+    setting_file.write_text(json.dumps({"date_format": "yyyy-MM-dd", "decimal_separator": ",,"}), encoding="utf-8")
+
+    prefs = UserPrefs()
+
+    assert prefs.display_format == DisplayFormat()
+
+
+# ================================================================================
+# UserPrefs - csv format / cache expiration
+# ================================================================================
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("value", [";", "|", "\t", " ", '"', "'"])
+def test_validate_csv_char_valid(value):
+    assert CsvFormat.validate_char(value) is True
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("value", ["", ";;", "\n", "\r", None, 1])
+def test_validate_csv_char_invalid_raises_error(value):
+    with pytest.raises(ValueError, match="Invalid csv character"):
+        CsvFormat.validate_char(value)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(("delimiter", "quotechar"), [(";", '"'), ("|", "'"), ('"', "'"), ("\t", '"')])
+def test_validate_csv_dialect_valid(delimiter, quotechar):
+    assert CsvFormat.validate_dialect(delimiter, quotechar) is True
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(("delimiter", "quotechar"), [(";", ";"), ("'", "'"), ("\n", '"'), (";", "\r"), (";;", '"')])
+def test_validate_csv_dialect_invalid_raises_error(delimiter, quotechar):
+    with pytest.raises(ValueError, match="Invalid csv delimiter"):
+        CsvFormat.validate_dialect(delimiter, quotechar)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("encoding", ["utf-8", "utf-8-sig", "latin-1", "cp1252"])
+def test_validate_csv_encoding_valid(encoding):
+    assert CsvFormat.validate_encoding(encoding) is True
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("encoding", ["not-a-real-encoding", "", None])
+def test_validate_csv_encoding_invalid_raises_error(encoding):
+    with pytest.raises(ValueError, match="Unknown encoding format"):
+        CsvFormat.validate_encoding(encoding)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(("days", "expected"), [(0, 0), (10, 10), ("0", 0), ("30", 30)])
+def test_validate_cache_expiration_days_valid(days, expected):
+    assert UserPrefs.validate_cache_expiration_days(days) == expected
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("days", [-1, "-1", "abc", "", "1.5", 1.5, None, True])
+def test_validate_cache_expiration_days_invalid_raises_error(days):
+    with pytest.raises(ValueError, match="Invalid cache expiration"):
+        UserPrefs.validate_cache_expiration_days(days)
+
+
+@pytest.mark.unit
+@pytest.mark.usefixtures("isolated_paths")
+def test_csv_format_and_cache_expiration_defaults():
+    prefs = UserPrefs()
+
+    assert prefs.get(PrefEnum.CSV_DELIMITER) == DEFAULT_CSV_DELIMITER
+    assert prefs.get(PrefEnum.CSV_QUOTECHAR) == DEFAULT_CSV_QUOTECHAR
+    assert prefs.get(PrefEnum.CSV_ENCODING) == DEFAULT_CSV_ENCODING
+    assert prefs.get(PrefEnum.CACHE_DAYS) == DEFAULT_CACHE_DAYS
+
+
+@pytest.mark.unit
+@pytest.mark.usefixtures("isolated_paths")
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        (PrefEnum.CSV_DELIMITER, ";;"),
+        (PrefEnum.CSV_QUOTECHAR, "\n"),
+        (PrefEnum.CSV_ENCODING, "not-a-real-encoding"),
+        (PrefEnum.CACHE_DAYS, "abc"),
+    ],
+)
+def test_set_invalid_csv_format_or_cache_expiration_raises_and_keeps_previous_value(key, value):
+    prefs = UserPrefs()
+    previous = prefs.get(key)
+
+    with pytest.raises(ValueError):
+        prefs.set(key, value, save=False)
+
+    assert prefs.get(key) == previous
+
+
+@pytest.mark.unit
+@pytest.mark.usefixtures("isolated_paths")
+def test_set_csv_chars_individually_allows_swapping_them():
+    """Delimiter and quote character are only checked together by CsvFormat.validate_dialect(), so they can be
+    swapped one after the other without the first set() being rejected"""
+    prefs = UserPrefs()
+
+    prefs.set(PrefEnum.CSV_DELIMITER, '"', save=False)
+    prefs.set(PrefEnum.CSV_QUOTECHAR, ";", save=False)
+
+    assert (prefs.get(PrefEnum.CSV_DELIMITER), prefs.get(PrefEnum.CSV_QUOTECHAR)) == ('"', ";")
+
+
+@pytest.mark.unit
+def test_csv_format_defaults():
+    csv_format = CsvFormat()
+
+    assert (csv_format.delimiter, csv_format.quotechar, csv_format.encoding) == (
+        DEFAULT_CSV_DELIMITER,
+        DEFAULT_CSV_QUOTECHAR,
+        DEFAULT_CSV_ENCODING,
+    )
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"delimiter": "'", "quotechar": "'"},  # same character
+        {"delimiter": "\n"},
+        {"quotechar": ";;"},
+        {"encoding": "not-a-real-encoding"},
+    ],
+)
+def test_csv_format_rejects_unusable_values_on_creation(kwargs):
+    with pytest.raises(ValueError):
+        CsvFormat(**kwargs)
+
+
+@pytest.mark.unit
+def test_csv_format_is_frozen():
+    csv_format = CsvFormat()
+
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        setattr(csv_format, "delimiter", "|")
+
+
+@pytest.mark.unit
+@pytest.mark.usefixtures("isolated_paths")
+def test_user_prefs_csv_format_reflects_prefs():
+    prefs = UserPrefs()
+    prefs.set(PrefEnum.CSV_DELIMITER, "|", save=False)
+    prefs.set(PrefEnum.CSV_QUOTECHAR, "'", save=False)
+    prefs.set(PrefEnum.CSV_ENCODING, "latin-1", save=False)
+
+    assert prefs.csv_format == CsvFormat(delimiter="|", quotechar="'", encoding="latin-1")
+
+
+@pytest.mark.unit
+@pytest.mark.usefixtures("isolated_paths")
+def test_user_prefs_csv_format_falls_back_to_defaults_on_unusable_dialect():
+    """Delimiter and quote character are set one at a time, so they can be momentarily unusable together -
+    csv_format must still return a usable format rather than raise"""
+    prefs = UserPrefs()
+    prefs.set(PrefEnum.CSV_DELIMITER, '"', save=False)  # same as the default quote character
+
+    assert prefs.csv_format == CsvFormat()
+
+
+@pytest.mark.unit
+@pytest.mark.usefixtures("isolated_paths")
+def test_set_cache_expiration_days_converts_to_int():
+    prefs = UserPrefs()
+
+    prefs.set(PrefEnum.CACHE_DAYS, "30", save=False)
+
+    assert prefs.get(PrefEnum.CACHE_DAYS) == 30
+
+
+@pytest.mark.unit
+def test_csv_format_and_cache_expiration_saved_and_reloaded(isolated_paths):
+    _config_folder, _cache_folder, setting_file = isolated_paths
+
+    prefs = UserPrefs()
+    prefs.set(PrefEnum.CSV_DELIMITER, "|", save=False)
+    prefs.set(PrefEnum.CSV_QUOTECHAR, "'", save=False)
+    prefs.set(PrefEnum.CSV_ENCODING, "latin-1", save=False)
+    prefs.set(PrefEnum.CACHE_DAYS, "30", save=False)
+    assert prefs.save() is True
+
+    data = json.loads(setting_file.read_text(encoding="utf-8"))
+    assert data["csv_delimiter"] == "|"
+    assert data["csv_quotechar"] == "'"
+    assert data["csv_encoding"] == "latin-1"
+    assert data["cache_days"] == 30
+
+    reloaded = UserPrefs()
+    assert reloaded.get(PrefEnum.CSV_DELIMITER) == "|"
+    assert reloaded.get(PrefEnum.CSV_QUOTECHAR) == "'"
+    assert reloaded.get(PrefEnum.CSV_ENCODING) == "latin-1"
+    assert reloaded.get(PrefEnum.CACHE_DAYS) == 30
+
+
+@pytest.mark.unit
+def test_load_unusable_csv_dialect_uses_defaults(isolated_paths):
+    """Delimiter and quote character valid on their own but not together fall back to defaults"""
+    _config_folder, _cache_folder, setting_file = isolated_paths
+    setting_file.write_text(json.dumps({"csv_delimiter": "'", "csv_quotechar": "'"}), encoding="utf-8")
+
+    prefs = UserPrefs()
+
+    assert prefs.get(PrefEnum.CSV_DELIMITER) == DEFAULT_CSV_DELIMITER
+    assert prefs.get(PrefEnum.CSV_QUOTECHAR) == DEFAULT_CSV_QUOTECHAR
+
+
+@pytest.mark.unit
+def test_load_invalid_csv_encoding_and_cache_expiration_use_defaults(isolated_paths):
+    _config_folder, _cache_folder, setting_file = isolated_paths
+    setting_file.write_text(json.dumps({"csv_encoding": "not-a-real-encoding", "cache_days": "abc"}), encoding="utf-8")
+
+    prefs = UserPrefs()
+
+    assert prefs.get(PrefEnum.CSV_ENCODING) == DEFAULT_CSV_ENCODING
+    assert prefs.get(PrefEnum.CACHE_DAYS) == DEFAULT_CACHE_DAYS

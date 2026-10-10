@@ -82,7 +82,6 @@ class UserField(Enum):
     DESCRIPTION = (_CsvStatus.REQUIRED, "description", _DbKind.NATIVE, "title")
     ADMIN = (_CsvStatus.REQUIRED, "admin", _DbKind.CUSTOM, "superuser")
     GROUPS = (_CsvStatus.REQUIRED, "groups", _DbKind.TAGS, "")
-    LOGIN_MSG = (_CsvStatus.REQUIRED, "login message", _DbKind.CUSTOM, "msg_login")
 
     AUTH_TYPE = (_CsvStatus.OPTIONAL, "auth", _DbKind.CUSTOM, "auth_type")
     OIDC_LINK = (_CsvStatus.OPTIONAL, "oidc link", _DbKind.CUSTOM, "oidc_link")
@@ -99,7 +98,7 @@ class UserField(Enum):
 
     @property
     def label(self) -> str:
-        """Human-readable header label for csv_export() - "login message" -> "Login Message"."""
+        """Human-readable header label for csv_export() - "oidc link" -> "Oidc Link"."""
         return self.csv_header.title()
 
     @classmethod
@@ -376,9 +375,6 @@ class Users:
                 else:
                     u_entry.set_custom_property(UserField.ADMIN.db_key, "false")
 
-                login_msg_field = UserField.LOGIN_MSG
-                u_entry.set_custom_property(login_msg_field.db_key, row[login_msg_field.csv_header].strip())
-
                 # update optional infos
                 auth_field = UserField.AUTH_TYPE
                 if auth_field.csv_header in row:
@@ -505,7 +501,9 @@ class Users:
 
         return True
 
-    def get_current_username(self) -> str:
+    @staticmethod
+    def get_current_username() -> str:
+        """OS username, prefixed by its domain if any"""
         domain = os.environ.get("userdnsdomain") or ""
         name = getpass.getuser()
         domain_and_name = f"{domain}\\{name}" if domain else name
@@ -557,10 +555,11 @@ class AuthType(Enum):
 
 
 class User:
-    def __init__(self, users: Users, username: str = "", entry: Entry | None = None, detect_user: bool = True):
-        """If no `username`, no `entry` and if `detect_user` is False then no loading from keepass db occurs"""
+    def __init__(self, users: Users | None, username: str = "", entry: Entry | None = None, detect_user: bool = True):
+        """If no `username`, no `entry` and if `detect_user` is False then no loading from keepass db occurs.
+        Without `users` (no users database) the user is authorized, without any right, and can't be saved."""
 
-        self.users: Users = users
+        self.users: Users | None = users
 
         self.uuid: str = ""
         self.username: str = ""
@@ -575,14 +574,16 @@ class User:
         self.title: str = ""
         self.admin: bool = False
         self.groups: list[str] = ["all"]  # by default user belongs to "all" group
-        self.msg_login: str = ""
         self.attribs_cust: dict[str, str] = {}  # dict of attributes not predefined
 
         if entry:
             self._load_from_entry(entry)
         elif username or detect_user:
-            self.username = username if username else self.users.get_current_username()
-            self.load()
+            self.username = username if username else Users.get_current_username()
+            if self.users is None:
+                self.is_authorized = True
+            else:
+                self.load()
 
     @property
     def password_hash(self) -> str:
@@ -612,7 +613,7 @@ class User:
     def user_info(self, attr: str) -> str:
         """Returns an attribute value exposed to a SQL query's USER_INFO(...)"""
 
-        if attr in ("username", "title", "admin", "msg_login"):  # allowed predefined info
+        if attr in ("username", "title", "admin"):  # allowed predefined info
             return getattr(self, attr, "")
 
         return self.attribs_cust.get(attr, "")  # or custom info
@@ -628,7 +629,6 @@ class User:
             "title": self.title,
             "superuser": self.admin,
             "grp_authorized": self.groups,
-            "msg_login": self.msg_login,
         }
 
         for key, val in self.attribs_cust.items():
@@ -643,7 +643,7 @@ class User:
         return str(self.to_dict())
 
     def load(self) -> None:
-        if not self.users.open_db():
+        if self.users is None or not self.users.open_db():
             return
 
         u_entry: Entry | None = self.users.find_entry_by_username(self.username)
@@ -681,8 +681,6 @@ class User:
                     self._pwd_changed_at = None
             elif property == UserField.OIDC_LINK.db_key:
                 self.oidc_link = load_oidc_link(value)
-            elif property == UserField.LOGIN_MSG.db_key:
-                self.msg_login = value
             else:
                 self.attribs_cust[property] = value
 
@@ -697,6 +695,9 @@ class User:
     def save(self, save_db: bool = True) -> bool:
         """Updates the user's entry in memory. If `save_db` is False then save_db() is not called -
         the caller is responsible for persisting the change."""
+
+        if self.users is None:
+            raise RuntimeError("No users database, cannot save user")
 
         if self.users.kee_grp is None:
             raise ValueError("No KeePass group selected, cannot save user")
@@ -735,7 +736,6 @@ class User:
         oidc_link = json.dumps(self.oidc_link.to_dict()) if self.oidc_link else ""
 
         u_entry.set_custom_property(UserField.ADMIN.db_key, admin_val)
-        u_entry.set_custom_property(UserField.LOGIN_MSG.db_key, self.msg_login)
         u_entry.set_custom_property(UserField.AUTH_TYPE.db_key, self.auth_type.value)
         u_entry.set_custom_property(UserField.PWD_CHANGED_AT.db_key, pwd_changed_at_val)
         u_entry.set_custom_property(UserField.OIDC_LINK.db_key, oidc_link, protect=True)
@@ -756,6 +756,9 @@ class User:
         return True
 
     def delete(self) -> bool:
+        if self.users is None:
+            raise RuntimeError("No users database, cannot delete user")
+
         self.users.open_db()
         if self.users.kee.db is None:
             raise RuntimeError("Database not opened, can't delete user")
@@ -777,18 +780,16 @@ class User:
             "username": self.username,
             "title": self.title,
             "admin": self.admin,
-            "msg_login": self.msg_login,
             "attribs_cust": self.attribs_cust,
         }
 
     @classmethod
-    def create_from_remote_infos(cls, users: Users, data: dict) -> User:
+    def create_from_remote_infos(cls, users: Users | None, data: dict) -> User:
         """Create a user from a remote's infos - Used to deserialize its queries."""
         user = User(users, detect_user=False)
         user.username = data.get("username", "")
         user.title = data.get("title", "")
         user.admin = data.get("admin", False)
-        user.msg_login = data.get("msg_login", "")
         user.attribs_cust = data.get("attribs_cust", {})
 
         return user

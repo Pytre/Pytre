@@ -3,12 +3,12 @@ Tests for Pytre/context.py
 
 AppContext is the app-level composition root: it lazily builds and caches
 Kee, Settings, Servers, Users and OidcProviders on first access, guarded by a per-attribute
-lock for thread safety.
+lock for thread safety. In CLIENT mode (no KeePass database) none of them is available.
 
 UserContext is the per-user composition root: it lazily builds and caches
-User (current user), UserPrefs, UserLogs and Remotes the same way. Unlike AppContext
-it takes a Users instance directly rather than a whole context, since that's
-the only thing it actually depends on to build the current user.
+User, UserPrefs, UserLogs and Remotes the same way. Unlike AppContext
+it takes a Users instance directly (None without a users database) rather than a whole context,
+since that's the only thing it actually depends on to build the user.
 """
 
 import threading
@@ -17,7 +17,8 @@ import time
 import pytest
 from unittest.mock import Mock, patch
 
-from Pytre_Core.context import AppContext, UserContext
+from Pytre_Core.context import AppContext, AppMode, UserContext, detect_client_mode
+from Pytre_Core.user_prefs import DisplayFormat
 
 
 # ================================================================================
@@ -193,6 +194,64 @@ def test_property_access_is_thread_safe(mock_app_dependencies):
 
 
 # ================================================================================
+# AppMode / detect_client_mode
+# ================================================================================
+
+
+@pytest.mark.unit
+def test_detect_client_mode_is_hybrid_when_database_exists(tmp_path):
+    kee_file = tmp_path / "Pytre.db"
+    kee_file.write_bytes(b"")
+
+    assert detect_client_mode(kee_file) is AppMode.HYBRID
+
+
+@pytest.mark.unit
+def test_detect_client_mode_is_client_without_database_and_never_creates_it(tmp_path):
+    kee_file = tmp_path / "Pytre.db"
+
+    assert detect_client_mode(kee_file) is AppMode.CLIENT
+    assert not kee_file.exists()
+
+
+@pytest.mark.unit
+def test_app_context_defaults_to_server_mode(mock_app_dependencies):
+    ctx = AppContext()
+
+    assert ctx.mode is AppMode.SERVER
+    assert ctx.acts_as_server is True
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("mode", "acts_as_server"), [(AppMode.SERVER, True), (AppMode.HYBRID, True), (AppMode.CLIENT, False)]
+)
+def test_app_context_acts_as_server(mock_app_dependencies, mode, acts_as_server):
+    assert AppContext(mode=mode).acts_as_server is acts_as_server
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("name", ["kee", "settings", "servers", "users", "oidc_providers"])
+def test_app_context_in_client_mode_raises_instead_of_building_keepass_dependencies(mock_app_dependencies, name):
+    """In CLIENT mode there is no KeePass database - nothing must be built, especially not Kee which would create it"""
+    ctx = AppContext(mode=AppMode.CLIENT)
+
+    with pytest.raises(RuntimeError, match=f"'{name}' is not available in client mode"):
+        getattr(ctx, name)
+
+    for dependency, mock_cls in mock_app_dependencies.items():
+        assert not mock_cls.called, f"{dependency} should not be constructed in client mode"
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("name", ["kee", "settings", "servers", "users", "oidc_providers"])
+def test_app_context_in_hybrid_mode_builds_keepass_dependencies(mock_app_dependencies, name):
+    ctx = AppContext(mode=AppMode.HYBRID)
+
+    assert getattr(ctx, name) is not None
+
+
+# ================================================================================
 # UserContext
 # ================================================================================
 
@@ -206,7 +265,7 @@ def mock_user_dependencies():
         patch("Pytre_Core.context.UserLogs") as MockUserLogs,
         patch("Pytre_Core.context.Remotes") as MockRemotes,
     ):
-        MockUser.return_value = Mock(name="current_user_instance")
+        MockUser.return_value = Mock(name="user_instance")
         MockUserPrefs.return_value = Mock(name="user_prefs_instance")
         MockUserLogs.return_value = Mock(name="user_logs_instance")
         MockRemotes.return_value = Mock(name="remotes_instance")
@@ -234,30 +293,30 @@ def test_user_context_nothing_is_built_at_construction(mock_user_dependencies, m
 
 
 @pytest.mark.unit
-def test_current_user_receives_users(mock_user_dependencies, mock_users):
+def test_user_receives_users(mock_user_dependencies, mock_users):
     ctx = UserContext(mock_users)
 
-    current_user = ctx.current_user
+    user = ctx.user
 
     mock_user_dependencies["User"].assert_called_once_with(mock_users, username="")
-    assert current_user is mock_user_dependencies["User"].return_value
+    assert user is mock_user_dependencies["User"].return_value
 
 
 @pytest.mark.unit
-def test_current_user_forwards_explicit_username(mock_user_dependencies, mock_users):
+def test_user_forwards_explicit_username(mock_user_dependencies, mock_users):
     ctx = UserContext(mock_users, username="jdoe")
 
-    ctx.current_user
+    ctx.user
 
     mock_user_dependencies["User"].assert_called_once_with(mock_users, username="jdoe")
 
 
 @pytest.mark.unit
-def test_current_user_is_built_lazily_and_cached(mock_user_dependencies, mock_users):
+def test_user_is_built_lazily_and_cached(mock_user_dependencies, mock_users):
     ctx = UserContext(mock_users)
 
-    user1 = ctx.current_user
-    user2 = ctx.current_user
+    user1 = ctx.user
+    user2 = ctx.user
 
     mock_user_dependencies["User"].assert_called_once()
     assert user1 is user2
@@ -313,8 +372,8 @@ def test_user_context_independent_instances_do_not_share_dependencies(mock_user_
     ctx1 = UserContext(mock_users)
     ctx2 = UserContext(mock_users)
 
-    ctx1.current_user
-    ctx2.current_user
+    ctx1.user
+    ctx2.user
 
     assert mock_user_dependencies["User"].call_count == 2
 
@@ -338,11 +397,11 @@ def test_user_context_property_access_is_thread_safe(mock_user_dependencies, moc
     ctx = UserContext(mock_users)
     results = []
 
-    def access_current_user():
-        results.append(ctx.current_user)
+    def access_user():
+        results.append(ctx.user)
 
-    t1 = threading.Thread(target=access_current_user)
-    t2 = threading.Thread(target=access_current_user)
+    t1 = threading.Thread(target=access_user)
+    t2 = threading.Thread(target=access_user)
 
     t1.start()
     build_started.wait(timeout=2)
@@ -367,7 +426,7 @@ def test_with_remote_user_infos_returns_self_without_infos(mock_user_dependencie
 
 
 @pytest.mark.unit
-def test_with_remote_user_infos_builds_context_overriding_current_user(mock_user_dependencies, mock_users):
+def test_with_remote_user_infos_builds_context_overriding_user(mock_user_dependencies, mock_users):
     infos = {"username": "alice"}
     ctx = UserContext(mock_users)
     mock_user_cls = mock_user_dependencies["User"]
@@ -376,7 +435,7 @@ def test_with_remote_user_infos_builds_context_overriding_current_user(mock_user
 
     mock_user_cls.create_from_remote_infos.assert_called_once_with(mock_users, infos)
     assert derived is not ctx
-    assert derived.current_user is mock_user_cls.create_from_remote_infos.return_value
+    assert derived.user is mock_user_cls.create_from_remote_infos.return_value
     mock_user_cls.assert_not_called()  # no lookup in the local users db
 
 
@@ -411,3 +470,48 @@ def test_with_remote_user_infos_flattens_chained_derivation(mock_user_dependenci
     derived = intermediate.with_remote_user_infos({"username": "bob"})
 
     assert derived._base is root
+
+
+@pytest.mark.unit
+def test_user_without_users_database_is_built_with_none(mock_user_dependencies):
+    """CLIENT mode: no users database, User gets None and resolves a local user on its own"""
+    ctx = UserContext(None)
+
+    ctx.user
+
+    mock_user_dependencies["User"].assert_called_once_with(None, username="")
+
+
+@pytest.mark.unit
+def test_user_override_is_returned_as_is(mock_user_dependencies, mock_users):
+    override = Mock(name="override_user")
+    ctx = UserContext(mock_users, user_override=override)
+
+    assert ctx.user is override
+    mock_user_dependencies["User"].assert_not_called()
+
+
+@pytest.mark.unit
+def test_display_format_comes_from_user_prefs(mock_user_dependencies, mock_users):
+    ctx = UserContext(mock_users)
+
+    assert ctx.display_format is mock_user_dependencies["UserPrefs"].return_value.display_format
+
+
+@pytest.mark.unit
+def test_display_format_override_is_returned_as_is(mock_user_dependencies, mock_users):
+    display_format = DisplayFormat(date_format="%Y-%m-%d")
+    ctx = UserContext(mock_users, display_format_override=display_format)
+
+    assert ctx.display_format is display_format
+    mock_user_dependencies["UserPrefs"].assert_not_called()
+
+
+@pytest.mark.unit
+def test_with_remote_user_infos_keeps_display_format_override(mock_user_dependencies, mock_users):
+    display_format = DisplayFormat(date_format="%Y-%m-%d")
+    ctx = UserContext(mock_users, display_format_override=display_format)
+
+    derived = ctx.with_remote_user_infos({"username": "alice"})
+
+    assert derived.display_format is display_format

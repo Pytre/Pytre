@@ -38,13 +38,12 @@ def mock_pykeepass():
 
 @pytest.fixture
 def mock_credentials():
-    """Mock credentials functions"""
+    """Mock credentials functions - yields the crypted_file_pwd_change mock (key file writes)"""
     with (
         patch("Pytre_Core.kee.crypted_file_pwd_get", return_value="test_password"),
-        patch("Pytre_Core.kee.crypted_file_pwd_history", return_value=["current", "old1", "old2"]),
-        patch("Pytre_Core.kee.crypted_file_pwd_change"),
+        patch("Pytre_Core.kee.crypted_file_pwd_change") as mock_pwd_change,
     ):
-        yield
+        yield mock_pwd_change
 
 
 # ================================================================================
@@ -162,29 +161,13 @@ def test_open_db_handles_credentials_error(mock_pykeepass, mock_credentials):
         # Raise credentials error
         MockPyKeePass.side_effect = CredentialsError
 
-        with patch.object(Kee, "pwd_try", return_value=False):
+        with patch.object(Kee, "pwd_try") as mock_pwd_try:
             kee = Kee(password="wrong_password")
 
-            # Verify: Database failed to open
-            assert kee.is_ko is True
-            assert kee.is_open is False
-
-
-@pytest.mark.unit
-@pytest.mark.skip(reason="Requires complex mocking of password retry flow")
-def test_open_db_tries_password_history_on_failure(mock_pykeepass, mock_credentials):
-    """_open_db should try password history if main password fails"""
-    from pykeepass.exceptions import CredentialsError
-
-    with patch("Pytre_Core.kee.PyKeePass") as MockPyKeePass:
-        # First call fails, second succeeds (from history)
-        MockPyKeePass.side_effect = [CredentialsError, mock_pykeepass]
-
-        with patch.object(Kee, "pwd_try", return_value=True) as mock_pwd_try:
-            kee = Kee(password="wrong_password")
-
-            # Verify: pwd_try was called
-            assert mock_pwd_try.called
+        # Verify: Database failed to open, without retrying other passwords on its own
+        assert kee.is_ko is True
+        assert kee.is_open is False
+        mock_pwd_try.assert_not_called()
 
 
 @pytest.mark.unit
@@ -253,9 +236,7 @@ def test_save_db_saves_successfully(mock_pykeepass, mock_credentials):
     with patch("Pytre_Core.kee.PyKeePass", return_value=mock_pykeepass):
         kee = Kee(password="test_password")
 
-        kee.save_db()
-
-        # Verify: save was called
+        assert kee.save_db() is True
         assert mock_pykeepass.save.called
 
 
@@ -269,8 +250,8 @@ def test_save_db_handles_permission_error(mock_pykeepass, mock_credentials):
     with patch("Pytre_Core.kee.PyKeePass", return_value=mock_pykeepass):
         kee = Kee(password="test_password")
 
-        # Should not raise error
-        kee.save_db()
+        # Should not raise error but report the failure
+        assert kee.save_db() is False
 
 
 # ================================================================================
@@ -388,43 +369,36 @@ def test_open_db_creates_all_default_groups_on_a_fresh_database(mock_credentials
 
 
 @pytest.mark.unit
-def test_pwd_try_tries_password_list(mock_pykeepass, mock_credentials):
-    """pwd_try should try passwords from list"""
+def test_pwd_try_opens_the_database_and_keeps_the_password(mock_pykeepass, mock_credentials):
     from pykeepass.exceptions import CredentialsError
 
     with patch("Pytre_Core.kee.PyKeePass") as MockPyKeePass:
-        # First two fail, third succeeds
-        MockPyKeePass.side_effect = [
-            mock_pykeepass,  # Initial open
-            CredentialsError,  # pwd_try first attempt
-            CredentialsError,  # pwd_try second attempt
-            mock_pykeepass,  # pwd_try third attempt succeeds
-        ]
+        MockPyKeePass.side_effect = [CredentialsError, mock_pykeepass]  # stored password fails, given one works
+        kee = Kee()
+        assert kee.is_ko is True
 
-        kee = Kee(password="test_password")
+        result = kee.pwd_try("correct")
 
-        result = kee.pwd_try(["wrong1", "wrong2", "correct"])
-
-        # Verify: Succeeded with third password
-        assert result is True
-        assert kee.is_ko is False
+    assert result is True
+    assert kee.is_ko is False
+    assert kee.password == "correct"
+    assert mock_pykeepass.save.called
+    mock_credentials.assert_called_once_with("correct")  # recorded in the key file
 
 
 @pytest.mark.unit
-def test_pwd_try_returns_false_if_all_fail(mock_pykeepass, mock_credentials):
-    """pwd_try should return False if all passwords fail"""
+def test_pwd_try_returns_false_on_wrong_password(mock_pykeepass, mock_credentials):
     from pykeepass.exceptions import CredentialsError
 
     with patch("Pytre_Core.kee.PyKeePass") as MockPyKeePass:
-        # Initial open succeeds, all pwd_try attempts fail
-        MockPyKeePass.side_effect = [mock_pykeepass, CredentialsError, CredentialsError]
-
+        MockPyKeePass.side_effect = [mock_pykeepass, CredentialsError]
         kee = Kee(password="test_password")
 
-        result = kee.pwd_try(["wrong1", "wrong2"])
+        result = kee.pwd_try("wrong")
 
-        # Verify: Failed
-        assert result is False
+    assert result is False
+    assert kee.password == "test_password"
+    mock_credentials.assert_not_called()
 
 
 @pytest.mark.unit
@@ -441,47 +415,75 @@ def test_pwd_get_retrieves_password(mock_credentials):
 
 
 @pytest.mark.unit
-def test_pwd_history_retrieves_history(mock_credentials):
-    """pwd_history should retrieve password history"""
+def test_pwd_change_saves_the_database_then_records_the_key_file(mock_pykeepass, mock_credentials):
+    """Without force_save, an actual change must still be saved - and before the key file is written,
+    so the key file never holds a password the database isn't encrypted with"""
+    calls = []
+    mock_pykeepass.save.side_effect = lambda: calls.append("save_db")
+    mock_credentials.side_effect = lambda pwd: calls.append(f"key_file:{pwd}")
 
-    with patch("Pytre_Core.kee.PyKeePass"):
-        kee = Kee()
+    with patch("Pytre_Core.kee.PyKeePass", return_value=mock_pykeepass):
+        kee = Kee()  # password read from the key file
 
-        history = kee.pwd_history()
+        kee.pwd_change("new_password")
 
-        # Verify: History retrieved
-        assert history == ["current", "old1", "old2"]
+    assert kee.password == "new_password"
+    assert mock_pykeepass.password == "new_password"
+    assert calls == ["save_db", "key_file:new_password"]
 
 
 @pytest.mark.unit
-def test_pwd_change_updates_password(mock_pykeepass, mock_credentials):
-    """pwd_change should update database password"""
-
-    with (
-        patch("Pytre_Core.kee.PyKeePass", return_value=mock_pykeepass),
-        patch("Pytre_Core.kee.crypted_file_pwd_change") as mock_pwd_change,
-    ):
+def test_pwd_change_with_given_password_never_writes_the_key_file(mock_pykeepass, mock_credentials):
+    """Server: the master password comes from the keyring, the key file is never used"""
+    with patch("Pytre_Core.kee.PyKeePass", return_value=mock_pykeepass):
         kee = Kee(password="old_password")
 
         kee.pwd_change("new_password")
 
-        # Verify: Password updated
-        assert kee.password == "new_password"
-        assert mock_pykeepass.password == "new_password"
-        assert mock_pwd_change.called
+    assert kee.password == "new_password"
+    assert mock_pykeepass.save.called
+    mock_credentials.assert_not_called()
 
 
 @pytest.mark.unit
-def test_pwd_change_saves_if_forced(mock_pykeepass, mock_credentials):
-    """pwd_change with force_save=True should save database"""
+def test_pwd_change_keeps_previous_password_if_save_fails(mock_pykeepass, mock_credentials):
+    mock_pykeepass.save.side_effect = PermissionError
 
     with patch("Pytre_Core.kee.PyKeePass", return_value=mock_pykeepass):
-        kee = Kee(password="old_password")
+        kee = Kee()
+        mock_pykeepass.password = "test_password"
 
-        kee.pwd_change("new_password", force_save=True)
+        with pytest.raises(RuntimeError, match="Failed to save"):
+            kee.pwd_change("new_password")
 
-        # Verify: save was called
-        assert mock_pykeepass.save.called
+    assert kee.password == "test_password"
+    assert mock_pykeepass.password == "test_password"
+    mock_credentials.assert_not_called()
+
+
+@pytest.mark.unit
+def test_create_db_with_given_password_never_writes_the_key_file(mock_pykeepass, mock_credentials):
+    with patch("Pytre_Core.kee.PyKeePass", side_effect=[FileNotFoundError, mock_pykeepass]):
+        kee = Kee(password="master")
+
+    assert kee.password == "master"
+    assert mock_pykeepass.password == "master"
+    assert mock_pykeepass.save.called
+    mock_credentials.assert_not_called()
+
+
+@pytest.mark.unit
+def test_create_db_without_password_records_it_in_the_key_file(mock_pykeepass, mock_credentials):
+    """Hybrid client --init-hybrid: the new database password is recorded in the key file"""
+    with (
+        patch("Pytre_Core.kee.crypted_file_pwd_get", return_value=""),
+        patch("Pytre_Core.kee.PyKeePass", side_effect=[FileNotFoundError, mock_pykeepass]),
+    ):
+        kee = Kee()
+
+    assert kee.password == BLANK_PWD
+    assert mock_pykeepass.save.called
+    mock_credentials.assert_called_once_with(BLANK_PWD)
 
 
 @pytest.mark.unit
@@ -496,10 +498,8 @@ def test_pwd_change_does_nothing_if_same_password(mock_pykeepass, mock_credentia
 
         kee.pwd_change("test_password")
 
-        # Verify: crypted_file_pwd_change was NOT called
-        # (It would be called during __init__, so we can't check call_count == 0)
-        # Just verify password didn't change
         assert kee.password == "test_password"
+        assert not mock_pykeepass.save.called
 
 
 @pytest.mark.unit

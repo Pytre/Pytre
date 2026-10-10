@@ -1,10 +1,30 @@
 from pathlib import Path
 from cryptography.fernet import Fernet
 
-from Pytre_Core.credentials_secrets import KEY
-
 
 KEY_FILE = Path().cwd() / "Pytre.key"
+
+
+def _secret_key() -> bytes:
+    """Key used to encrypt KEY_FILE - only needed with a KeePass database (hybrid client, server).
+    Raises RuntimeError if Pytre_Core/credentials_secrets.py is missing."""
+    try:
+        from Pytre_Core.credentials_secrets import KEY
+    except ImportError as e:
+        raise RuntimeError(
+            "Pytre_Core/credentials_secrets.py is missing: copy it from templates/ and change its key"
+        ) from e
+
+    return KEY
+
+
+def secret_key_available() -> bool:
+    """True if Pytre_Core/credentials_secrets.py is present - required by a KeePass database"""
+    try:
+        _secret_key()
+    except RuntimeError:
+        return False
+    return True
 
 
 def create_key_and_export(filename: Path) -> None:
@@ -40,38 +60,23 @@ def decrypt_from_file(filename: Path, key: bytes) -> str:
 
 
 def crypted_file_pwd_change(new_pwd: str):
-    pwd_history = crypted_file_pwd_history()
-
-    if pwd_history:
-        pwd_history.insert(0, new_pwd)
-    else:
-        pwd_history = [new_pwd]
-
-    text_to_crypt = "\n".join(pwd_history[:25])
-    crypt_to_file(KEY_FILE, KEY, text_to_crypt)
-
-
-def crypted_file_pwd_history() -> list[str]:
-    try:
-        pwd = decrypt_from_file(KEY_FILE, KEY)
-        pwd_history = pwd.split("\n")
-    except FileNotFoundError:
-        pwd_history = []
-
-    return pwd_history
+    """Records `new_pwd` as the settings database password in KEY_FILE"""
+    crypt_to_file(KEY_FILE, _secret_key(), new_pwd)
 
 
 def crypted_file_pwd_get() -> str:
-    pwd_history = crypted_file_pwd_history()
-    pwd_last = pwd_history[0] if pwd_history else ""
-    return pwd_last
+    """Settings database password recorded in KEY_FILE, empty if none.
+    Older files hold several passwords, one per line: the first one is the current password."""
+    if not KEY_FILE.exists():
+        return ""
+
+    pwd_from_file = decrypt_from_file(KEY_FILE, _secret_key())
+    return pwd_from_file.split("\n")[0] if pwd_from_file else ""
 
 
 if __name__ == "__main__":
     if not "" == (new_pwd := input("Changer mot de passe (vide pour non) : ")):
         crypted_file_pwd_change(new_pwd)
 
-    pwd_history = "\n".join(crypted_file_pwd_history())
-    print(f"{'=' * 50}\nHistorique mots de passe :\n{pwd_history}")
     pwd = crypted_file_pwd_get()
     print(f"{'=' * 50}\nMot de passe courant : {pwd}")

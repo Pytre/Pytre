@@ -11,6 +11,7 @@ from Pytre_Core.context import UserContext
 from Pytre_Core.remotes import Remote
 from Pytre_Core.remotes import RemoteServer
 from Pytre_Core.remotes import RemoteAddress
+from Pytre_Core.user_prefs import DisplayFormat
 from Pytre_Core.sql_query.loader import (
     get_queries,
     filter_queries,
@@ -28,13 +29,8 @@ from Pytre_Core.sql_query.loader import (
 
 @pytest.fixture
 def mock_settings():
-    """Mock Settings providing valid defaults for SqlParam/CmdBuilder/QueryExecute"""
-    mock = Mock()
-    mock.date_format = "%d/%m/%Y"
-    mock.decimal_separator = ","
-    mock.field_separator = ";"
-    mock.extract_encoding = "utf-8-sig"
-    return mock
+    """Mock Settings for AppContext"""
+    return Mock()
 
 
 @pytest.fixture
@@ -46,8 +42,10 @@ def mock_user():
 
 @pytest.fixture
 def mock_user_prefs():
-    """Mock UserPrefs for CmdBuilder"""
-    return Mock()
+    """Mock UserPrefs for CmdBuilder and UserContext.display_format"""
+    prefs = Mock()
+    prefs.display_format = DisplayFormat()
+    return prefs
 
 
 @pytest.fixture
@@ -66,6 +64,7 @@ def mock_user_ctx(mock_user, mock_user_prefs):
     ctx = Mock()
     ctx.current_user = mock_user
     ctx.user_prefs = mock_user_prefs
+    ctx.display_format = mock_user_prefs.display_format
     return ctx
 
 
@@ -309,11 +308,11 @@ def test_build_queries_computes_fresh_values_per_user_ctx(mock_app_ctx, tmp_path
 
     user_a = Mock(attribs_cust={"x3_id": "USER_A"})
     user_a.user_info = Mock(return_value="USER_A")
-    user_ctx_a = Mock(current_user=user_a, user_prefs=Mock())
+    user_ctx_a = Mock(user=user_a, user_prefs=Mock(), display_format=DisplayFormat())
 
     user_b = Mock(attribs_cust={"x3_id": "USER_B"})
     user_b.user_info = Mock(return_value="USER_B")
-    user_ctx_b = Mock(current_user=user_b, user_prefs=Mock())
+    user_ctx_b = Mock(user=user_b, user_prefs=Mock(), display_format=DisplayFormat())
 
     queries_a, _ = build_queries_from_parsers(mock_app_ctx, user_ctx_a, parsers)
     queries_b, _ = build_queries_from_parsers(mock_app_ctx, user_ctx_b, parsers)
@@ -358,14 +357,14 @@ def _user_ctx_knowing_dept(mock_user_prefs, dept: str) -> UserContext:
     """Real UserContext (so with_remote_user_infos() really runs) whose local user answers `dept` to USER_INFO"""
     local_user = Mock()
     local_user.user_info = Mock(return_value=dept)
-    ctx = UserContext(Mock(), current_user_override=local_user)
+    ctx = UserContext(Mock(), user_override=local_user)
     ctx._base = Mock(user_prefs=mock_user_prefs)  # prefs are provided by the base context
     return ctx
 
 
 def _user_info_mock(ctx: UserContext) -> Mock:
     """The Mock behind ctx.current_user.user_info, to assert on how the local user was consulted"""
-    return cast(Mock, ctx.current_user).user_info
+    return cast(Mock, ctx.user).user_info
 
 
 def _serialize_user_info_query_into(remote_server, mock_app_ctx, builder_ctx, tmp_path):

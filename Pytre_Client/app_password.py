@@ -1,11 +1,11 @@
 import tkinter as tk
-from tkinter import Event, ttk
+from tkinter import Event, messagebox, ttk
 
 from Pytre_Core.kee import Kee
 from Pytre_Core.about import APP_NAME
 
 import Pytre_Client.ui_utils as ui_utils
-from Pytre_Client.app_theme import set_theme, ThemeColors, theme_is_on
+from Pytre_Client.app_theme import set_theme
 
 
 class PasswordWindow(tk.Toplevel):
@@ -23,13 +23,10 @@ class PasswordWindow(tk.Toplevel):
 
         self.kee: Kee = kee
         self.kee.open_db(True)
-        self.history: list[str] = self.kee.pwd_history()
 
         set_theme(self)
         self._setup_ui()
         self._events_binds()
-
-        self.set_history()
 
     def _setup_ui(self):
         self.title(f"{APP_NAME} - Accès aux paramètres, mot de passe")
@@ -40,19 +37,16 @@ class PasswordWindow(tk.Toplevel):
             ui_utils.ui_center(self)
         self.resizable(True, False)
 
-        self.rowconfigure(1, weight=1)
+        self.rowconfigure(0, weight=1)
         self.columnconfigure(0, weight=1)
 
         self.input_frame = ttk.Frame(self, padding=1, borderwidth=2)
-        self.history_frame = ttk.Frame(self, padding=1, borderwidth=2)
         self.buttons_frame = ttk.Frame(self, padding=1, borderwidth=2)
 
         self.input_frame.grid(row=0, column=0, padx=4, pady=2, sticky="nswe")
-        self.history_frame.grid(row=1, column=0, padx=4, pady=0, sticky="nswe")
-        self.buttons_frame.grid(row=2, column=0, padx=4, pady=2, sticky="nswe")
+        self.buttons_frame.grid(row=1, column=0, padx=4, pady=2, sticky="nswe")
 
         self._setup_input()
-        self._setup_history()
         self._setup_buttons()
 
     def _setup_input(self):
@@ -60,7 +54,7 @@ class PasswordWindow(tk.Toplevel):
         self.input_frame.rowconfigure(1, weight=1)
 
         label = ttk.Label(self.input_frame, text="Mot de passe :")
-        self.tk_var_pwd = tk.StringVar(value=self.history[0])
+        self.tk_var_pwd = tk.StringVar(value=self.kee.password)
         self.entry = ttk.Entry(self.input_frame, textvariable=self.tk_var_pwd)
         self.entry.icursor(tk.END)
 
@@ -74,64 +68,36 @@ class PasswordWindow(tk.Toplevel):
 
         self.entry.focus_set()
 
-    def _setup_history(self):
-        self.history_frame.columnconfigure(0, weight=1)
-        self.history_frame.rowconfigure(0, weight=1)
-
-        self.listbox = tk.Listbox(self.history_frame, height=10, activestyle="none", relief="groove")
-        if theme_is_on():
-            self.listbox.configure(selectbackground=ThemeColors.accent, selectforeground=ThemeColors.text_secondary)
-        ybar = ttk.Scrollbar(self.history_frame, orient="vertical", command=self.listbox.yview)
-        self.listbox.configure(yscrollcommand=ybar.set)
-
-        self.listbox.grid(row=0, column=0, padx=2, pady=2, sticky="nswe")
-        ybar.grid(row=0, column=1, padx=2, pady=2, sticky="nse")
-
-        self.history_frame.grid_remove()
-
     def _setup_buttons(self):
         self.buttons_frame.columnconfigure(0, weight=1)
 
-        btn_history = ttk.Button(self.buttons_frame, text="Historique", command=self.toggle_history)
         self.btn_modify = ttk.Button(self.buttons_frame, text="Modifier", command=self.set_change_pwd)
         self.btn_cancel = ttk.Button(self.buttons_frame, text="Annuler", command=self.close)
 
-        btn_history.grid(row=0, column=0, padx=2, pady=2, sticky="nsw")
-        self.btn_modify.grid(row=0, column=1, padx=2, pady=2, sticky="nse")
-        self.btn_cancel.grid(row=0, column=2, padx=2, pady=2, sticky="nse")
+        self.btn_modify.grid(row=0, column=0, padx=2, pady=2, sticky="nse")
+        self.btn_cancel.grid(row=0, column=1, padx=2, pady=2, sticky="nse")
 
     def _events_binds(self):
         self.entry.bind("<Return>", lambda _: self.set_change_pwd())
-        self.listbox.bind("<Double-Button-1>", self.copy_to_entry)
         self.protocol("WM_DELETE_WINDOW", self.close)  # arrêter le programme quand fermeture de la fenêtre
 
     def toggle_password(self, hide_char: str = "\U000025cf"):
         ui_utils.toggle_password(self.reveal, self.entry, hide_char)
         self.entry.focus_set()
 
-    def toggle_history(self):
-        self.history_shown: bool
-        if not hasattr(self, "history_shown") or not self.history_shown:
-            self.history_frame.grid()
-            self.history_shown = True
-            if not self.entry["show"] == "":
-                self.toggle_password()
-        else:
-            self.history_frame.grid_remove()
-            self.history_shown = False
-
-    def set_history(self):
-        for pwd in self.history:
-            self.listbox.insert(tk.END, pwd)
-
-    def copy_to_entry(self, _: Event):
-        pwd = self.listbox.get(tk.ACTIVE)
-        self.tk_var_pwd.set(pwd)
-        self.entry.icursor(tk.END)
-
     def set_change_pwd(self):
         new_pwd = self.tk_var_pwd.get()
-        self.kee.pwd_change(new_pwd)
+
+        if not new_pwd:
+            messagebox.showerror("Mot de passe", "Le mot de passe ne peut pas être vide.", parent=self)
+            return
+
+        try:
+            self.kee.pwd_change(new_pwd)
+        except RuntimeError as e:
+            messagebox.showerror("Mot de passe", f"Échec du changement de mot de passe :\n{e}", parent=self)
+            return
+
         self.close()
 
     def close(self, _: Event | None = None):

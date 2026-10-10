@@ -38,7 +38,6 @@
                     <th class="sortable">Title<span class="sort-indicator"></span></th>
                     <th class="sortable">Admin<span class="sort-indicator"></span></th>
                     <th class="sortable">Groups<span class="sort-indicator"></span></th>
-                    <th class="sortable">Login Message<span class="sort-indicator"></span></th>
                     {% for attrib in attribs %}
                     <th class="sortable">{{ attrib }}<span class="sort-indicator"></span></th>
                     {% endfor %}
@@ -53,7 +52,6 @@
                     <td>{{ user.title }}</td>
                     <td>{{ "Yes" if user.admin else "" }}</td>
                     <td>{{ (user.groups | reject("equalto", "all") | list) | join(", ") }}</td>
-                    <td>{{ user.msg_login }}</td>
                     {% for attrib in attribs %}
                     <td>{{ user.attribs_cust.get(attrib, "") }}</td>
                     {% endfor %}

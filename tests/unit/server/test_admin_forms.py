@@ -126,7 +126,6 @@ async def test_user_form_apply_to_copies_every_field():
         username="  jdoe  ",
         title=" Doe ",
         admin=True,
-        msg_login=" hello ",
         auth_type="basic",
         groups=["sales", "it"],
     )
@@ -136,7 +135,6 @@ async def test_user_form_apply_to_copies_every_field():
     assert user.username == "jdoe"
     assert user.title == "Doe"
     assert user.admin is True
-    assert user.msg_login == "hello"
     assert user.auth_type == AuthType.BASIC
     assert user.groups == ["sales", "it"]  # replaces the default ["all"], not added to it
     assert user.attribs_cust == {"kept": "stays", "dept": "IT"}  # updated, the others left alone

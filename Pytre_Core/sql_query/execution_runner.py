@@ -5,7 +5,7 @@ from multiprocessing import Process, Queue, Event as proc_get_event
 from multiprocessing.synchronize import Event as ProcEvent
 from dataclasses import dataclass
 
-from Pytre_Core.context import AppContext, UserContext
+from Pytre_Core.context import AppContext, AppMode, UserContext
 from Pytre_Core.sql_query.execution_msg import ExecTaskMsg, ExecResultMsg
 from Pytre_Core.sql_query.query import Query
 from Pytre_Core.sql_query.log_utils import set_log_queue, log as _log
@@ -25,7 +25,7 @@ class ProcessConfig:
 
 
 class ExecutionRunner:
-    def __init__(self):
+    def __init__(self, app_mode: AppMode):
         self.process: Process | None = None
         self.queue_task: Queue = Queue()
         self.queue_result: Queue = Queue()
@@ -38,6 +38,8 @@ class ExecutionRunner:
         self.process_ready: bool = False
         self.task_killed: bool = False
 
+        self.app_mode: AppMode = app_mode
+
         self.create_process()
 
     def create_process(self):
@@ -49,7 +51,7 @@ class ExecutionRunner:
                 cannot_stop=self.cannot_stop,
             )
 
-            self.process = Process(target=run_execution_process, args=(config,), daemon=True)
+            self.process = Process(target=run_execution_process, args=(config, self.app_mode), daemon=True)
             self.process.start()
 
             try:
@@ -152,17 +154,17 @@ class ExecutionRunner:
 
 
 class ExecutionProcess:
-    def __init__(self, config: ProcessConfig):
+    def __init__(self, config: ProcessConfig, app_mode: AppMode):
         set_log_queue(config.queue_result)
         self.queue_task: Queue = config.queue_task
         self.queue_result: Queue = config.queue_result
         self.stop_requested: ProcEvent = config.stop_requested
         self.cannot_stop: ProcEvent = config.cannot_stop
-        self.app_ctx: AppContext = AppContext()
-        self.user_ctx: UserContext = UserContext(self.app_ctx.users)
+        self.app_ctx: AppContext = AppContext(mode=app_mode)
+        self.user_ctx: UserContext = UserContext(self.app_ctx.users if self.app_ctx.acts_as_server else None)
 
     def start(self):
-        if self.app_ctx.kee.is_ko:
+        if self.app_ctx.acts_as_server and self.app_ctx.kee.is_ko:
             log("Execution process aborting : database access to settings is broken", logging.ERROR)
             try:
                 self.queue_result.put(False)
@@ -192,6 +194,7 @@ class ExecutionProcess:
         try:
             self.queue_result.put((ExecResultMsg.PRINT, "Query task starting"))
 
+            self.user_ctx.user_prefs.load()  # prefs may have been changed
             query: Query = Query.deserialize(self.app_ctx, self.user_ctx, query_data)
 
             query_execute: QueryExecute = QueryExecute(self.app_ctx, self.user_ctx, query=query)
@@ -211,6 +214,6 @@ class ExecutionProcess:
             self.queue_result.put((ExecResultMsg.DONE, None))
 
 
-def run_execution_process(config: ProcessConfig):
-    exec_process = ExecutionProcess(config)
+def run_execution_process(config: ProcessConfig, app_mode: AppMode):
+    exec_process = ExecutionProcess(config, app_mode)
     exec_process.start()

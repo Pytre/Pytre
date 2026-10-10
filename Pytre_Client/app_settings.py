@@ -8,7 +8,7 @@ from pathlib import Path
 
 from Pytre_Core import utils
 from Pytre_Core.settings import Settings
-from Pytre_Core.user_prefs import UserPrefs, PrefsEnum
+from Pytre_Core.user_prefs import CsvFormat, PrefEnum, UserPrefs
 from Pytre_Core.about import APP_NAME
 
 import Pytre_Client.ui_utils as ui_utils
@@ -189,16 +189,11 @@ class SettingsWindow(MainSettingsWindow):
 
     def _get_entries_spec(self) -> dict[str, EntrySpec]:
         return {
-            "field_separator": EntrySpec(text="Séparateur de champs"),
-            "decimal_separator": EntrySpec(text="Séparateur décimal"),
-            "date_format": EntrySpec(text="Format date"),
-            "extract_encoding": EntrySpec(text="Encoding format"),
             "queries_folder": EntrySpec(text="Dossier des requêtes", transform=self.normalize_path),
             "logs_are_on": EntrySpec(
                 text="Activer les logs", type=EntryType.CHECKBOX, cmd=self._set_logs_folder_state
             ),
             "logs_folder": EntrySpec(text="Dossier des logs", transform=self.normalize_path),
-            "users_cache_expiration": EntrySpec(text="Jours de cache utilisateurs"),
             "settings_version": EntrySpec(text="Version des paramètres"),
         }
 
@@ -253,10 +248,12 @@ class UserPrefsWindow(MainSettingsWindow):
 
     def _get_entries_spec(self) -> dict[str, EntrySpec]:
         return {
-            PrefsEnum.cache_folder.name: EntrySpec(
-                text="Dossier cache temporaire",
-                transform=self.normalize_path,
-            ),
+            PrefEnum.DATE_FORMAT.json_name: EntrySpec(text="Format date"),
+            PrefEnum.DECIMAL_SEPARATOR.json_name: EntrySpec(text="Séparateur décimal"),
+            PrefEnum.CSV_DELIMITER.json_name: EntrySpec(text="CSV séparateur de champs"),
+            PrefEnum.CSV_QUOTECHAR.json_name: EntrySpec(text="CSV identificateur de texte"),
+            PrefEnum.CSV_ENCODING.json_name: EntrySpec(text="CSV format d'encodage"),
+            PrefEnum.CACHE_DAYS.json_name: EntrySpec(text="Jours de cache à conserver"),
         }
 
     # ------------------------------------------------------------------------------------------
@@ -275,25 +272,33 @@ class UserPrefsWindow(MainSettingsWindow):
             item.w_var.set(val)
 
     def settings_save(self):
-        for key, item in self.entries.items():
+        delimiter = self.entries[PrefEnum.CSV_DELIMITER.json_name].w_var.get()
+        quotechar = self.entries[PrefEnum.CSV_QUOTECHAR.json_name].w_var.get()
+        try:
+            CsvFormat.validate_dialect(delimiter, quotechar)
+        except ValueError as e:
+            messagebox.showerror(title="Mise à jour paramètres", message=str(e), parent=self)
+            return
+
+        for json_name, item in self.entries.items():
             val = item.w_var.get()
 
             try:
-                enum_key = PrefsEnum[key]
-                warning = self.user_prefs.set(enum_key, val, False)
+                pref_enum = PrefEnum.from_json_name(json_name)
+                warning = self.user_prefs.set(pref_enum, val, False)
                 if warning:
-                    warning = f"Warning '{key}' :\n{warning}"
+                    warning = f"Warning '{json_name}' :\n{warning}"
                     confirm = messagebox.askyesno(
                         title="Mise à jour paramètres", message=f"{warning}\n\nContinuer ?", parent=self
                     )
                     if not confirm:
                         return
             except KeyError:
-                msg = f"Echec enregistrement, clé '{key}' non reconnue dans UserPrefsEnum"
+                msg = f"Echec enregistrement, clé '{json_name}' non reconnue dans UserPrefsEnum"
                 messagebox.showwarning(title="Mise à jour paramètres", message=msg, parent=self)
                 return
             except (TypeError, ValueError, AttributeError) as e:
-                msg = f"Echec enregistrement '{key}' :\n{e}"
+                msg = f"Echec enregistrement '{json_name}' :\n{e}"
                 messagebox.showerror(title="Mise à jour paramètres", message=msg, parent=self)
                 return
 

@@ -4,14 +4,14 @@ committed to the repo so most integration tests can run without any personal set
 Servers/Users/Settings' own save() methods rather than poking at pykeepass entries directly, so
 the fixture stays structurally identical to what the real app writes.
 
-Run from the repo root: .env_314_linux/bin/python tests/resources/build_test_keepass.py
+Run from the repo root: .env_314_linux/bin/python -m tests.resources.build_test_keepass
+(Kee gets its password explicitly, so the developer's own Pytre.key is never touched)
 
 To change a local docker test server's credentials (e.g. after rebuilding the mssql-test or
 postgre-test container), edit TEST_SQL_SERVER/TEST_PG_SERVER below and re-run this script - no
 test file needs touching.
 """
 
-import shutil
 from pathlib import Path
 
 import Pytre_Core.kee as kee_module

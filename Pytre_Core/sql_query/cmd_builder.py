@@ -4,8 +4,7 @@ from datetime import datetime
 from pathlib import Path
 
 from Pytre_Core.remotes import RemoteServer
-from Pytre_Core.settings import Settings
-from Pytre_Core.user_prefs import UserPrefs, PrefsEnum
+from Pytre_Core.user_prefs import UserPrefs, PrefEnum
 from Pytre_Core.sql_query.parameters import SqlParam, SqlParameters
 from Pytre_Core.sql_query.execute_config import LocalExecuteCfg, RemoteExecuteCfg
 
@@ -13,8 +12,7 @@ REPLACE_PARAM_PATTERN = re.compile(r"(?<![\d\w#_\$@])(@[\d\w#_\$@]+)")  # for cm
 
 
 class CmdBuilder:
-    def __init__(self, settings: Settings, user_prefs: UserPrefs, raw_cmd: str, parameters: SqlParameters):
-        self.settings: Settings = settings
+    def __init__(self, user_prefs: UserPrefs, raw_cmd: str, parameters: SqlParameters):
         self.user_prefs: UserPrefs = user_prefs
         self.raw_cmd: str = raw_cmd
         self.parameters: SqlParameters = parameters
@@ -41,7 +39,7 @@ class CmdBuilder:
         extract_file: Path = Path()
         if file_output:
             file_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            extract_file = self.user_prefs.get(PrefsEnum.cache_folder) / (f"{query_id}_{file_stamp}.csv")
+            extract_file = self.user_prefs.get(PrefEnum.CACHE_FOLDER) / (f"{query_id}_{file_stamp}.csv")
 
         # metadata des paramètres
         params_metadata: dict = {}
@@ -58,7 +56,7 @@ class CmdBuilder:
             query_id=query_id,
             cmd_template=cmd_template,
             extract_file=extract_file,
-            extract_encoding=self.settings.extract_encoding,
+            csv_format=self.user_prefs.csv_format,
             params_metadata=params_metadata,
             cmd_parameters=cmd_parameters,
         )
@@ -78,12 +76,13 @@ class CmdBuilder:
             query_id=query_id,
             cmd_template=base_cfg.cmd_template,
             extract_file=base_cfg.extract_file,
-            extract_encoding=self.settings.extract_encoding,
+            csv_format=base_cfg.csv_format,
             params_metadata=base_cfg.params_metadata,
             cmd_parameters=base_cfg.cmd_parameters,
             remote_server=server,
             remote_query_id=remote_query_id,
             template_hash=self.get_template_hash(),
+            display_format=self.parameters.display_format,
             display_parameters=display_parameters,
         )
 

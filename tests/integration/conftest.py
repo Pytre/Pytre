@@ -30,6 +30,7 @@ TEST_DB_PASSWORD = "password"  # matches Pytre_Core.kee.BLANK_PWD - see build_te
 TEST_USERNAME = "test_user"
 TEST_SERVER_ID = "test"
 TEST_QUERY_ID = "TEST_QUERY"
+TEST_DISPLAY_FORMAT = {"date_format": "%d/%m/%Y", "decimal_separator": ","}  # client display format sent to the routes
 
 
 @pytest.fixture

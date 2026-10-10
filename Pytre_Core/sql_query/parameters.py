@@ -3,7 +3,7 @@ from collections.abc import Callable
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
 
-from Pytre_Core.settings import Settings
+from Pytre_Core.user_prefs import DisplayFormat
 from Pytre_Core.users import User
 from Pytre_Core.sql_query.converter import SqlTypeConverter
 
@@ -19,13 +19,12 @@ DECLARE_EXTRACT_PATTERN = re.compile(r"^(DECLARE[^;]*;)", re.MULTILINE | re.DOTA
 
 
 class SqlParam:
-    def __init__(self, settings: Settings, user: User, sql_declare: str):
+    def __init__(self, display_format: DisplayFormat, user: User, sql_declare: str):
         self.sql_declare = sql_declare
 
-        app_settings: Settings = settings
         self.converter = SqlTypeConverter(
-            date_display=app_settings.date_format,
-            decimal_separator=app_settings.decimal_separator,
+            date_display=display_format.date_format,
+            decimal_separator=display_format.decimal_separator,
         )  # object to convert string to value or value to string
 
         self.user: User = user
@@ -264,8 +263,8 @@ class SqlParam:
 
 
 class SqlParameters:
-    def __init__(self, settings: Settings, user: User, file_content: str):
-        self.settings = settings
+    def __init__(self, display_format: DisplayFormat, user: User, file_content: str):
+        self.display_format = display_format
         self.user = user
         self.params: dict[str, SqlParam] = self._parse_declare(file_content)
 
@@ -276,7 +275,7 @@ class SqlParameters:
         params_txt = regex_match.group(1) if regex_match is not None else ""
         for line in params_txt.splitlines():
             if line[0:1] == "@":
-                param = SqlParam(self.settings, self.user, line)
+                param = SqlParam(self.display_format, self.user, line)
                 params_dict[param.var_name] = param
 
         return params_dict

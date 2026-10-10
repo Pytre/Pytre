@@ -61,7 +61,7 @@ class UsersWindow(tk.Toplevel):
     # ------------------------------------------------------------------------------------------
     def _setup_ui(self):
         self.title(f"{APP_NAME} - Gestion des utilisateurs")
-        self.geometry("1200x800")
+        self.geometry("1000x800")
         if self.parent:
             ui_utils.ui_center(self, self.parent)
         elif utils.get_system() == "Windows":
@@ -149,7 +149,6 @@ class UsersWindow(tk.Toplevel):
             "title": {"text": "Libellé", "minwidth": 200, "stretch": False},
             "admin": {"text": "Admin", "minwidth": 75, "stretch": False},
             "groups": {"text": "Groupes", "minwidth": 60, "stretch": True},
-            "msg_login": {"text": "Login Message", "minwidth": 100, "stretch": False},
         }
 
         cust_attribs = self.users.get_cust_attribs_list()
@@ -566,7 +565,6 @@ class UserDialog(tk.Toplevel):
             "username": "Id",
             "title": "Libellé",
             "admin": "Admin",
-            "msg_login": "Login Message",
         }
 
         self.entries: dict[str, WidgetGroup] = {}

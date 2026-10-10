@@ -4,16 +4,18 @@ import logging
 import traceback
 from collections.abc import AsyncGenerator
 from datetime import datetime, timezone
+from typing import Annotated
 
 import jwt
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query as QueryParam, Request, status
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, Json
 
 from Pytre_Core.context import UserContext
 from Pytre_Core.logs_central import ExecutionLogEntry
 from Pytre_Core.servers import filter_servers
 from Pytre_Core.users import AuthType, hash_password, verify_password
+from Pytre_Core.user_prefs import DisplayFormat
 from Pytre_Core.utils import log as _log
 from Pytre_Core.sql_query.loader import build_queries_from_parsers, filter_queries
 from Pytre_Core.sql_query.query import Query
@@ -40,7 +42,15 @@ class ExecuteRequest(BaseModel):
     server_id: str
     query_id: str
     template_hash: str  # to check for staleness
-    parameters: dict[str, str] = Field(default_factory=dict)
+    display_format: DisplayFormat  # validated by DisplayFormat.__post_init__
+    display_parameters: dict[str, str] = Field(default_factory=dict)
+
+
+class QueriesRequest(BaseModel):
+    """Request parameters for GET /queries"""
+
+    server_id: str
+    display_format: Json[DisplayFormat]  # sent as JSON, validated by DisplayFormat.__post_init__
 
 
 class AuthMethodsResponse(BaseModel):
@@ -98,7 +108,7 @@ def username_from_token(token: str, token_type: TokenType, state: ServerState) -
     username = payload["sub"]
     issued_at = datetime.fromtimestamp(payload["iat"], tz=timezone.utc)
 
-    user = UserContext(state.app_ctx.users, username=username).current_user
+    user = UserContext(state.app_ctx.users, username=username).user
 
     if (
         not user.exists
@@ -155,7 +165,7 @@ async def login(request: LoginRequest, state: ServerState = Depends(get_server_s
         http_error = status.HTTP_429_TOO_MANY_REQUESTS
         raise HTTPException(status_code=http_error, detail="Too many attempts, try again later")
 
-    user = UserContext(state.app_ctx.users, username=request.username).current_user
+    user = UserContext(state.app_ctx.users, username=request.username).user
     is_basic_existing_user = user.exists and user.auth_type == AuthType.BASIC
     password_ok = verify_password(request.password, user.password_hash if is_basic_existing_user else "")
 
@@ -181,7 +191,7 @@ async def refresh(request: RefreshRequest, state: ServerState = Depends(get_serv
 
     username = username_from_token(request.refresh_token, TokenType.REFRESH, state)
 
-    user = UserContext(state.app_ctx.users, username=username).current_user
+    user = UserContext(state.app_ctx.users, username=username).user
     verified = False
     if user.auth_type is AuthType.OIDC:
         try:
@@ -210,7 +220,7 @@ async def change_password(
     """Self-service password change. Returns a fresh token immediately: the one used
     to authenticate this call becomes invalid after new password_hash is set."""
 
-    user = UserContext(state.app_ctx.users, username=username).current_user
+    user = UserContext(state.app_ctx.users, username=username).user
     user.password_hash = hash_password(request.new_password)
     user.save()
 
@@ -227,7 +237,7 @@ async def list_servers(
     """Return the SQL servers the client can use, as id/description only, plus the user's own infos.
     The client never connects directly, the server does."""
     user_ctx = UserContext(state.app_ctx.users, username=username)
-    user = user_ctx.current_user
+    user = user_ctx.user
     grp_authorized = user.groups if not user.admin else None
     servers_dict = filter_servers(state.app_ctx.servers.servers_dict, grp_filter=grp_authorized)
 
@@ -239,12 +249,14 @@ async def list_servers(
 
 @router.get("/queries")
 async def list_queries(
-    server_id: str, username: str = Depends(require_access_token), state: ServerState = Depends(get_server_state)
+    request: Annotated[QueriesRequest, QueryParam()],
+    username: str = Depends(require_access_token),
+    state: ServerState = Depends(get_server_state),
 ) -> list[dict]:
     """Return the queries the client can use."""
-    user_ctx = UserContext(state.app_ctx.users, username=username)
-    queries, errors = build_queries_from_parsers(state.app_ctx, user_ctx, state.query_catalog.parsers)
-    filtered = filter_queries(state.app_ctx.servers, queries, server_id, user_ctx.current_user)
+    user_ctx = UserContext(state.app_ctx.users, username=username, display_format_override=request.display_format)
+    queries, _errors = build_queries_from_parsers(state.app_ctx, user_ctx, state.query_catalog.parsers)
+    filtered = filter_queries(state.app_ctx.servers, queries, request.server_id, user_ctx.user)
     return [q.serialize() for q in filtered]
 
 
@@ -259,12 +271,12 @@ async def execute_query(
     parameter values. Authorization is re-validated (query exists, is associated with server_id, user allowed)"""
 
     resources: ServerResources = state.resources
-    user_ctx = UserContext(state.app_ctx.users, username=username)
+    user_ctx = UserContext(state.app_ctx.users, username=username, display_format_override=request.display_format)
 
     # build and control query
     query = _resolve_query(state, user_ctx, request)
     _check_template_hash(query, request, resources)
-    _apply_parameters(query, request, user_ctx.current_user.admin)
+    _apply_parameters(query, request, user_ctx.user.admin)
 
     # retrieve build command template and parameters for execution
     exec_config = query.get_exec_config(request.server_id, file_output=False)
@@ -292,7 +304,7 @@ def _resolve_query(state: ServerState, user_ctx: UserContext, request: ExecuteRe
     # build the requested query and filter to keep only if authorized
     target_parser = state.query_catalog.by_file_id.get(request.query_id)
     queries, _errors = build_queries_from_parsers(state.app_ctx, user_ctx, [target_parser] if target_parser else [])
-    authorized = filter_queries(state.app_ctx.servers, queries, request.server_id, user_ctx.current_user)
+    authorized = filter_queries(state.app_ctx.servers, queries, request.server_id, user_ctx.user)
 
     # get query version on the server matching the requested query_id
     query = next((q for q in authorized if q.file_id == request.query_id), None)
@@ -320,7 +332,7 @@ def _apply_parameters(query: Query, request: ExecuteRequest, is_admin: bool) -> 
 
     # check the client's parameters matches what the server expects
     expected_params = set(query.parameters.params.keys())
-    received_params = set(request.parameters.keys())
+    received_params = set(request.display_parameters.keys())
     if expected_params != received_params:
         missing = sorted(expected_params - received_params)
         extra = sorted(received_params - expected_params)
@@ -332,11 +344,11 @@ def _apply_parameters(query: Query, request: ExecuteRequest, is_admin: bool) -> 
     if not is_admin:
         for key, param in query.parameters.params.items():
             if param.is_hidden:
-                request.parameters[key] = param.display_value
+                request.display_parameters[key] = param.display_value
 
     # update query parameter values
     try:
-        query.set_display_values(request.parameters)
+        query.set_display_values(request.display_parameters)
     except ValueError as e:
         http_error = status.HTTP_400_BAD_REQUEST
         raise HTTPException(status_code=http_error, detail=f"Invalid value: {e.args[0]}") from e
@@ -367,7 +379,7 @@ async def _run_query(
 
     query_id = request.query_id
     server_id = request.server_id
-    username = user_ctx.current_user.username
+    username = user_ctx.user.username
     server = state.app_ctx.servers.servers_dict[request.server_id]
 
     async def execute() -> tuple[AsyncSqlResult, datetime]:
@@ -414,10 +426,10 @@ async def _run_query(
         log_entry = ExecutionLogEntry(
             server_id=server_id,
             user_id=username,
-            user_name=user_ctx.current_user.title,
+            user_name=user_ctx.user.title,
             query_id=query_id,
             start=start_time,
-            parameters=request.parameters,
+            parameters=request.display_parameters,
         )
 
         # stream query result

@@ -6,6 +6,7 @@ from unittest.mock import Mock
 
 import pytest
 
+from Pytre_Core.user_prefs import DisplayFormat
 from Pytre_Server.query_catalog import QueryCatalog
 
 
@@ -13,10 +14,6 @@ from Pytre_Server.query_catalog import QueryCatalog
 def mock_app_ctx():
     """Mock AppContext - enough for build_queries_from_parsers() (via with_build_errors()) to run."""
     ctx = Mock()
-    ctx.settings.date_format = "%d/%m/%Y"
-    ctx.settings.decimal_separator = ","
-    ctx.settings.field_separator = ";"
-    ctx.settings.extract_encoding = "utf-8-sig"
     ctx.servers.servers_dict = {}
     return ctx
 
@@ -27,6 +24,7 @@ def mock_user_ctx():
     ctx = Mock()
     ctx.current_user = Mock()
     ctx.user_prefs = Mock()
+    ctx.display_format = DisplayFormat()
     return ctx
 
 

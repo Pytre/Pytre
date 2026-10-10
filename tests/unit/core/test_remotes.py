@@ -29,6 +29,7 @@ from Pytre_Core.remotes import (
     encode_row_value,
 )
 from Pytre_Core.users import AuthType
+from Pytre_Core.user_prefs import DisplayFormat
 
 
 # ================================================================================
@@ -1313,7 +1314,7 @@ def test_get_serialized_queries_populates_on_success(remote_server, monkeypatch,
     queries_data = [{"name": "Q1"}, {"name": "Q2"}]
     monkeypatch.setattr(httpx2, "get", lambda **kwargs: _FakeResponse(queries_data, status_code=200))
 
-    result = remote_server.get_serialized_queries()
+    result = remote_server.get_serialized_queries(DisplayFormat())
 
     assert result == queries_data
     assert remote_server.serialized_queries == queries_data
@@ -1333,10 +1334,13 @@ def test_get_serialized_queries_sends_server_id_and_auth_header(remote_server, m
 
     monkeypatch.setattr(httpx2, "get", fake_get)
 
-    remote_server.get_serialized_queries()
+    remote_server.get_serialized_queries(DisplayFormat())
 
     assert captured["url"] == "http://127.0.0.1:8000/queries"
-    assert captured["params"] == {"server_id": "SRV1"}
+    assert captured["params"] == {
+        "server_id": "SRV1",
+        "display_format": json.dumps({"date_format": "%d/%m/%Y", "decimal_separator": ","}),
+    }
     assert captured["headers"] == {"Authorization": f"Bearer {remote_server.address.access_token}"}
 
 
@@ -1352,7 +1356,7 @@ def test_get_serialized_queries_keeps_previous_list_on_request_error(remote_serv
     monkeypatch.setattr(httpx2, "get", fake_get)
     remote_server.serialized_queries = [{"name": "old"}]
 
-    result = remote_server.get_serialized_queries()
+    result = remote_server.get_serialized_queries(DisplayFormat())
 
     assert result == [{"name": "old"}]
     assert isinstance(remote_server.last_error, RemoteRequestError)
@@ -1365,7 +1369,7 @@ def test_get_serialized_queries_keeps_previous_list_on_http_status_error(remote_
     monkeypatch.setattr(httpx2, "get", lambda **kwargs: _FakeResponse(status_code=200, status_error=error))
     remote_server.serialized_queries = [{"name": "old"}]
 
-    result = remote_server.get_serialized_queries()
+    result = remote_server.get_serialized_queries(DisplayFormat())
 
     assert result == [{"name": "old"}]
     assert isinstance(remote_server.last_error, RemoteHTTPStatusError)
@@ -1384,7 +1388,7 @@ def test_get_serialized_queries_keeps_previous_list_and_sets_remote_auth_error_o
     monkeypatch.setattr(httpx2, "post", lambda **kwargs: _FakeResponse(status_error=error))
     remote_server.serialized_queries = [{"name": "old"}]
 
-    result = remote_server.get_serialized_queries()
+    result = remote_server.get_serialized_queries(DisplayFormat())
 
     assert result == [{"name": "old"}]
     assert isinstance(remote_server.last_error, RemoteAuthError)
@@ -2027,7 +2031,7 @@ def test_execute_yields_columns_and_rows(remote_server, monkeypatch):
     lines = _ndjson_lines({"__columns__": ["id", "name"]}, {"__row__": ["1", "a"]}, {"__row__": ["2", "b"]})
     monkeypatch.setattr(httpx2, "stream", lambda *a, **k: _FakeStreamContext(_FakeStreamResponse(lines)))
 
-    with remote_server.execute("Q1", "hash1", {}) as rows:
+    with remote_server.execute("Q1", "hash1", DisplayFormat(), {}) as rows:
         assert [col[0] for col in rows.description] == ["id", "name"]
         assert list(rows) == [("1", "a"), ("2", "b")]
 
@@ -2050,7 +2054,7 @@ def test_execute_decodes_wrapped_datetime_date_and_decimal(remote_server, monkey
     )
     monkeypatch.setattr(httpx2, "stream", lambda *a, **k: _FakeStreamContext(_FakeStreamResponse(lines)))
 
-    with remote_server.execute("Q1", "hash1", {}) as rows:
+    with remote_server.execute("Q1", "hash1", DisplayFormat(), {}) as rows:
         result = list(rows)
 
     assert result == [(datetime(2026, 1, 1, 10, 30), date(2026, 1, 1), Decimal("12.50"), "unwrapped")]
@@ -2071,7 +2075,7 @@ def test_execute_sends_correct_request(remote_server, monkeypatch):
 
     monkeypatch.setattr(httpx2, "stream", fake_stream)
 
-    with remote_server.execute("Q1", "hash1", {"p": "v"}) as rows:
+    with remote_server.execute("Q1", "hash1", DisplayFormat(), {"p": "v"}) as rows:
         list(rows)
 
     assert captured["method"] == "POST"
@@ -2080,7 +2084,8 @@ def test_execute_sends_correct_request(remote_server, monkeypatch):
         "server_id": "SRV1",
         "query_id": "Q1",
         "template_hash": "hash1",
-        "parameters": {"p": "v"},
+        "display_format": {"date_format": "%d/%m/%Y", "decimal_separator": ","},
+        "display_parameters": {"p": "v"},
     }
     assert captured["headers"] == {}  # no token yet - no Authorization header, no username either
 
@@ -2091,7 +2096,7 @@ def test_execute_empty_result_has_no_columns_or_rows(remote_server, monkeypatch)
     lines = _ndjson_lines({"__columns__": []})
     monkeypatch.setattr(httpx2, "stream", lambda *a, **k: _FakeStreamContext(_FakeStreamResponse(lines)))
 
-    with remote_server.execute("Q1", "hash1", {}) as rows:
+    with remote_server.execute("Q1", "hash1", DisplayFormat(), {}) as rows:
         assert rows.description == ()
         assert list(rows) == []
 
@@ -2107,7 +2112,7 @@ def test_execute_raises_remote_execution_error_on_error_line(remote_server, monk
     monkeypatch.setattr(httpx2, "stream", lambda *a, **k: _FakeStreamContext(_FakeStreamResponse(lines)))
 
     collected = []
-    with remote_server.execute("Q1", "hash1", {}) as rows:
+    with remote_server.execute("Q1", "hash1", DisplayFormat(), {}) as rows:
         with pytest.raises(RemoteExecutionError, match="ValueError: boom"):
             for row in rows:
                 collected.append(row)
@@ -2124,7 +2129,7 @@ def test_execute_wraps_http_status_error_as_remote_http_status_error(remote_serv
     )
 
     with pytest.raises(RemoteHTTPStatusError):
-        with remote_server.execute("Q1", "hash1", {}):
+        with remote_server.execute("Q1", "hash1", DisplayFormat(), {}):
             pass
 
 
@@ -2141,7 +2146,7 @@ def test_execute_checks_health_before_streaming(remote_server, monkeypatch):
     monkeypatch.setattr(httpx2, "get", fake_get)
     monkeypatch.setattr(httpx2, "stream", lambda *a, **k: _FakeStreamContext(_FakeStreamResponse(lines)))
 
-    with remote_server.execute("Q1", "hash1", {}) as rows:
+    with remote_server.execute("Q1", "hash1", DisplayFormat(), {}) as rows:
         list(rows)
 
     assert captured["url"] == "http://127.0.0.1:8000/health"
@@ -2160,7 +2165,7 @@ def test_execute_fails_fast_without_streaming_if_health_check_fails(remote_serve
     monkeypatch.setattr(httpx2, "stream", lambda *a, **k: pytest.fail("httpx2.stream should not be called"))
 
     with pytest.raises(RemoteRequestError):
-        with remote_server.execute("Q1", "hash1", {}):
+        with remote_server.execute("Q1", "hash1", DisplayFormat(), {}):
             pass
 
 
@@ -2181,7 +2186,7 @@ def test_execute_relogs_in_and_retries_once_on_401(remote_server, monkeypatch):
         httpx2, "post", lambda **kwargs: _FakeResponse({"refresh_token": "r1", "access_token": "new-token"})
     )
 
-    with remote_server.execute("Q1", "hash1", {}) as rows:
+    with remote_server.execute("Q1", "hash1", DisplayFormat(), {}) as rows:
         result = list(rows)
 
     assert result == [("1",)]
@@ -2207,7 +2212,7 @@ def test_execute_raises_remote_http_status_error_if_still_401_after_relogin(remo
     )
 
     with pytest.raises(RemoteHTTPStatusError):
-        with remote_server.execute("Q1", "hash1", {}):
+        with remote_server.execute("Q1", "hash1", DisplayFormat(), {}):
             pass
 
 
@@ -2224,7 +2229,7 @@ def test_execute_raises_remote_auth_error_if_relogin_fails_with_bad_credentials(
     monkeypatch.setattr(httpx2, "post", lambda **kwargs: _FakeResponse(status_error=error))
 
     with pytest.raises(RemoteAuthError):
-        with remote_server.execute("Q1", "hash1", {}):
+        with remote_server.execute("Q1", "hash1", DisplayFormat(), {}):
             pass
 
 
@@ -2243,5 +2248,5 @@ def test_execute_raises_remote_request_error_if_relogin_fails_due_to_network(rem
     monkeypatch.setattr(httpx2, "post", fake_post)
 
     with pytest.raises(RemoteRequestError):
-        with remote_server.execute("Q1", "hash1", {}):
+        with remote_server.execute("Q1", "hash1", DisplayFormat(), {}):
             pass

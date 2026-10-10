@@ -6,6 +6,7 @@ import pytest
 from pathlib import Path
 from unittest.mock import Mock
 
+from Pytre_Core.user_prefs import CsvFormat, DisplayFormat, PrefEnum
 from Pytre_Core.sql_query.cmd_builder import CmdBuilder
 from Pytre_Core.sql_query.parameters import SqlParameters
 
@@ -16,17 +17,6 @@ from Pytre_Core.sql_query.parameters import SqlParameters
 
 
 @pytest.fixture
-def mock_settings():
-    """Mock Settings providing valid defaults for SqlParam/CmdBuilder/QueryExecute"""
-    mock = Mock()
-    mock.date_format = "%d/%m/%Y"
-    mock.decimal_separator = ","
-    mock.field_separator = ";"
-    mock.extract_encoding = "utf-8-sig"
-    return mock
-
-
-@pytest.fixture
 def mock_user():
     """Mock current user for SqlParam/SqlParameters"""
     mock = Mock()
@@ -34,9 +24,18 @@ def mock_user():
 
 
 @pytest.fixture
-def mock_user_prefs():
+def prefs_values(tmp_path) -> dict:
+    """Values returned by mock_user_prefs.get() - tests can change them before building a CmdBuilder"""
+    return {PrefEnum.CACHE_FOLDER: tmp_path}
+
+
+@pytest.fixture
+def mock_user_prefs(prefs_values):
     """Mock UserPrefs for CmdBuilder"""
-    return Mock()
+    prefs = Mock()
+    prefs.get = Mock(side_effect=lambda key: prefs_values[key])
+    prefs.csv_format = CsvFormat()
+    return prefs
 
 
 # ================================================================================
@@ -45,21 +44,21 @@ def mock_user_prefs():
 
 
 @pytest.mark.unit
-def test_cmd_builder_initialization(mock_settings, mock_user, mock_user_prefs):
+def test_cmd_builder_initialization(mock_user, mock_user_prefs):
     """CmdBuilder should initialize with raw command and parameters"""
     raw_cmd = "SELECT @param1, @param2"
     params = SqlParameters(
-        mock_settings, mock_user, "DECLARE @param1 as int = 10\nDECLARE @param2 as varchar(50) = 'test'"
+        DisplayFormat(), mock_user, "DECLARE @param1 as int = 10\nDECLARE @param2 as varchar(50) = 'test'"
     )
 
-    builder = CmdBuilder(mock_settings, mock_user_prefs, raw_cmd, params)
+    builder = CmdBuilder(mock_user_prefs, raw_cmd, params)
 
     assert builder.raw_cmd == raw_cmd
     assert builder.parameters is params
 
 
 @pytest.mark.unit
-def test_cmd_builder_build_command(mock_settings, mock_user, mock_user_prefs):
+def test_cmd_builder_build_command(mock_user, mock_user_prefs):
     """CmdBuilder should build command with parameter substitution"""
     raw_cmd = "SELECT @param1 as val1, @param2 as val2"
     sql_content = """
@@ -69,9 +68,9 @@ DECLARE
 
 SELECT @param1, @param2
 """
-    params = SqlParameters(mock_settings, mock_user, sql_content)
+    params = SqlParameters(DisplayFormat(), mock_user, sql_content)
 
-    builder = CmdBuilder(mock_settings, mock_user_prefs, raw_cmd, params)
+    builder = CmdBuilder(mock_user_prefs, raw_cmd, params)
     cmd_template, cmd_parameters = builder.build_command()
 
     # Template should use %(var)s format
@@ -86,7 +85,7 @@ SELECT @param1, @param2
 
 
 @pytest.mark.unit
-def test_cmd_builder_build_debug_command(mock_settings, mock_user, mock_user_prefs):
+def test_cmd_builder_build_debug_command(mock_user, mock_user_prefs):
     """CmdBuilder should build debug command with replaced values"""
     raw_cmd = "SELECT @param1, @param2"
     sql_content = """
@@ -96,8 +95,8 @@ DECLARE
 
 SELECT @param1, @param2
 """
-    params = SqlParameters(mock_settings, mock_user, sql_content)
-    builder = CmdBuilder(mock_settings, mock_user_prefs, raw_cmd, params)
+    params = SqlParameters(DisplayFormat(), mock_user, sql_content)
+    builder = CmdBuilder(mock_user_prefs, raw_cmd, params)
 
     debug_cmd = builder.build_debug_command()
 
@@ -109,7 +108,7 @@ SELECT @param1, @param2
 
 
 @pytest.mark.unit
-def test_cmd_builder_build_debug_with_numeric_param(mock_settings, mock_user, mock_user_prefs):
+def test_cmd_builder_build_debug_with_numeric_param(mock_user, mock_user_prefs):
     """CmdBuilder should handle numeric parameters in debug command"""
     raw_cmd = "SELECT @num, @text"
     sql_content = """
@@ -119,8 +118,8 @@ DECLARE
 
 SELECT @num, @text
 """
-    params = SqlParameters(mock_settings, mock_user, sql_content)
-    builder = CmdBuilder(mock_settings, mock_user_prefs, raw_cmd, params)
+    params = SqlParameters(DisplayFormat(), mock_user, sql_content)
+    builder = CmdBuilder(mock_user_prefs, raw_cmd, params)
 
     debug_cmd = builder.build_debug_command()
 
@@ -135,15 +134,10 @@ SELECT @num, @text
 
 
 @pytest.mark.unit
-def test_cmd_builder_build_exec_config_with_file_output(mock_settings, mock_user, mock_user_prefs, tmp_path):
-    from Pytre_Core.user_prefs import PrefsEnum
-
-    mock_user_prefs.get = Mock(return_value=tmp_path)
-    mock_settings.extract_encoding = "utf-8-sig"
-
+def test_cmd_builder_build_exec_config_with_file_output(mock_user, mock_user_prefs, tmp_path):
     sql_content = "DECLARE\n@p as int = 10  -- Param\n;\nSELECT @p"
-    params = SqlParameters(mock_settings, mock_user, sql_content)
-    builder = CmdBuilder(mock_settings, mock_user_prefs, "SELECT @p", params)
+    params = SqlParameters(DisplayFormat(), mock_user, sql_content)
+    builder = CmdBuilder(mock_user_prefs, "SELECT @p", params)
 
     config = builder.build_exec_local_cfg("SRV1", "MY_QUERY", file_output=True)
 
@@ -151,15 +145,15 @@ def test_cmd_builder_build_exec_config_with_file_output(mock_settings, mock_user
     assert config.server_id == "SRV1"
     assert config.extract_file.parent == tmp_path
     assert config.extract_file.name.startswith("MY_QUERY_")
-    assert config.extract_encoding == "utf-8-sig"
+    assert config.csv_format == CsvFormat()
     assert "@p" in config.params_metadata
 
 
 @pytest.mark.unit
-def test_cmd_builder_build_exec_config_without_file_output(mock_settings, mock_user, mock_user_prefs):
+def test_cmd_builder_build_exec_config_without_file_output(mock_user, mock_user_prefs):
     sql_content = "DECLARE\n@p as int = 10  -- Param\n;\nSELECT @p"
-    params = SqlParameters(mock_settings, mock_user, sql_content)
-    builder = CmdBuilder(mock_settings, mock_user_prefs, "SELECT @p", params)
+    params = SqlParameters(DisplayFormat(), mock_user, sql_content)
+    builder = CmdBuilder(mock_user_prefs, "SELECT @p", params)
 
     config = builder.build_exec_local_cfg("SRV1", "MY_QUERY", file_output=False)
 
@@ -167,18 +161,15 @@ def test_cmd_builder_build_exec_config_without_file_output(mock_settings, mock_u
 
 
 @pytest.mark.unit
-def test_cmd_builder_build_exec_remote_cfg_keeps_query_id_and_remote_query_id_separate(
-    mock_settings, mock_user, mock_user_prefs, tmp_path
-):
+def test_cmd_builder_build_exec_remote_cfg_keeps_query_id_and_remote_query_id_separate(mock_user, mock_user_prefs):
     """query_id (display label - extract filename/UserLogs) and remote_query_id (collision-proof
     wire id, Query.file_id) must be forwarded independently, not conflated into a single value."""
-    mock_user_prefs.get = Mock(return_value=tmp_path)
     mock_server = Mock()
     mock_server.id_on_remote = "SRV1"
 
     sql_content = "DECLARE\n@p as int = 10  -- Param\n;\nSELECT @p"
-    params = SqlParameters(mock_settings, mock_user, sql_content)
-    builder = CmdBuilder(mock_settings, mock_user_prefs, "SELECT @p", params)
+    params = SqlParameters(DisplayFormat(), mock_user, sql_content)
+    builder = CmdBuilder(mock_user_prefs, "SELECT @p", params)
 
     config = builder.build_exec_remote_cfg(mock_server, "MY_QUERY", "my_query_file", file_output=True)
 
@@ -188,13 +179,32 @@ def test_cmd_builder_build_exec_remote_cfg_keeps_query_id_and_remote_query_id_se
     assert config.remote_server is mock_server
 
 
+@pytest.mark.unit
+def test_cmd_builder_build_exec_configs_use_csv_format_from_user_prefs(mock_user, mock_user_prefs):
+    """Local and remote configs both carry the user's csv format (delimiter, quote character, encoding)"""
+    csv_format = CsvFormat(delimiter="|", quotechar="'", encoding="latin-1")
+    mock_user_prefs.csv_format = csv_format
+    mock_server = Mock()
+    mock_server.id_on_remote = "SRV1"
+
+    sql_content = "DECLARE\n@p as int = 10  -- Param\n;\nSELECT @p"
+    params = SqlParameters(DisplayFormat(), mock_user, sql_content)
+    builder = CmdBuilder(mock_user_prefs, "SELECT @p", params)
+
+    local_config = builder.build_exec_local_cfg("SRV1", "MY_QUERY", file_output=True)
+    remote_config = builder.build_exec_remote_cfg(mock_server, "MY_QUERY", "my_query_file", file_output=True)
+
+    for config in (local_config, remote_config):
+        assert config.csv_format == csv_format
+
+
 # ================================================================================
 # CmdBuilder inlined ("@!") parameter Tests
 # ================================================================================
 
 
 @pytest.mark.unit
-def test_cmd_builder_build_command_replaces_inlined_param_directly(mock_settings, mock_user, mock_user_prefs):
+def test_cmd_builder_build_command_replaces_inlined_param_directly(mock_user, mock_user_prefs):
     """Inlined (@!) params should be substituted directly into cmd_template, not passed as a bind parameter"""
     raw_cmd = "SELECT * FROM @!TABLE WHERE id = @id"
     sql_content = """DECLARE
@@ -202,8 +212,8 @@ def test_cmd_builder_build_command_replaces_inlined_param_directly(mock_settings
 @id as int = 5  -- Id
 ;
 SELECT * FROM @!TABLE WHERE id = @id"""
-    params = SqlParameters(mock_settings, mock_user, sql_content)
-    builder = CmdBuilder(mock_settings, mock_user_prefs, raw_cmd, params)
+    params = SqlParameters(DisplayFormat(), mock_user, sql_content)
+    builder = CmdBuilder(mock_user_prefs, raw_cmd, params)
 
     cmd_template, cmd_parameters = builder.build_command()
 
@@ -214,12 +224,12 @@ SELECT * FROM @!TABLE WHERE id = @id"""
 
 
 @pytest.mark.unit
-def test_cmd_builder_build_debug_command_replaces_inlined_param_directly(mock_settings, mock_user, mock_user_prefs):
+def test_cmd_builder_build_debug_command_replaces_inlined_param_directly(mock_user, mock_user_prefs):
     """build_debug_command should also substitute inlined params directly, unquoted"""
     raw_cmd = "SELECT * FROM @!TABLE"
     sql_content = "DECLARE\n@!TABLE as int = 1  -- Table|LIST(1: Orders, 2: Invoices)\n;\nSELECT * FROM @!TABLE"
-    params = SqlParameters(mock_settings, mock_user, sql_content)
-    builder = CmdBuilder(mock_settings, mock_user_prefs, raw_cmd, params)
+    params = SqlParameters(DisplayFormat(), mock_user, sql_content)
+    builder = CmdBuilder(mock_user_prefs, raw_cmd, params)
 
     debug_cmd = builder.build_debug_command()
 
@@ -233,12 +243,12 @@ def test_cmd_builder_build_debug_command_replaces_inlined_param_directly(mock_se
 
 
 @pytest.mark.unit
-def test_params_pos_for_debug_maps_string_param_position(mock_settings, mock_user, mock_user_prefs):
+def test_params_pos_for_debug_maps_string_param_position(mock_user, mock_user_prefs):
     """params_pos_for_debug should report the position/length of a quoted string param after substitution"""
     raw_cmd = "SELECT @name"
     sql_content = "DECLARE\n@name as varchar(50) = 'bob'  -- Name\n;\nSELECT @name"
-    params = SqlParameters(mock_settings, mock_user, sql_content)
-    builder = CmdBuilder(mock_settings, mock_user_prefs, raw_cmd, params)
+    params = SqlParameters(DisplayFormat(), mock_user, sql_content)
+    builder = CmdBuilder(mock_user_prefs, raw_cmd, params)
 
     positions = builder.params_pos_for_debug()
 
@@ -248,12 +258,12 @@ def test_params_pos_for_debug_maps_string_param_position(mock_settings, mock_use
 
 
 @pytest.mark.unit
-def test_params_pos_for_debug_skips_unknown_variables(mock_settings, mock_user, mock_user_prefs):
+def test_params_pos_for_debug_skips_unknown_variables(mock_user, mock_user_prefs):
     """params_pos_for_debug should ignore @-prefixed tokens that aren't declared parameters"""
     raw_cmd = "SELECT @unknown, @name"
     sql_content = "DECLARE\n@name as int = 5  -- Name\n;\nSELECT @unknown, @name"
-    params = SqlParameters(mock_settings, mock_user, sql_content)
-    builder = CmdBuilder(mock_settings, mock_user_prefs, raw_cmd, params)
+    params = SqlParameters(DisplayFormat(), mock_user, sql_content)
+    builder = CmdBuilder(mock_user_prefs, raw_cmd, params)
 
     positions = builder.params_pos_for_debug()
 
@@ -263,7 +273,7 @@ def test_params_pos_for_debug_skips_unknown_variables(mock_settings, mock_user, 
 
 
 @pytest.mark.unit
-def test_params_pos_for_debug_only_inlined_filters_regular_params(mock_settings, mock_user, mock_user_prefs):
+def test_params_pos_for_debug_only_inlined_filters_regular_params(mock_user, mock_user_prefs):
     """only_inlined=True should skip regular (non @!) parameters entirely"""
     raw_cmd = "SELECT @!TABLE, @id"
     sql_content = """DECLARE
@@ -271,8 +281,8 @@ def test_params_pos_for_debug_only_inlined_filters_regular_params(mock_settings,
 @id as int = 5  -- Id
 ;
 SELECT @!TABLE, @id"""
-    params = SqlParameters(mock_settings, mock_user, sql_content)
-    builder = CmdBuilder(mock_settings, mock_user_prefs, raw_cmd, params)
+    params = SqlParameters(DisplayFormat(), mock_user, sql_content)
+    builder = CmdBuilder(mock_user_prefs, raw_cmd, params)
 
     positions = builder.params_pos_for_debug(only_inlined=True)
 
@@ -282,7 +292,7 @@ SELECT @!TABLE, @id"""
 
 
 @pytest.mark.unit
-def test_params_pos_for_debug_accumulates_offset_across_params(mock_settings, mock_user, mock_user_prefs):
+def test_params_pos_for_debug_accumulates_offset_across_params(mock_user, mock_user_prefs):
     """Later params' reported position should account for the length delta introduced by earlier substitutions"""
     raw_cmd = "SELECT @first, @second"
     sql_content = """DECLARE
@@ -290,14 +300,13 @@ def test_params_pos_for_debug_accumulates_offset_across_params(mock_settings, mo
 @second as int = 7  -- Second
 ;
 SELECT @first, @second"""
-    params = SqlParameters(mock_settings, mock_user, sql_content)
-    builder = CmdBuilder(mock_settings, mock_user_prefs, raw_cmd, params)
+    params = SqlParameters(DisplayFormat(), mock_user, sql_content)
+    builder = CmdBuilder(mock_user_prefs, raw_cmd, params)
 
     positions = builder.params_pos_for_debug()
 
     assert len(positions) == 2
     # @second's reported start should be shifted by the extra length @first's substitution added
-    first_start = raw_cmd.index("@first")
     first_len = len("'aaaaaaaaaa'")
     expected_second_start = raw_cmd.index("@second") + (first_len - len("@first"))
     assert expected_second_start in positions

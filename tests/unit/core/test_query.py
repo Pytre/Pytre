@@ -6,8 +6,9 @@ import pytest
 from typing import cast
 from unittest.mock import Mock
 
-from Pytre_Core.context import UserContext
+from Pytre_Core.context import AppContext, AppMode, UserContext
 from Pytre_Core.remotes import Remote, RemoteServer
+from Pytre_Core.user_prefs import DisplayFormat
 from Pytre_Core.sql_query.query import Query
 from Pytre_Core.remotes import RemoteAddress
 from Pytre_Core.sql_query.execute_config import RemoteExecuteCfg
@@ -20,13 +21,8 @@ from Pytre_Core.sql_query.execute_config import RemoteExecuteCfg
 
 @pytest.fixture
 def mock_settings():
-    """Mock Settings providing valid defaults for SqlParam/CmdBuilder/QueryExecute"""
-    mock = Mock()
-    mock.date_format = "%d/%m/%Y"
-    mock.decimal_separator = ","
-    mock.field_separator = ";"
-    mock.extract_encoding = "utf-8-sig"
-    return mock
+    """Mock Settings for AppContext"""
+    return Mock()
 
 
 @pytest.fixture
@@ -38,8 +34,10 @@ def mock_user():
 
 @pytest.fixture
 def mock_user_prefs():
-    """Mock UserPrefs for CmdBuilder"""
-    return Mock()
+    """Mock UserPrefs for CmdBuilder and UserContext.display_format"""
+    prefs = Mock()
+    prefs.display_format = DisplayFormat()
+    return prefs
 
 
 @pytest.fixture
@@ -58,6 +56,7 @@ def mock_user_ctx(mock_user, mock_user_prefs):
     ctx = Mock()
     ctx.current_user = mock_user
     ctx.user_prefs = mock_user_prefs
+    ctx.display_format = mock_user_prefs.display_format
     return ctx
 
 
@@ -138,6 +137,57 @@ def test_query_serialize_deserialize(mock_app_ctx, mock_user_ctx, sample_sql_fil
     assert query2.name == query1.name
     assert query2.description == query1.description
     assert query2.filename == query1.filename
+
+
+@pytest.mark.unit
+def test_query_in_client_mode_has_no_local_servers(mock_user_ctx, tmp_path):
+    """CLIENT mode has no KeePass database: a query without a servers header must not look up local servers
+    (a real AppContext raises on any access to them)"""
+    sql_file = tmp_path / "no_servers.sql"
+    sql_file.write_text("/* Infos requête\nCode : Q\n*/\nSELECT 1", encoding="utf-8")
+
+    query = Query(AppContext(mode=AppMode.CLIENT), mock_user_ctx, sql_file)
+
+    assert query.servers_id == []
+
+
+@pytest.mark.unit
+def test_query_without_servers_header_defaults_to_all_local_servers(mock_app_ctx, mock_user_ctx, tmp_path):
+    mock_app_ctx.servers.servers_dict = {"SRV1": Mock(), "SRV2": Mock()}
+    sql_file = tmp_path / "no_servers.sql"
+    sql_file.write_text("/* Infos requête\nCode : Q\n*/\nSELECT 1", encoding="utf-8")
+
+    query = Query(mock_app_ctx, mock_user_ctx, sql_file)
+
+    assert query.servers_id == ["SRV1", "SRV2"]
+
+
+@pytest.mark.unit
+def test_query_parameters_use_user_ctx_display_format(mock_app_ctx, mock_user_ctx, sample_sql_file):
+    """Parameters are rendered with the user context's display format"""
+    mock_user_ctx.display_format = DisplayFormat(date_format="%Y-%m-%d")
+
+    query = Query(mock_app_ctx, mock_user_ctx, sample_sql_file)
+
+    assert query.display_format == DisplayFormat(date_format="%Y-%m-%d")
+    assert query.parameters.params["@param3"].display_value == "2025-01-01"
+
+
+@pytest.mark.unit
+def test_query_deserialize_uses_serialized_display_format(mock_app_ctx, mock_user_ctx, sample_sql_file):
+    """display_params are parsed with the format they were rendered with,
+    even if the deserializing user context uses another one"""
+    mock_user_ctx.display_format = DisplayFormat(date_format="%m/%d/%Y")
+    query1 = Query(mock_app_ctx, mock_user_ctx, sample_sql_file)
+    query1.set_display_values({"@param3": "03/10/2025"})  # 10 March in %m/%d/%Y
+    data = query1.serialize()
+
+    mock_user_ctx.display_format = DisplayFormat()  # %d/%m/%Y would read 3 October
+    query2 = Query.deserialize(mock_app_ctx, mock_user_ctx, data)
+
+    assert data["display_format"] == {"date_format": "%m/%d/%Y", "decimal_separator": ","}
+    assert query2.display_format == DisplayFormat(date_format="%m/%d/%Y")
+    assert query2.parameters.params["@param3"].value_cmd == "2025-03-10"
 
 
 # ================================================================================
@@ -240,14 +290,14 @@ def _user_ctx_knowing_dept(mock_user_prefs, dept: str) -> UserContext:
     """Real UserContext (so with_remote_user_infos() really runs) whose local user answers `dept` to USER_INFO"""
     local_user = Mock()
     local_user.user_info = Mock(return_value=dept)
-    ctx = UserContext(Mock(), current_user_override=local_user)
+    ctx = UserContext(Mock(), user_override=local_user)
     ctx._base = Mock(user_prefs=mock_user_prefs)  # prefs are provided by the base context
     return ctx
 
 
 def _user_info_mock(ctx: UserContext) -> Mock:
     """The Mock behind ctx.current_user.user_info, to assert on how the local user was consulted"""
-    return cast(Mock, ctx.current_user).user_info
+    return cast(Mock, ctx.user).user_info
 
 
 @pytest.mark.unit
@@ -266,7 +316,7 @@ def test_query_deserialize_rebuilds_user_from_remote_user_infos(
     query2 = Query.deserialize(mock_app_ctx, local_ctx, data)
 
     assert query2.user_ctx is not local_ctx
-    assert query2.user_ctx.current_user.user_info("dept") == "IT"
+    assert query2.user_ctx.user.user_info("dept") == "IT"
     assert query2.parameters.params["@dept"].display_value == "IT"
     _user_info_mock(local_ctx).assert_not_called()
 

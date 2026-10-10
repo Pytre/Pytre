@@ -12,6 +12,7 @@ import pytest
 from fastapi import HTTPException
 
 from Pytre_Core.sql_query.query_drivers_async import AsyncSqlConnectionError, AsyncSqlExecutionError
+from Pytre_Core.user_prefs import DisplayFormat
 from Pytre_Server.routes.client import ExecuteRequest, _apply_parameters, _run_query
 
 
@@ -31,7 +32,9 @@ def _make_query(params: dict[str, Mock]) -> Mock:
 
 
 def _make_request(parameters: dict[str, str]) -> ExecuteRequest:
-    return ExecuteRequest(server_id="s", query_id="q", template_hash="h", parameters=parameters)
+    return ExecuteRequest(
+        server_id="s", query_id="q", template_hash="h", display_format=DisplayFormat(), display_parameters=parameters
+    )
 
 
 # ================================================================================
@@ -69,7 +72,7 @@ def test_apply_parameters_non_admin_cannot_override_hidden_param():
 
     _apply_parameters(query, request, is_admin=False)
 
-    assert request.parameters["@USER"] == "real_user"
+    assert request.display_parameters["@USER"] == "real_user"
     query.set_display_values.assert_called_once_with({"@USER": "real_user"})
 
 
@@ -80,7 +83,7 @@ def test_apply_parameters_admin_can_override_hidden_param():
 
     _apply_parameters(query, request, is_admin=True)
 
-    assert request.parameters["@USER"] == "someone_else"
+    assert request.display_parameters["@USER"] == "someone_else"
     query.set_display_values.assert_called_once_with({"@USER": "someone_else"})
 
 
@@ -91,7 +94,7 @@ def test_apply_parameters_leaves_non_hidden_param_untouched_for_non_admin():
 
     _apply_parameters(query, request, is_admin=False)
 
-    assert request.parameters["@filter"] == "2024-01-01"
+    assert request.display_parameters["@filter"] == "2024-01-01"
 
 
 @pytest.mark.unit
@@ -106,7 +109,7 @@ def test_apply_parameters_mix_of_hidden_and_visible_params_for_non_admin():
 
     _apply_parameters(query, request, is_admin=False)
 
-    assert request.parameters == {"@USER": "real_user", "@filter": "2024-01-01"}
+    assert request.display_parameters == {"@USER": "real_user", "@filter": "2024-01-01"}
 
 
 @pytest.mark.unit

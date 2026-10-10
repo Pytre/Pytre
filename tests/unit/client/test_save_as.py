@@ -7,7 +7,7 @@ from unittest.mock import Mock
 import pytest
 
 from Pytre_Client.save_as import save_as
-from Pytre_Core.user_prefs import PrefsEnum
+from Pytre_Core.user_prefs import PrefEnum
 
 
 @pytest.fixture
@@ -67,7 +67,7 @@ def test_copies_file_and_updates_prefs_on_success(user_prefs, monkeypatch, tmp_p
 
     assert result == dest_file
     assert dest_file.read_bytes() == b"hello world"
-    user_prefs.set.assert_called_once_with(PrefsEnum.save_as_folder, dest_file.parent)
+    user_prefs.set.assert_called_once_with(PrefEnum.SAVE_AS_FOLDER, dest_file.parent)
 
 
 @pytest.mark.unit
@@ -79,7 +79,7 @@ def test_dialog_receives_initial_dir_and_filename_from_source(user_prefs, monkey
 
     save_as(user_prefs, None, src_file)
 
-    user_prefs.get.assert_called_once_with(PrefsEnum.save_as_folder)
+    user_prefs.get.assert_called_once_with(PrefEnum.SAVE_AS_FOLDER)
     _, kwargs = asksaveasfilename.call_args
     assert kwargs["initialdir"] == user_prefs.get.return_value
     assert kwargs["initialfile"] == "my_export.csv"

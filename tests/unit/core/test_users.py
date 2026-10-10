@@ -65,9 +65,9 @@ def mock_kee():
 def sample_csv_users(tmp_path):
     """Create sample CSV file for testing"""
     csv_file = tmp_path / "users.csv"
-    content = """id;description;admin;groups;login message
-admin_user;Admin User;1;admin;Welcome Admin
-jdoe;John Doe;0;users;Welcome John
+    content = """id;description;admin;groups
+admin_user;Admin User;1;admin
+jdoe;John Doe;0;users
 """
 
     csv_file.write_text(content, encoding="latin-1")
@@ -203,8 +203,8 @@ def test_csv_import_uses_generator_for_search(tmp_path, mock_kee):
 
     # Create CSV with entry that matches existing (case-insensitive)
     csv_file = tmp_path / "update.csv"
-    headers = ["id", "description", "admin", "groups", "login message"]
-    row = ["OLD_USER", "Updated Name", "0", "users", "Welcome"]
+    headers = ["id", "description", "admin", "groups"]
+    row = ["OLD_USER", "Updated Name", "0", "users"]
 
     with open(csv_file, "w", encoding="latin-1", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=headers, delimiter=";")
@@ -244,8 +244,8 @@ def test_csv_import_creates_new_entries(tmp_path, mock_kee):
 
     # Create CSV with new user
     csv_file = tmp_path / "new.csv"
-    headers = ["id", "description", "admin", "groups", "login message"]
-    row = ["newuser", "New User", "0", "users", "Welcome"]
+    headers = ["id", "description", "admin", "groups"]
+    row = ["newuser", "New User", "0", "users"]
 
     with open(csv_file, "w", encoding="latin-1", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=headers, delimiter=";")
@@ -278,9 +278,9 @@ def test_csv_import_parses_groups_with_delimiter(tmp_path, mock_kee):
 
     # Create CSV with quoted groups containing delimiter
     csv_file = tmp_path / "groups.csv"
-    headers = ["id", "description", "admin", "groups", "login message"]
+    headers = ["id", "description", "admin", "groups"]
     # Groups with delimiter in quotes
-    row = ["user1", "User One", "0", '"admin;users;power-users"', "Welcome"]
+    row = ["user1", "User One", "0", '"admin;users;power-users"']
 
     with open(csv_file, "w", encoding="latin-1", newline="") as f:
         writer = csv.writer(f, delimiter=";", quotechar='"')
@@ -310,8 +310,8 @@ def test_csv_import_replaces_invalid_chars_in_tags(tmp_path, mock_kee):
     mock_kee.db.add_entry = Mock(return_value=new_entry)
 
     csv_file = tmp_path / "tags.csv"
-    headers = ["id", "description", "admin", "groups", "login message"]
-    row = ["user1", "User One", "0", "admin,users;power", "Welcome"]
+    headers = ["id", "description", "admin", "groups"]
+    row = ["user1", "User One", "0", "admin,users;power"]
 
     with open(csv_file, "w", encoding="latin-1", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=headers, delimiter=";")
@@ -593,18 +593,39 @@ def test_get_cust_attribs_list_raises_if_no_group_selected(mock_kee):
 @pytest.mark.unit
 def test_get_cust_attribs_list_excludes_predefined_custom_keys(mock_kee):
     """get_cust_attribs_list should exclude every _UserField custom-property key (superuser,
-    msg_login, auth_type, password_changed_at) - native fields (username/title/admin's real key
+    auth_type, password_changed_at) - native fields (username/title/admin's real key
     "superuser" aside) never appear in custom_properties in real KeePass data, so they aren't
     part of this fixture."""
     entry = Mock()
     entry.tags = []
-    entry.custom_properties = ["superuser", "msg_login", "auth_type", "password_changed_at", "service"]
+    entry.custom_properties = ["superuser", "auth_type", "password_changed_at", "service"]
     mock_kee.grp_users.entries = [entry]
 
     users = Users(mock_kee)
     result = users.get_cust_attribs_list()
 
     assert result == ["service"]
+
+
+@pytest.mark.unit
+def test_user_load_from_entry_keeps_a_legacy_login_message_as_custom_attribute(mock_kee):
+    """Databases written before the login message was removed still hold a "msg_login" property -
+    it is now handled like any other custom attribute (removable with the custom attributes tools)"""
+    from pykeepass.entry import Entry
+    from Pytre_Core.users import User
+
+    entry = Mock(spec=Entry)
+    entry.uuid = "12345678-1234-1234-1234-123456789012"
+    entry.username = "jdoe"
+    entry.title = "John Doe"
+    entry.tags = []
+    entry.custom_properties = ["superuser", "msg_login"]
+    entry.get_custom_property = Mock(side_effect=lambda name: {"superuser": "false", "msg_login": "Welcome"}[name])
+
+    user = User(Users(mock_kee), entry=entry)
+
+    assert user.attribs_cust == {"msg_login": "Welcome"}
+    assert not hasattr(user, "msg_login")
 
 
 # ================================================================================
@@ -932,6 +953,71 @@ def test_get_current_username_prefixes_domain(mock_kee, monkeypatch):
     assert users.get_current_username() == "CORP\\jdoe"
 
 
+@pytest.mark.unit
+def test_get_current_username_is_usable_without_users_instance(monkeypatch):
+    """Static: a user can be detected without any users database (CLIENT mode)"""
+    monkeypatch.setattr("Pytre_Core.users.getpass.getuser", lambda: "jdoe")
+    monkeypatch.delenv("userdnsdomain", raising=False)
+
+    assert Users.get_current_username() == "jdoe"
+
+
+# ================================================================================
+# User without users database (CLIENT mode)
+# ================================================================================
+
+
+@pytest.mark.unit
+def test_user_without_users_database_is_the_os_user_authorized_without_rights(monkeypatch):
+    monkeypatch.setattr("Pytre_Core.users.getpass.getuser", lambda: "jdoe")
+    monkeypatch.delenv("userdnsdomain", raising=False)
+
+    user = User(None)
+
+    assert user.username == "jdoe"
+    assert user.is_authorized is True
+    assert user.exists is False
+    assert user.admin is False
+    assert user.groups == ["all"]
+    assert user.attribs_cust == {}
+
+
+@pytest.mark.unit
+def test_user_without_users_database_keeps_explicit_username():
+    user = User(None, username="alice")
+
+    assert user.username == "alice"
+    assert user.is_authorized is True
+
+
+@pytest.mark.unit
+def test_user_without_users_database_load_is_a_no_op():
+    user = User(None, username="alice")
+
+    user.load()
+
+    assert user.exists is False
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("method", ["save", "delete"])
+def test_user_without_users_database_cannot_be_saved_or_deleted(method):
+    user = User(None, username="alice")
+
+    with pytest.raises(RuntimeError, match="No users database"):
+        getattr(user, method)()
+
+
+@pytest.mark.unit
+def test_create_from_remote_infos_without_users_database():
+    user = User.create_from_remote_infos(None, {"username": "alice", "title": "Alice", "attribs_cust": {"x": "1"}})
+
+    assert user.users is None
+    assert user.username == "alice"
+    assert user.title == "Alice"
+    assert user.user_info("x") == "1"
+
+
 # ================================================================================
 # User Class Tests
 # ================================================================================
@@ -948,10 +1034,10 @@ def test_user_load_from_entry_sets_std_attribs(mock_kee):
     entry.username = "jdoe"
     entry.title = "John Doe"
     entry.tags = ["admin"]
-    entry.custom_properties = ["msg_login", "superuser", "service"]
+    entry.custom_properties = ["superuser", "service"]
 
     def get_prop(name):
-        return {"msg_login": "Welcome", "superuser": "true", "service": "IT"}[name]
+        return {"superuser": "true", "service": "IT"}[name]
 
     entry.get_custom_property = Mock(side_effect=get_prop)
 
@@ -963,7 +1049,6 @@ def test_user_load_from_entry_sets_std_attribs(mock_kee):
     assert user.username == "jdoe"
     assert user.title == "John Doe"
     assert user.admin is True
-    assert user.msg_login == "Welcome"
     assert user.attribs_cust == {"service": "IT"}
     assert "admin" in user.groups
 
@@ -1446,7 +1531,7 @@ def test_csv_import_raises_if_db_not_opened(tmp_path, mock_kee):
     mock_kee.db = None
 
     csv_file = tmp_path / "users.csv"
-    csv_file.write_text("id;description;admin;groups;login message\n", encoding="utf-8")
+    csv_file.write_text("id;description;admin;groups\n", encoding="utf-8")
 
     with pytest.raises(RuntimeError, match="Database not opened"):
         users.csv_import(csv_file)
@@ -1458,7 +1543,7 @@ def test_csv_import_raises_if_encoding_not_detected(tmp_path, mock_kee):
     users = Users(mock_kee)
 
     csv_file = tmp_path / "users.csv"
-    csv_file.write_text("id;description;admin;groups;login message\n", encoding="utf-8")
+    csv_file.write_text("id;description;admin;groups\n", encoding="utf-8")
 
     with patch("Pytre_Core.users.detect_encoding", return_value=None):
         with pytest.raises(ValueError, match="Unable to detect encoding"):
@@ -1471,7 +1556,7 @@ def test_csv_import_skips_row_with_empty_id(tmp_path, mock_kee):
     users = Users(mock_kee)
 
     csv_file = tmp_path / "users.csv"
-    content = "id;description;admin;groups;login message\n;No Id;0;;Welcome\n"
+    content = "id;description;admin;groups\n;No Id;0;\n"
     csv_file.write_text(content, encoding="latin-1")
 
     result = users.csv_import(csv_file)
@@ -1496,7 +1581,7 @@ def test_csv_import_writes_custom_columns(tmp_path, mock_kee):
     mock_kee.db.add_entry = Mock(return_value=new_entry)
 
     csv_file = tmp_path / "users.csv"
-    content = "id;description;admin;groups;login message;service\nnewuser;New User;0;;Welcome;IT\n"
+    content = "id;description;admin;groups;service\nnewuser;New User;0;;IT\n"
     csv_file.write_text(content, encoding="latin-1")
 
     users.csv_import(csv_file)
@@ -1514,7 +1599,7 @@ def test_csv_export_writes_tags_and_custom_columns(mock_kee, tmp_path):
     entry.custom_properties = ["service"]
 
     def get_prop(name):
-        return {"superuser": "true", "msg_login": "Welcome", "service": "IT"}.get(name, "")
+        return {"superuser": "true", "service": "IT"}.get(name, "")
 
     entry.get_custom_property = Mock(side_effect=get_prop)
     mock_kee.grp_users.entries = [entry]
@@ -1549,7 +1634,7 @@ def test_csv_import_hashes_plaintext_password_column(tmp_path, mock_kee):
     users = Users(mock_kee)
     csv_file = tmp_path / "users.csv"
     csv_file.write_text(
-        "id;description;admin;groups;login message;auth;password\njdoe;John Doe;0;;Welcome;basic;s3cret\n",
+        "id;description;admin;groups;auth;password\njdoe;John Doe;0;;basic;s3cret\n",
         encoding="latin-1",
     )
 
@@ -1573,8 +1658,8 @@ def test_csv_import_stores_password_hash_column_unchanged(tmp_path, mock_kee):
     users = Users(mock_kee)
     csv_file = tmp_path / "users.csv"
     csv_file.write_text(
-        f"id;description;admin;groups;login message;auth;password hash\n"
-        f"jdoe;John Doe;0;;Welcome;basic;{precomputed_hash}\n",
+        f"id;description;admin;groups;auth;password hash\n"
+        f"jdoe;John Doe;0;;basic;{precomputed_hash}\n",
         encoding="latin-1",
     )
 
@@ -1597,7 +1682,7 @@ def test_csv_import_writes_auth_type_under_the_real_storage_key(tmp_path, mock_k
     users = Users(mock_kee)
     csv_file = tmp_path / "users.csv"
     csv_file.write_text(
-        "id;description;admin;groups;login message;auth\njdoe;John Doe;0;;Welcome;basic\n",
+        "id;description;admin;groups;auth\njdoe;John Doe;0;;basic\n",
         encoding="latin-1",
     )
 
@@ -1622,7 +1707,7 @@ def test_csv_import_stores_auth_type_in_canonical_case(tmp_path, mock_kee):
     users = Users(mock_kee)
     csv_file = tmp_path / "users.csv"
     csv_file.write_text(
-        "id;description;admin;groups;login message;auth\njdoe;John Doe;0;;Welcome;BASIC\n",
+        "id;description;admin;groups;auth\njdoe;John Doe;0;;BASIC\n",
         encoding="latin-1",
     )
 
@@ -1643,7 +1728,7 @@ def test_csv_import_skips_row_with_invalid_auth_type(tmp_path, mock_kee):
     users = Users(mock_kee)
     csv_file = tmp_path / "users.csv"
     csv_file.write_text(
-        "id;description;admin;groups;login message;auth\njdoe;John Doe;0;;Welcome;not_a_type\n",
+        "id;description;admin;groups;auth\njdoe;John Doe;0;;not_a_type\n",
         encoding="latin-1",
     )
 
@@ -1657,7 +1742,7 @@ def test_csv_import_rejects_password_and_password_hash_together(tmp_path, mock_k
     users = Users(mock_kee)
     csv_file = tmp_path / "users.csv"
     csv_file.write_text(
-        "id;description;admin;groups;login message;password;password hash\njdoe;John Doe;0;;Welcome;s3cret;somehash\n",
+        "id;description;admin;groups;password;password hash\njdoe;John Doe;0;;s3cret;somehash\n",
         encoding="latin-1",
     )
 
@@ -1677,7 +1762,7 @@ def test_csv_import_keeps_existing_password_when_column_empty(tmp_path, mock_kee
     users = Users(mock_kee)
     csv_file = tmp_path / "users.csv"
     csv_file.write_text(
-        "id;description;admin;groups;login message;password\njdoe;John Doe;0;;Welcome;\n",
+        "id;description;admin;groups;password\njdoe;John Doe;0;;\n",
         encoding="latin-1",
     )
 
@@ -1696,7 +1781,7 @@ def test_csv_export_includes_password_hash_when_requested(mock_kee, tmp_path):
     entry.custom_properties = ["auth_type"]
 
     def get_prop(name):
-        return {"superuser": "false", "msg_login": "Welcome", "auth_type": "basic"}.get(name, "")
+        return {"superuser": "false", "auth_type": "basic"}.get(name, "")
 
     entry.get_custom_property = Mock(side_effect=get_prop)
     mock_kee.grp_users.entries = [entry]
@@ -1709,7 +1794,7 @@ def test_csv_export_includes_password_hash_when_requested(mock_kee, tmp_path):
     lines = output_file.read_text(encoding="utf-8-sig").splitlines()
     header = lines[0].split(";")
     row = lines[1].split(";")
-    assert header == ["Id", "Description", "Admin", "Groups", "Login Message", "Auth", "Password Hash", "Oidc Link"]
+    assert header == ["Id", "Description", "Admin", "Groups", "Auth", "Password Hash", "Oidc Link"]
     assert len(row) == len(header)  # regression: header/data column count used to drift apart
     assert dict(zip(header, row))["Password Hash"] == "the-hash"
     assert dict(zip(header, row))["Auth"] == "basic"
@@ -1758,8 +1843,8 @@ def test_csv_import_writes_a_new_oidc_link(tmp_path, mock_kee):
 
     csv_file = tmp_path / "oidc.csv"
     csv_file.write_text(
-        "id;description;admin;groups;login message;oidc link\n"
-        'newuser;New User;0;;;{"issuer": "https://idp.example.com", "sub": "sub-abc"}\n',
+        "id;description;admin;groups;oidc link\n"
+        'newuser;New User;0;;{"issuer": "https://idp.example.com", "sub": "sub-abc"}\n',
         encoding="latin-1",
     )
 
@@ -1789,8 +1874,8 @@ def test_csv_import_never_treats_the_oidc_link_column_as_a_password(tmp_path, mo
 
     csv_file = tmp_path / "oidc.csv"
     csv_file.write_text(
-        'id;description;admin;groups;login message;oidc link\n'
-        'pwuser;;0;;;{"issuer": "https://idp.example.com", "sub": "sub-abc"}\n',
+        'id;description;admin;groups;oidc link\n'
+        'pwuser;;0;;{"issuer": "https://idp.example.com", "sub": "sub-abc"}\n',
         encoding="latin-1",
     )
 
@@ -1824,8 +1909,8 @@ def test_csv_import_does_not_rewrite_an_unchanged_oidc_link(tmp_path, mock_kee):
 
     csv_file = tmp_path / "oidc.csv"
     csv_file.write_text(
-        "id;description;admin;groups;login message;oidc link\n"
-        'existinguser;;0;;;{"issuer": "https://idp.example.com", "sub": "sub-abc"}\n',
+        "id;description;admin;groups;oidc link\n"
+        'existinguser;;0;;{"issuer": "https://idp.example.com", "sub": "sub-abc"}\n',
         encoding="latin-1",
     )
 
@@ -1857,8 +1942,8 @@ def test_csv_import_resets_refresh_token_when_the_sub_changes(tmp_path, mock_kee
 
     csv_file = tmp_path / "oidc.csv"
     csv_file.write_text(
-        "id;description;admin;groups;login message;oidc link\n"
-        'existinguser;;0;;;{"issuer": "https://idp.example.com", "sub": "sub-new"}\n',
+        "id;description;admin;groups;oidc link\n"
+        'existinguser;;0;;{"issuer": "https://idp.example.com", "sub": "sub-new"}\n',
         encoding="latin-1",
     )
 
@@ -1897,8 +1982,8 @@ def test_csv_import_resets_refresh_token_when_the_issuer_changes(tmp_path, mock_
 
     csv_file = tmp_path / "oidc.csv"
     csv_file.write_text(
-        "id;description;admin;groups;login message;oidc link\n"
-        'existinguser;;0;;;{"issuer": "https://new-idp.example.com", "sub": "sub-abc"}\n',
+        "id;description;admin;groups;oidc link\n"
+        'existinguser;;0;;{"issuer": "https://new-idp.example.com", "sub": "sub-abc"}\n',
         encoding="latin-1",
     )
 
@@ -1934,8 +2019,8 @@ def test_csv_import_ignores_a_blank_sub_for_an_already_linked_issuer(tmp_path, m
 
     csv_file = tmp_path / "oidc.csv"
     csv_file.write_text(
-        'id;description;admin;groups;login message;oidc link\n'
-        'existinguser;;0;;;{"issuer": "https://idp.example.com", "sub": ""}\n',
+        'id;description;admin;groups;oidc link\n'
+        'existinguser;;0;;{"issuer": "https://idp.example.com", "sub": ""}\n',
         encoding="latin-1",
     )
 
@@ -1961,7 +2046,7 @@ def test_csv_import_without_the_oidc_link_column_leaves_existing_link_untouched(
     mock_kee.grp_users.entries = [entry]
 
     csv_file = tmp_path / "no_oidc.csv"
-    csv_file.write_text("id;description;admin;groups;login message\nexistinguser;;0;;\n", encoding="latin-1")
+    csv_file.write_text("id;description;admin;groups\nexistinguser;;0;\n", encoding="latin-1")
 
     users = Users(mock_kee)
     users.csv_import(csv_file)
@@ -1987,7 +2072,7 @@ def test_csv_import_ignores_a_blank_oidc_link_cell(tmp_path, mock_kee):
     mock_kee.grp_users.entries = [entry]
 
     csv_file = tmp_path / "blank_oidc.csv"
-    csv_file.write_text("id;description;admin;groups;login message;oidc link\nexistinguser;;0;;;\n", encoding="latin-1")
+    csv_file.write_text("id;description;admin;groups;oidc link\nexistinguser;;0;;\n", encoding="latin-1")
 
     users = Users(mock_kee)
     users.csv_import(csv_file)
@@ -2070,7 +2155,7 @@ def test_load_oidc_link_ignores_a_link_with_no_issuer():
 
 @pytest.mark.unit
 def test_user_field_label_title_cases_multi_word_columns():
-    assert UserField.LOGIN_MSG.label == "Login Message"
+    assert UserField.OIDC_LINK.label == "Oidc Link"
     assert UserField.PWD_HASH.label == "Password Hash"
     assert UserField.ID.label == "Id"
 
@@ -2093,7 +2178,6 @@ def test_user_field_csv_status_splits_standard_from_auth_password_columns():
         UserField.DESCRIPTION,
         UserField.ADMIN,
         UserField.GROUPS,
-        UserField.LOGIN_MSG,
     }
     assert password == {UserField.PWD, UserField.PWD_HASH}
     assert optional == {UserField.AUTH_TYPE, UserField.OIDC_LINK}
@@ -2218,7 +2302,7 @@ def test_csv_import_raises_if_no_group_selected(tmp_path, mock_kee):
     users.kee_grp = None
 
     csv_file = tmp_path / "users.csv"
-    csv_file.write_text("id;description;admin;groups;login message\n", encoding="utf-8")
+    csv_file.write_text("id;description;admin;groups\n", encoding="utf-8")
 
     with pytest.raises(ValueError, match="No KeePass group selected"):
         users.csv_import(csv_file)
@@ -2234,7 +2318,7 @@ def test_csv_import_sets_superuser_true_for_admin_flag(tmp_path, mock_kee):
     mock_kee.db.add_entry = Mock(return_value=new_entry)
 
     csv_file = tmp_path / "users.csv"
-    content = "id;description;admin;groups;login message\nadminuser;Admin;1;;Welcome\n"
+    content = "id;description;admin;groups\nadminuser;Admin;1;\n"
     csv_file.write_text(content, encoding="latin-1")
 
     users.csv_import(csv_file)

@@ -23,7 +23,7 @@ def test_export_returns_attachment_with_expected_content(admin_client):
 
 
 def test_import_creates_a_new_user(isolated_admin_client):
-    csv_content = "id;description;admin;groups;login message\nimported_user;Imported User;0;;Welcome\n"
+    csv_content = "id;description;admin;groups\nimported_user;Imported User;0;\n"
 
     response = isolated_admin_client.post(
         "/admin/users/import",

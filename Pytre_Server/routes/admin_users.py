@@ -28,7 +28,6 @@ class UserForm(BaseModel):
     username: str
     title: str = ""
     admin: bool = False
-    msg_login: str = ""
     auth_type: str
     password: str = ""
     groups: list[str] = Field(default_factory=list)
@@ -42,7 +41,6 @@ class UserForm(BaseModel):
         user.username = self.username.strip()
         user.title = self.title.strip()
         user.admin = self.admin
-        user.msg_login = self.msg_login.strip()
         user.auth_type = AuthType.from_value(self.auth_type) or AuthType.NONE
         if self.password:
             user.password_hash = await asyncio.to_thread(hash_password, self.password)

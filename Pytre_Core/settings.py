@@ -1,8 +1,6 @@
-import codecs
 import json
 import logging
 import secrets
-from datetime import datetime
 from enum import Enum
 from pathlib import Path, PureWindowsPath
 
@@ -24,14 +22,9 @@ class _KeepassEnum(Enum):
     """List of keepass entries for Settings.
     Name is the keepass entry title and value is its corresponding settings attribute."""
 
-    FIELD_SEPARATOR = "field_separator"
-    DECIMAL_SEPARATOR = "decimal_separator"
-    DATE_FORMAT = "date_format"
-    EXTRACT_ENCODING = "extract_encoding"
     QUERIES_FOLDER = "queries_folder"
     LOGS_ARE_ON = "logs_are_on"
     LOGS_FOLDER = "logs_folder"
-    USERS_CACHE_EXPIRATION = "users_cache_expiration"
     SETTINGS_VERSION = "settings_version"
     JWT_SECRET = "jwt_secret"
 
@@ -42,17 +35,11 @@ class Settings:
         self.kee_grp: Group | None = None
 
         self.app_path: Path = get_app_path()
-        self.default_encoding: str = "utf-8-sig"  # format à utiliser par défaut
 
         self.settings_version: str = ""  # version actuelle des settings
-        self.field_separator: str = ";"  # délimitateur de champs pour exports
-        self.decimal_separator: str = ","  # séparateur décimal pour exports
-        self.date_format: str = "%d/%m/%Y"  # format date pour les exports
-        self.extract_encoding: str = self.default_encoding  # encoding format pour les exports
         self.queries_folder: Path = DEFAULT_QUERIES_FOLDER  # répertoire des requêtes SQL
         self.logs_are_on: bool = False  # indicateur si logs centraux
         self.logs_folder: Path = DEFAULT_LOGS_FOLDER  # répertoire où stocker les logs centraux
-        self.users_cache_expiration: int = 10  # nombre de jours du cache utilisateur pour ses requêtes
 
         self.jwt_secret: str = ""  # signature JWT pour Pytre_Server
 
@@ -63,31 +50,6 @@ class Settings:
         if self.kee.is_ko:
             return False
         self.kee_grp = self.kee.grp_settings
-        return True
-
-    def _validate_encoding_format(self, encoding_format: str) -> bool:
-        """if not valid raise a LookupError"""
-        try:
-            codecs.lookup(encoding_format)
-        except LookupError:
-            raise LookupError(f"Unknown encoding format: '{encoding_format}'")
-
-        return True
-
-    def _validate_date_format(self, date_format: str) -> bool:
-        """if not valid raise a ValueError"""
-        # for proper validation, day must be a value valid for a month
-        # and day/month/year must differ from strptime's defaults (1/1/1900)
-        test_date = datetime(2001, 2, 3)
-
-        try:
-            formatted = test_date.strftime(date_format)
-            parsed = datetime.strptime(formatted, date_format)
-            if parsed.date() != test_date.date():
-                raise ValueError(f"Invalid date format: '{date_format}' does not round-trip")
-        except ValueError as e:
-            raise ValueError(f"Invalid date format: '{date_format}'") from e
-
         return True
 
     def _validate_folder(self, folder: str | Path) -> bool:
@@ -111,48 +73,12 @@ class Settings:
 
             value = info.username if info.username is not None else ""
 
-            if setting_item is _KeepassEnum.FIELD_SEPARATOR and (not value or len(value) != 1):
-                log(f"Invalid field separator '{value}', using default ';'", logging.WARNING)
-                value = ";"
-            elif setting_item is _KeepassEnum.DECIMAL_SEPARATOR:
-                if not value or len(value) != 1:
-                    log(f"Invalid decimal separator '{value}', using default ','")
-                    value = ","
-                if value == self.field_separator:
-                    log(
-                        f"Invalid decimal separator '{value}' already used by field separator, using default ','",
-                        logging.WARNING,
-                    )
-                    value = ","
-            elif setting_item is _KeepassEnum.DATE_FORMAT:
-                try:
-                    self._validate_date_format(value)
-                except ValueError:
-                    default = "%d/%m/%Y"
-                    log(f"Invalid date format settings '{value}', using default '{default}'", logging.WARNING)
-                    value = default
-            elif setting_item is _KeepassEnum.EXTRACT_ENCODING:
-                try:
-                    self._validate_encoding_format(value)
-                except LookupError:
-                    default = self.default_encoding
-                    log(f"Invalid encoding settings '{value}', using default '{default}'", logging.WARNING)
-                    value = default
-            elif setting_item is _KeepassEnum.LOGS_ARE_ON:
+            if setting_item is _KeepassEnum.LOGS_ARE_ON:
                 value = True if value.lower() == "true" else False
             elif setting_item is _KeepassEnum.LOGS_FOLDER:
                 value = Path(value) if value and Path(value).is_dir() else DEFAULT_LOGS_FOLDER
             elif setting_item is _KeepassEnum.QUERIES_FOLDER:
                 value = Path(value) if value and Path(value).is_dir() else DEFAULT_QUERIES_FOLDER
-            elif setting_item is _KeepassEnum.USERS_CACHE_EXPIRATION:
-                if value.isnumeric():
-                    value = int(value)
-                else:
-                    log(
-                        f"Invalid users cache expiration '{value}', using '{self.users_cache_expiration}' days",
-                        logging.WARNING,
-                    )
-                    value = self.users_cache_expiration
 
             setattr(self, attr_name, value)
 
@@ -195,13 +121,6 @@ class Settings:
                 if setting_item is not _KeepassEnum.LOGS_FOLDER or self.logs_are_on:
                     self._validate_folder(value)
                 value = PureWindowsPath(value).as_posix()  # always save path as posix for OSes compatibility
-            elif setting_item is _KeepassEnum.EXTRACT_ENCODING:
-                self._validate_encoding_format(value)
-            elif setting_item is _KeepassEnum.USERS_CACHE_EXPIRATION:
-                if not str(value).isnumeric():
-                    raise ValueError(f"Invalid value for users cache expiration : '{value}'")
-            elif setting_item is _KeepassEnum.DATE_FORMAT:
-                self._validate_date_format(value)
 
             info.username = str(value)
 

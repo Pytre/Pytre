@@ -8,7 +8,7 @@ from pykeepass.exceptions import CredentialsError
 from pykeepass.group import Group
 
 from Pytre_Core.utils import get_app_path, log as _log
-from Pytre_Core.credentials import crypted_file_pwd_get, crypted_file_pwd_history, crypted_file_pwd_change
+from Pytre_Core.credentials import crypted_file_pwd_get, crypted_file_pwd_change
 
 
 KEE_FILE: Path = Path().cwd() / "Pytre.db"
@@ -29,8 +29,12 @@ def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__)
 
 class Kee:
     def __init__(self, password: str = ""):
-        """`password` also serve, instead of `BLANK_PWD`, to set a new base if it's needed"""
+        """`password` also serve, instead of `BLANK_PWD`, to set a new base if it's needed.
+        Without `password` it is read from the encrypted key file, which then records password change
+        (hybrid client). With `password` (server: from the keyring) the key file is never used."""
+
         self._init_password: str = password or BLANK_PWD  # will be used to create db if it doesn't exists
+        self._uses_key_file: bool = not password
 
         self.file: str | Path = KEE_FILE
         self.password: str = password
@@ -56,12 +60,10 @@ class Kee:
             except FileNotFoundError:
                 log(f"Settings database not found: '{self.file}'", logging.WARNING)
                 self.create_db(password=self._init_password)
-            except CredentialsError:  # when password is invalid retry with previous passwords
+            except CredentialsError:
                 self.is_ko = True
-                db_unlocked = self.pwd_try()
-                if not db_unlocked:
-                    log("Failed to access settings database: invalid password.", logging.ERROR)
-                    return
+                log("Failed to access settings database: invalid password.", logging.ERROR)
+                return
 
             self.is_open = True
             self.access_count += 1
@@ -76,15 +78,18 @@ class Kee:
         self.grp_users = self._get_group(KeeGroup.USERS.value)
         self.grp_oidc = self._get_group(KeeGroup.OIDC.value)
 
-    def save_db(self):
+    def save_db(self) -> bool:
+        """Returns whether the database was saved"""
         if self.db is None:
             raise RuntimeError("Can't save a closed database.")
 
         try:
             self.db.save()
-        except PermissionError:
-            msg = "Failed to save settings database."
-            log(msg, logging.ERROR)
+        except PermissionError as e:
+            log(f"Failed to save settings database: {e}", logging.ERROR)
+            return False
+
+        return True
 
     def create_db(self, password: str = BLANK_PWD):
         self.is_ko = True
@@ -99,19 +104,16 @@ class Kee:
 
         self.is_ko = False
 
-    def pwd_try(self, pwds_list: list[str] | None = None) -> bool:
-        if not pwds_list:
-            pwds_list = crypted_file_pwd_history()[1:]
-
-        for pwd in pwds_list:
-            try:
-                self.db = PyKeePass(self.file, password=pwd)
-                self.pwd_change(pwd, True)
-                self.is_ko = False
-                log("Database access restored.")
-                return True
-            except CredentialsError:
-                pass
+    def pwd_try(self, password: str) -> bool:
+        """Tries to open the database with `password`, if it works it becomes the current one"""
+        try:
+            self.db = PyKeePass(self.file, password=password)
+            self.pwd_change(password, True)
+            self.is_ko = False
+            log("Database access restored.")
+            return True
+        except CredentialsError:
+            pass
 
         return False
 
@@ -119,13 +121,11 @@ class Kee:
         pwd = crypted_file_pwd_get()
         return pwd
 
-    def pwd_history(self) -> list[str]:
-        history = crypted_file_pwd_history()
-        return history
-
-    def pwd_change(self, new_password: str, force_save: bool = False):
-        """With `force_save` set to True, the database will always be saved
-        regardless if the password actually changed or not."""
+    def pwd_change(self, new_password: str, force_save: bool = False) -> None:
+        """Saves the database encrypted with `new_password`, then records it in the key file - in
+        that order, so the key file never holds a password the database isn't encrypted with.
+        Does nothing if the password is unchanged, unless `force_save` is True.
+        Raises RuntimeError if the database can't be saved, the previous password is then kept."""
 
         if self.db is None:
             raise RuntimeError("Failed to change the password. Settings database not open.")
@@ -133,12 +133,15 @@ class Kee:
         if not force_save and new_password == self.password:
             return
 
-        self.password = new_password
-        self.db.password = new_password
-        crypted_file_pwd_change(new_password)
+        previous_password, previous_db_password = self.password, self.db.password
+        self.password, self.db.password = new_password, new_password
 
-        if force_save:
-            self.save_db()
+        if not self.save_db():
+            self.password, self.db.password = previous_password, previous_db_password
+            raise RuntimeError("Failed to save the settings database with its new password")
+
+        if self._uses_key_file:
+            crypted_file_pwd_change(new_password)
 
     def _get_group(self, name: str) -> Group:
         """Return database group. If it doesn't exist it will be created."""

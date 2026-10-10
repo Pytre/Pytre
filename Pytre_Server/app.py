@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.responses import RedirectResponse
 
-from Pytre_Core.context import AppContext
+from Pytre_Core.context import AppContext, AppMode
 from Pytre_Core.logs_central import ServerDriven
 
 from Pytre_Server.routes.admin_auth import AdminAuthRequired, admin_auth_required_handler
@@ -33,7 +33,7 @@ def create_app(
     """Build and configure the FastAPI app"""
 
     app = FastAPI(title="Pytre Server", lifespan=_lifespan)
-    _app_ctx = AppContext(master_key=master_key)
+    _app_ctx = AppContext(master_key=master_key, mode=AppMode.SERVER)
 
     execution_logs: ServerDriven | None = None
     if _app_ctx.settings.logs_are_on:

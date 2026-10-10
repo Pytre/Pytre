@@ -44,7 +44,7 @@ def test_add_attribute_created_blank_for_existing_users(isolated_admin_client):
 
     isolated_admin_client.post(
         "/admin/users/new",
-        data={"username": "attrib_user", "title": "", "msg_login": "", "auth_type": "none", "password": ""},
+        data={"username": "attrib_user", "title": "", "auth_type": "none", "password": ""},
         follow_redirects=False,
     )
     isolated_admin_client.post("/admin/users/attributes/add", data={"name": "region"}, follow_redirects=False)

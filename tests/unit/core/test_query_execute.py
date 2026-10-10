@@ -11,10 +11,12 @@ from unittest.mock import Mock, patch, MagicMock
 
 import pymssql
 
+from Pytre_Core.context import AppContext, AppMode
 from Pytre_Core.remotes import RemoteCursor, RemoteExecutionError, RemoteHTTPStatusError, RemoteRequestError
 from Pytre_Core.sql_query.query_drivers import ServerConnectionError
 from Pytre_Core.sql_query.query_execute import QueryExecute
 from Pytre_Core.sql_query.execute_config import LocalExecuteCfg, RemoteExecuteCfg
+from Pytre_Core.user_prefs import CsvFormat, DisplayFormat
 
 
 # ================================================================================
@@ -24,13 +26,8 @@ from Pytre_Core.sql_query.execute_config import LocalExecuteCfg, RemoteExecuteCf
 
 @pytest.fixture
 def mock_settings():
-    """Mock Settings providing valid defaults for SqlParam/CmdBuilder/QueryExecute"""
-    mock = Mock()
-    mock.date_format = "%d/%m/%Y"
-    mock.decimal_separator = ","
-    mock.field_separator = ";"
-    mock.extract_encoding = "utf-8-sig"
-    return mock
+    """Mock Settings for QueryExecute"""
+    return Mock()
 
 
 @pytest.fixture
@@ -87,6 +84,7 @@ def exec_user_ctx():
     ctx.current_user = Mock()
     ctx.current_user.username = "u1"
     ctx.current_user.title = "User One"
+    ctx.display_format = DisplayFormat()
     return ctx
 
 
@@ -98,7 +96,6 @@ def base_config(tmp_path):
         cmd_template="SELECT %(p)s",
         cmd_parameters={"p": 1},
         extract_file=Path(),
-        extract_encoding="utf-8-sig",
         params_metadata={},
     )
 
@@ -113,7 +110,7 @@ class _FakeRemote:
         self._error = error
 
     @contextmanager
-    def execute(self, query_id, template_hash, parameters):
+    def execute(self, query_id, template_hash, display_format, display_parameters):
         if self._error is not None:
             raise self._error
         # a real RemoteCursor, not a hand-rolled stand-in - production code does a genuine
@@ -134,9 +131,9 @@ def remote_config(fake_remote) -> RemoteExecuteCfg:
         server_id="REMOTE_SQL_SRV",
         remote_server=fake_remote,
         template_hash="hash1",
+        display_format=DisplayFormat(date_format="%Y-%m-%d", decimal_separator="."),
         display_parameters={"p": "v"},
         extract_file=Path(),
-        extract_encoding="utf-8-sig",
         params_metadata={},
     )
 
@@ -150,6 +147,7 @@ def mock_query(base_config):
     query.update_values = Mock(return_value=True)
     query.values_ok = Mock(return_value=True)
     query.get_exec_config = Mock(return_value=base_config)
+    query.display_format = DisplayFormat()
     return query
 
 
@@ -482,23 +480,36 @@ def test_extract_to_file_raises_without_extract_file(exec_app_ctx, exec_user_ctx
     qe.config = LocalExecuteCfg()  # extract_file defaults to Path()
 
     with pytest.raises(ValueError, match="not possible"):
-        qe._extract_to_file(mock_cursor, "utf-8")
+        qe._extract_to_file(mock_cursor)
 
 
 @pytest.mark.unit
-def test_extract_to_file_falls_back_on_invalid_encoding(
-    exec_app_ctx, exec_user_ctx, base_config, mock_cursor, tmp_path
-):
+def test_extract_to_file_uses_csv_format_from_config(exec_app_ctx, exec_user_ctx, base_config, mock_cursor, tmp_path):
+    qe = QueryExecute(exec_app_ctx, exec_user_ctx)
+    qe.server = exec_app_ctx.servers.servers_dict["SRV1"]
+    extract_file = tmp_path / "out.csv"
+    csv_format = CsvFormat(delimiter="|", quotechar="'", encoding="latin-1")
+    qe.config = replace(base_config, extract_file=extract_file, csv_format=csv_format)
+    mock_cursor.__iter__ = Mock(return_value=iter([("é|x", 1)]))
+
+    rows_count, _path = qe._extract_to_file(mock_cursor)
+
+    assert rows_count == 1
+    assert extract_file.read_bytes().decode("latin-1") == "col1|col2\r\n'é|x'|1\r\n"
+
+
+@pytest.mark.unit
+def test_extract_to_file_uses_default_csv_format(exec_app_ctx, exec_user_ctx, base_config, mock_cursor, tmp_path):
     qe = QueryExecute(exec_app_ctx, exec_user_ctx)
     qe.server = exec_app_ctx.servers.servers_dict["SRV1"]
     extract_file = tmp_path / "out.csv"
     qe.config = replace(base_config, extract_file=extract_file)
-    mock_cursor.__iter__ = Mock(return_value=iter([("a", 1)]))
+    mock_cursor.__iter__ = Mock(return_value=iter([("a;b", "é")]))
 
-    rows_count, path = qe._extract_to_file(mock_cursor, "not-a-real-encoding")
+    rows_count, _path = qe._extract_to_file(mock_cursor)
 
     assert rows_count == 1
-    assert path == extract_file
+    assert extract_file.read_bytes().decode("utf-8-sig") == 'col1;col2\r\n"a;b";é\r\n'
 
 
 @pytest.mark.unit
@@ -509,7 +520,7 @@ def test_extract_to_file_removes_empty_file(exec_app_ctx, exec_user_ctx, base_co
     qe.config = replace(base_config, extract_file=extract_file)
     mock_cursor.__iter__ = Mock(return_value=iter([]))
 
-    rows_count, path = qe._extract_to_file(mock_cursor, "utf-8-sig")
+    rows_count, path = qe._extract_to_file(mock_cursor)
 
     assert rows_count == 0
     assert not extract_file.exists()
@@ -524,7 +535,7 @@ def test_extract_to_file_stops_if_requested(exec_app_ctx, exec_user_ctx, base_co
     mock_cursor.__iter__ = Mock(return_value=iter([("a", 1), ("b", 2)]))
     qe.stop_requested.set()
 
-    rows_count, path = qe._extract_to_file(mock_cursor, "utf-8-sig")
+    rows_count, path = qe._extract_to_file(mock_cursor)
 
     assert rows_count == 0
     assert path is None
@@ -588,7 +599,7 @@ def test_execute_remote_sends_remote_query_id_not_query_id(qe, mock_query, remot
     captured = {}
 
     @contextmanager
-    def spy_execute(query_id, template_hash, parameters):
+    def spy_execute(query_id, template_hash, display_format, display_parameters):
         captured["query_id"] = query_id
         yield RemoteCursor(("col1", "col2"), (row for row in [("a", "1")]))
 
@@ -598,6 +609,27 @@ def test_execute_remote_sends_remote_query_id_not_query_id(qe, mock_query, remot
     qe.execute()
 
     assert captured["query_id"] == "RQ1"
+
+
+@pytest.mark.unit
+def test_execute_remote_sends_display_format_with_display_parameters(qe, mock_query, remote_config):
+    """display_parameters are sent along with the display format they were rendered with,
+    so the remote parses them with the client's format and not its own."""
+    captured = {}
+
+    @contextmanager
+    def spy_execute(query_id, template_hash, display_format, display_parameters):
+        captured["display_format"] = display_format
+        captured["display_parameters"] = display_parameters
+        yield RemoteCursor(("col1",), (row for row in [("a",)]))
+
+    remote_config.remote_server.execute = spy_execute
+    mock_query.get_exec_config.return_value = remote_config
+
+    qe.execute()
+
+    assert captured["display_format"] == DisplayFormat(date_format="%Y-%m-%d", decimal_separator=".")
+    assert captured["display_parameters"] == {"p": "v"}
 
 
 @pytest.mark.unit
@@ -614,6 +646,22 @@ def test_execute_remote_writes_to_file_and_logs(qe, mock_query, remote_config, t
     # logged against the remote's id, not a local server
     logged_id = qe.user_ctx.user_logs.insert_exec.call_args[0][0]
     assert logged_id == "REMOTE1"
+
+
+@pytest.mark.unit
+def test_execute_remote_in_client_mode_never_touches_the_settings_database(
+    exec_user_ctx, mock_query, remote_config, tmp_path
+):
+    """CLIENT mode has no KeePass database: a real AppContext raises on any access to settings/servers,
+    so the remote execution must complete without needing them (central logs only concern local executions)"""
+    extract_file = tmp_path / "out.csv"
+    mock_query.get_exec_config.return_value = replace(remote_config, extract_file=extract_file)
+    qe = QueryExecute(AppContext(mode=AppMode.CLIENT), exec_user_ctx, query=mock_query)
+
+    rows_count, output_path = qe.execute()
+
+    assert rows_count == 2
+    assert output_path == extract_file
 
 
 @pytest.mark.unit
@@ -647,9 +695,7 @@ def test_execute_remote_handles_server_error(qe, mock_query, remote_config):
 def test_execute_remote_handles_empty_result(qe, mock_query, remote_config):
     """fastmssql can't report columns for 0 rows (confirmed against the real driver) -
     Pytre_Server falls back to an empty columns list, so the header row here is empty too."""
-    mock_query.get_exec_config.return_value = replace(
-        remote_config, remote_server=_FakeRemote(columns=(), rows=[])
-    )
+    mock_query.get_exec_config.return_value = replace(remote_config, remote_server=_FakeRemote(columns=(), rows=[]))
 
     rows_count, output = qe.execute()
 

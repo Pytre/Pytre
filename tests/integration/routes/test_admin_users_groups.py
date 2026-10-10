@@ -22,7 +22,7 @@ def _find_uuid(html: str, username: str) -> str:
 def _create_user(client, username: str) -> str:
     client.post(
         "/admin/users/new",
-        data={"username": username, "title": "", "msg_login": "", "auth_type": "none", "password": ""},
+        data={"username": username, "title": "", "auth_type": "none", "password": ""},
         follow_redirects=False,
     )
     list_page = client.get("/admin/users")

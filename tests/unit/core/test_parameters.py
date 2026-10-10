@@ -8,6 +8,7 @@ import pytest
 import re
 from unittest.mock import Mock
 
+from Pytre_Core.user_prefs import DisplayFormat
 from Pytre_Core.sql_query.parameters import (
     SqlParam,
     SqlParameters,
@@ -24,14 +25,9 @@ from Pytre_Core.sql_query.parameters import (
 
 
 @pytest.fixture
-def mock_settings():
-    """Mock Settings providing valid defaults for SqlParam/CmdBuilder/QueryExecute"""
-    mock = Mock()
-    mock.date_format = "%d/%m/%Y"
-    mock.decimal_separator = ","
-    mock.field_separator = ";"
-    mock.extract_encoding = "utf-8-sig"
-    return mock
+def display_format():
+    """Default DisplayFormat for SqlParam/SqlParameters"""
+    return DisplayFormat()
 
 
 @pytest.fixture
@@ -92,11 +88,11 @@ def test_display_value_pattern():
 
 
 @pytest.mark.unit
-def test_sql_param_parse_basic(mock_settings, mock_user):
+def test_sql_param_parse_basic(display_format, mock_user):
     """SqlParam should parse basic parameter definition"""
     param_text = "@param1 as int = 100  -- Test parameter"
 
-    param = SqlParam(mock_settings, mock_user, param_text)
+    param = SqlParam(display_format, mock_user, param_text)
 
     assert param.var_name == "@param1"
     assert param.type_name == "int"
@@ -105,11 +101,11 @@ def test_sql_param_parse_basic(mock_settings, mock_user):
 
 
 @pytest.mark.unit
-def test_sql_param_parse_nvarchar(mock_settings, mock_user):
+def test_sql_param_parse_nvarchar(display_format, mock_user):
     """SqlParam should parse nvarchar with size"""
     param_text = "@name as nvarchar(50) = 'test'"
 
-    param = SqlParam(mock_settings, mock_user, param_text)
+    param = SqlParam(display_format, mock_user, param_text)
 
     assert param.var_name == "@name"
     assert param.type_name == "nvarchar"
@@ -120,11 +116,11 @@ def test_sql_param_parse_nvarchar(mock_settings, mock_user):
 
 
 @pytest.mark.unit
-def test_sql_param_parse_date(mock_settings, mock_user):
+def test_sql_param_parse_date(display_format, mock_user):
     """SqlParam should parse date parameter"""
     param_text = "@start_date as date = '2025-01-01'"
 
-    param = SqlParam(mock_settings, mock_user, param_text)
+    param = SqlParam(display_format, mock_user, param_text)
 
     assert param.var_name == "@start_date"
     assert param.type_name == "date"
@@ -133,11 +129,11 @@ def test_sql_param_parse_date(mock_settings, mock_user):
 
 
 @pytest.mark.unit
-def test_sql_param_special_prefix(mock_settings, mock_user):
+def test_sql_param_special_prefix(display_format, mock_user):
     """SqlParam should handle special ! prefix"""
     param_text = "@!SCHEMA as nvarchar(100) = 'SCHEMA_NAME'"
 
-    param = SqlParam(mock_settings, mock_user, param_text)
+    param = SqlParam(display_format, mock_user, param_text)
 
     assert param.var_name == "@!SCHEMA"
     # Check if it's recognized as special (either inlined or optional)
@@ -146,11 +142,11 @@ def test_sql_param_special_prefix(mock_settings, mock_user):
 
 
 @pytest.mark.unit
-def test_sql_param_extract_info_list(mock_settings, mock_user):
+def test_sql_param_extract_info_list(display_format, mock_user):
     """SqlParam should extract info list from comment"""
     param_text = "@param as int = 1  -- Description|LIST(1: Social, 4: Situation)"
 
-    param = SqlParam(mock_settings, mock_user, param_text)
+    param = SqlParam(display_format, mock_user, param_text)
 
     assert param.description == "Description"
     # ui_control may be lowercase
@@ -166,13 +162,13 @@ def test_sql_param_extract_info_list(mock_settings, mock_user):
 
 @pytest.mark.unit
 @pytest.mark.skip(reason="SqlParam doesn't currently raise ValueError for malformed text")
-def test_sql_param_handles_malformed_text(mock_settings, mock_user):
+def test_sql_param_handles_malformed_text(display_format, mock_user):
     """SqlParam should raise error for malformed parameter text"""
     malformed = "not a valid parameter"
 
     # Should raise ValueError for invalid parameter
     with pytest.raises(ValueError):
-        param = SqlParam(mock_settings, mock_user, malformed)
+        param = SqlParam(display_format, mock_user, malformed)
 
 
 # ================================================================================
@@ -181,33 +177,33 @@ def test_sql_param_handles_malformed_text(mock_settings, mock_user):
 
 
 @pytest.mark.unit
-def test_sql_param_optional_parameter(mock_settings, mock_user):
+def test_sql_param_optional_parameter(display_format, mock_user):
     """SqlParam should recognize OPTIONAL flag"""
     param_text = "@param as int = 100  -- Description|OPTIONAL"
 
-    param = SqlParam(mock_settings, mock_user, param_text)
+    param = SqlParam(display_format, mock_user, param_text)
 
     assert param.is_optional is True
 
 
 @pytest.mark.unit
-def test_sql_param_hidden_parameter(mock_settings, mock_user):
+def test_sql_param_hidden_parameter(display_format, mock_user):
     """SqlParam should recognize HIDE flag"""
     param_text = "@param as int = 100  -- Description|HIDE"
 
-    param = SqlParam(mock_settings, mock_user, param_text)
+    param = SqlParam(display_format, mock_user, param_text)
 
     assert param.is_hidden is True
 
 
 @pytest.mark.unit
-def test_sql_param_check_control(mock_settings, mock_user):
+def test_sql_param_check_control(display_format, mock_user):
     """SqlParam should parse CHECK control"""
     # For CHECK, first value becomes 'on', second becomes 'off'
     # The keys are the actual values passed to SQL
     param_text = "@param as int = 1  -- Description|CHECK(1, 0)"
 
-    param = SqlParam(mock_settings, mock_user, param_text)
+    param = SqlParam(display_format, mock_user, param_text)
 
     assert param.ui_control.lower() == "check"
     assert param.authorized_values is not None
@@ -218,23 +214,23 @@ def test_sql_param_check_control(mock_settings, mock_user):
 
 @pytest.mark.unit
 @pytest.mark.skip(reason="ENTRY control creates empty authorized_values which triggers validation error")
-def test_sql_param_entry_control(mock_settings, mock_user):
+def test_sql_param_entry_control(display_format, mock_user):
     """SqlParam should parse ENTRY control"""
     # ENTRY control creates empty authorized_values when no items provided
     # This causes validation to fail since 'test' is not in the empty values
     param_text = "@param as nvarchar(50) = 'test'  -- Description|ENTRY"
 
-    param = SqlParam(mock_settings, mock_user, param_text)
+    param = SqlParam(display_format, mock_user, param_text)
 
     assert param.ui_control.lower() == "entry"
 
 
 @pytest.mark.unit
-def test_sql_param_inlined_with_list(mock_settings, mock_user):
+def test_sql_param_inlined_with_list(display_format, mock_user):
     """SqlParam with @! prefix should work with LIST control"""
     param_text = "@!TYPE as int = 1  -- Type|LIST(1: Social, 2: Fiscal)"
 
-    param = SqlParam(mock_settings, mock_user, param_text)
+    param = SqlParam(display_format, mock_user, param_text)
 
     assert param.is_inlined is True
     assert param.var_name == "@!TYPE"
@@ -242,34 +238,34 @@ def test_sql_param_inlined_with_list(mock_settings, mock_user):
 
 
 @pytest.mark.unit
-def test_sql_param_inlined_invalid_control(mock_settings, mock_user):
+def test_sql_param_inlined_invalid_control(display_format, mock_user):
     """SqlParam with @! prefix should raise error for invalid control"""
     param_text = "@!PARAM as int = 1  -- Description|ENTRY"
 
     # ENTRY is not allowed for inlined parameters
     with pytest.raises(ValueError, match="not parameterized"):
-        param = SqlParam(mock_settings, mock_user, param_text)
+        param = SqlParam(display_format, mock_user, param_text)
 
 
 @pytest.mark.unit
-def test_sql_param_ctrl_pattern(mock_settings, mock_user):
+def test_sql_param_ctrl_pattern(display_format, mock_user):
     """SqlParam should parse control pattern regex"""
     # Use a valid default value that doesn't match the pattern
     # The ctrl_pattern is validated separately from the default value
     param_text = "@email as nvarchar(100) = 'test@test.com'  -- Email||^[\\w\\.]+@[\\w\\.]+$"
 
-    param = SqlParam(mock_settings, mock_user, param_text)
+    param = SqlParam(display_format, mock_user, param_text)
 
     assert param.ctrl_pattern is not None
     assert isinstance(param.ctrl_pattern, re.Pattern)
 
 
 @pytest.mark.unit
-def test_sql_param_get_type_args(mock_settings, mock_user):
+def test_sql_param_get_type_args(display_format, mock_user):
     """SqlParam should extract type arguments"""
     param_text = "@name as nvarchar(50) = 'test'"
 
-    param = SqlParam(mock_settings, mock_user, param_text)
+    param = SqlParam(display_format, mock_user, param_text)
 
     # type_args should contain ['50']
     assert param.type_args is not None
@@ -277,11 +273,11 @@ def test_sql_param_get_type_args(mock_settings, mock_user):
 
 
 @pytest.mark.unit
-def test_sql_param_get_type_args_decimal(mock_settings, mock_user):
+def test_sql_param_get_type_args_decimal(display_format, mock_user):
     """SqlParam should extract decimal type arguments"""
     param_text = "@price as decimal(10, 2) = 100.50"
 
-    param = SqlParam(mock_settings, mock_user, param_text)
+    param = SqlParam(display_format, mock_user, param_text)
 
     # Should have both precision and scale
     assert len(param.type_args) == 2
@@ -293,11 +289,11 @@ def test_sql_param_get_type_args_decimal(mock_settings, mock_user):
 
 
 @pytest.mark.unit
-def test_sql_param_convert_integer(mock_settings, mock_user):
+def test_sql_param_convert_integer(display_format, mock_user):
     """SqlParam should convert integer display value"""
     param_text = "@count as int = 100"
 
-    param = SqlParam(mock_settings, mock_user, param_text)
+    param = SqlParam(display_format, mock_user, param_text)
     param.display_value = "200"
     param.update_value_cmd()
 
@@ -306,11 +302,11 @@ def test_sql_param_convert_integer(mock_settings, mock_user):
 
 
 @pytest.mark.unit
-def test_sql_param_validate_mandatory_empty(mock_settings, mock_user):
+def test_sql_param_validate_mandatory_empty(display_format, mock_user):
     """SqlParam should reject empty value for mandatory parameter"""
     param_text = "@name as nvarchar(50) = 'test'"
 
-    param = SqlParam(mock_settings, mock_user, param_text)
+    param = SqlParam(display_format, mock_user, param_text)
     param.display_value = ""
 
     # Should raise ValueError for empty mandatory param
@@ -319,11 +315,11 @@ def test_sql_param_validate_mandatory_empty(mock_settings, mock_user):
 
 
 @pytest.mark.unit
-def test_sql_param_validate_optional_empty(mock_settings, mock_user):
+def test_sql_param_validate_optional_empty(display_format, mock_user):
     """SqlParam should accept empty value for optional parameter"""
     param_text = "@name as nvarchar(50) = 'test'  -- Name|OPTIONAL"
 
-    param = SqlParam(mock_settings, mock_user, param_text)
+    param = SqlParam(display_format, mock_user, param_text)
     param.display_value = ""
 
     # Should NOT raise error for empty optional param
@@ -335,11 +331,11 @@ def test_sql_param_validate_optional_empty(mock_settings, mock_user):
 
 
 @pytest.mark.unit
-def test_sql_param_validate_authorized_values(mock_settings, mock_user):
+def test_sql_param_validate_authorized_values(display_format, mock_user):
     """SqlParam should validate against authorized values"""
     param_text = "@type as int = 1  -- Type|LIST(1: Social, 2: Fiscal)"
 
-    param = SqlParam(mock_settings, mock_user, param_text)
+    param = SqlParam(display_format, mock_user, param_text)
 
     # Valid value
     param.display_value = "Social"
@@ -353,11 +349,11 @@ def test_sql_param_validate_authorized_values(mock_settings, mock_user):
 
 
 @pytest.mark.unit
-def test_sql_param_test_ctrl_pattern_valid(mock_settings, mock_user):
+def test_sql_param_test_ctrl_pattern_valid(display_format, mock_user):
     """SqlParam should validate against ctrl_pattern"""
     param_text = "@code as nvarchar(10) = 'ABC'  -- Code||^[A-Z]{3}$"
 
-    param = SqlParam(mock_settings, mock_user, param_text)
+    param = SqlParam(display_format, mock_user, param_text)
 
     # Valid pattern
     assert param.test_ctrl_pattern("ABC") is True
@@ -369,11 +365,11 @@ def test_sql_param_test_ctrl_pattern_valid(mock_settings, mock_user):
 
 
 @pytest.mark.unit
-def test_sql_param_test_ctrl_pattern_empty(mock_settings, mock_user):
+def test_sql_param_test_ctrl_pattern_empty(display_format, mock_user):
     """SqlParam should return True when no pattern or empty value"""
     param_text = "@name as nvarchar(50) = 'test'"
 
-    param = SqlParam(mock_settings, mock_user, param_text)
+    param = SqlParam(display_format, mock_user, param_text)
 
     # No pattern defined, should return True
     assert param.test_ctrl_pattern("anything") is True
@@ -386,11 +382,11 @@ def test_sql_param_test_ctrl_pattern_empty(mock_settings, mock_user):
 
 
 @pytest.mark.unit
-def test_sql_param_today_function(mock_settings, mock_user):
+def test_sql_param_today_function(display_format, mock_user):
     """SqlParam should calculate TODAY function"""
     param_text = "@date as date = ''  -- Date|TODAY(0)"
 
-    param = SqlParam(mock_settings, mock_user, param_text)
+    param = SqlParam(display_format, mock_user, param_text)
 
     # Should have calculated today's date
     from datetime import datetime
@@ -400,11 +396,11 @@ def test_sql_param_today_function(mock_settings, mock_user):
 
 
 @pytest.mark.unit
-def test_sql_param_today_with_offset(mock_settings, mock_user):
+def test_sql_param_today_with_offset(display_format, mock_user):
     """SqlParam should calculate TODAY with offset"""
     param_text = "@date as date = ''  -- Date|TODAY(-7)"
 
-    param = SqlParam(mock_settings, mock_user, param_text)
+    param = SqlParam(display_format, mock_user, param_text)
 
     # Should have calculated date (today - 7 days)
     from datetime import datetime, timedelta
@@ -415,14 +411,14 @@ def test_sql_param_today_with_offset(mock_settings, mock_user):
 
 
 @pytest.mark.unit
-def test_sql_param_user_info_function(mock_settings, mock_user):
+def test_sql_param_user_info_function(display_format, mock_user):
     """SqlParam should resolve USER_INFO(...) by calling User.user_info() and using its result -
     the predefined-vs-custom-attribute logic is User.user_info()'s own responsibility (tested
     directly in test_users.py), not re-simulated here."""
     param_text = "@username as nvarchar(50) = ''  -- User|USER_INFO(username)"
     mock_user.user_info = Mock(return_value="jdoe")
 
-    param = SqlParam(mock_settings, mock_user, param_text)
+    param = SqlParam(display_format, mock_user, param_text)
 
     assert param.display_value == "jdoe"
     mock_user.user_info.assert_called_once_with("username")
@@ -434,10 +430,10 @@ def test_sql_param_user_info_function(mock_settings, mock_user):
 
 
 @pytest.mark.unit
-def test_sql_param_fiscal_year_function(mock_settings, mock_user):
+def test_sql_param_fiscal_year_function(display_format, mock_user):
     """SqlParam should calculate fiscal year correctly"""
     param_text = "@fiscal as date = ''  -- Fiscal Year|fiscal_year(6, 0, 0, 0)"
-    param = SqlParam(mock_settings, mock_user, param_text)
+    param = SqlParam(display_format, mock_user, param_text)
 
     # Result should be a date string
     assert isinstance(param.display_value, str)
@@ -445,10 +441,10 @@ def test_sql_param_fiscal_year_function(mock_settings, mock_user):
 
 
 @pytest.mark.unit
-def test_sql_param_month_end_function(mock_settings, mock_user):
+def test_sql_param_month_end_function(display_format, mock_user):
     """SqlParam should calculate month end correctly"""
     param_text = "@month_end as date = ''  -- Month End|month_end(-1, 0)"
-    param = SqlParam(mock_settings, mock_user, param_text)
+    param = SqlParam(display_format, mock_user, param_text)
 
     # Result should be a date string
     assert isinstance(param.display_value, str)
@@ -456,12 +452,12 @@ def test_sql_param_month_end_function(mock_settings, mock_user):
 
 
 @pytest.mark.unit
-def test_sql_param_month_end_with_offset(mock_settings, mock_user):
+def test_sql_param_month_end_with_offset(display_format, mock_user):
     """SqlParam should calculate month end with offset"""
     import re
 
     param_text = "@month_end as date = ''  -- Month End|month_end(0, 0)"
-    param = SqlParam(mock_settings, mock_user, param_text)
+    param = SqlParam(display_format, mock_user, param_text)
 
     # Should be end of current month in DD/MM/YYYY format
     assert re.match(r"\d{2}/\d{2}/\d{4}", param.display_value)
@@ -497,7 +493,7 @@ SELECT * FROM table"""
 
 
 @pytest.mark.unit
-def test_sql_parameters_extract_from_declare(mock_settings, mock_user):
+def test_sql_parameters_extract_from_declare(display_format, mock_user):
     """SqlParameters should extract all parameters from DECLARE block"""
     sql_content = """DECLARE
 @param1 as int = 100,
@@ -506,7 +502,7 @@ def test_sql_parameters_extract_from_declare(mock_settings, mock_user):
 ;
 SELECT * FROM table"""
 
-    params = SqlParameters(mock_settings, mock_user, sql_content)
+    params = SqlParameters(display_format, mock_user, sql_content)
 
     assert "@param1" in params.params
     assert "@param2" in params.params
@@ -515,23 +511,23 @@ SELECT * FROM table"""
 
 
 @pytest.mark.unit
-def test_sql_parameters_no_declare_block(mock_settings, mock_user):
+def test_sql_parameters_no_declare_block(display_format, mock_user):
     """SqlParameters should handle SQL without DECLARE block"""
     sql_content = "SELECT * FROM table"
 
-    params = SqlParameters(mock_settings, mock_user, sql_content)
+    params = SqlParameters(display_format, mock_user, sql_content)
 
     assert len(params.params) == 0
 
 
 @pytest.mark.unit
-def test_sql_parameters_reset_values(mock_settings, mock_user):
+def test_sql_parameters_reset_values(display_format, mock_user):
     """SqlParameters should reset all parameter values to defaults"""
     sql_content = """DECLARE
 @param1 as int = 100
 ;"""
 
-    params = SqlParameters(mock_settings, mock_user, sql_content)
+    params = SqlParameters(display_format, mock_user, sql_content)
 
     # Change value
     params.params["@param1"].display_value = "200"
@@ -550,7 +546,7 @@ def test_sql_parameters_reset_values(mock_settings, mock_user):
 
 @pytest.mark.unit
 @pytest.mark.skip(reason="Multiline DECLARE parsing may not be fully supported")
-def test_sql_parameters_handles_multiline_declare(mock_settings, mock_user):
+def test_sql_parameters_handles_multiline_declare(display_format, mock_user):
     """SqlParameters should handle multi-line DECLARE block"""
     sql_content = """DECLARE
 @param1 as int =
@@ -561,7 +557,7 @@ def test_sql_parameters_handles_multiline_declare(mock_settings, mock_user):
 ;
 SELECT * FROM table"""
 
-    params = SqlParameters(mock_settings, mock_user, sql_content)
+    params = SqlParameters(display_format, mock_user, sql_content)
 
     # Should still extract parameters
     assert "@param1" in params.params or "@param2" in params.params
@@ -573,41 +569,41 @@ SELECT * FROM table"""
 
 
 @pytest.mark.unit
-def test_sql_parameters_validate_all(mock_settings, mock_user):
+def test_sql_parameters_validate_all(display_format, mock_user):
     """SqlParameters should validate all parameters"""
     sql_content = """DECLARE
 @param1 as int = 100,
 @param2 as nvarchar(50) = 'test'
 ;"""
 
-    params = SqlParameters(mock_settings, mock_user, sql_content)
+    params = SqlParameters(display_format, mock_user, sql_content)
 
     # All params valid by default
     assert params.validate() is True
 
 
 @pytest.mark.unit
-def test_sql_parameters_validate_specific_key(mock_settings, mock_user):
+def test_sql_parameters_validate_specific_key(display_format, mock_user):
     """SqlParameters should validate specific parameter"""
     sql_content = """DECLARE
 @param1 as int = 100,
 @param2 as nvarchar(50) = 'test'
 ;"""
 
-    params = SqlParameters(mock_settings, mock_user, sql_content)
+    params = SqlParameters(display_format, mock_user, sql_content)
 
     # Validate specific param
     assert params.validate("@param1") is True
 
 
 @pytest.mark.unit
-def test_sql_parameters_update_values(mock_settings, mock_user):
+def test_sql_parameters_update_values(display_format, mock_user):
     """SqlParameters should update all parameter values"""
     sql_content = """DECLARE
 @param1 as int = 100
 ;"""
 
-    params = SqlParameters(mock_settings, mock_user, sql_content)
+    params = SqlParameters(display_format, mock_user, sql_content)
 
     # Change display value
     params.params["@param1"].display_value = "200"
@@ -620,14 +616,14 @@ def test_sql_parameters_update_values(mock_settings, mock_user):
 
 
 @pytest.mark.unit
-def test_sql_parameters_set_display_values_updates_and_validates(mock_settings, mock_user):
+def test_sql_parameters_set_display_values_updates_and_validates(display_format, mock_user):
     """SqlParameters.set_display_values should set display values and update computed values"""
     sql_content = """DECLARE
 @param1 as int = 100,
 @param2 as nvarchar(50) = 'test'
 ;"""
 
-    params = SqlParameters(mock_settings, mock_user, sql_content)
+    params = SqlParameters(display_format, mock_user, sql_content)
     params.set_display_values({"@param1": "200", "@param2": "changed"})
 
     assert params.params["@param1"].value_cmd == 200
@@ -636,26 +632,26 @@ def test_sql_parameters_set_display_values_updates_and_validates(mock_settings, 
 
 
 @pytest.mark.unit
-def test_sql_parameters_set_display_values_raises_keyerror_for_unknown_param(mock_settings, mock_user):
+def test_sql_parameters_set_display_values_raises_keyerror_for_unknown_param(display_format, mock_user):
     """SqlParameters.set_display_values should raise KeyError for a param that does not exist"""
     sql_content = """DECLARE
 @param1 as int = 100
 ;"""
 
-    params = SqlParameters(mock_settings, mock_user, sql_content)
+    params = SqlParameters(display_format, mock_user, sql_content)
 
     with pytest.raises(KeyError):
         params.set_display_values({"@unknown": "1"})
 
 
 @pytest.mark.unit
-def test_sql_parameters_set_display_values_raises_valueerror_for_invalid_value(mock_settings, mock_user):
+def test_sql_parameters_set_display_values_raises_valueerror_for_invalid_value(display_format, mock_user):
     """SqlParameters.set_display_values should raise ValueError for an invalid mandatory value"""
     sql_content = """DECLARE
 @param1 as nvarchar(50) = 'test'
 ;"""
 
-    params = SqlParameters(mock_settings, mock_user, sql_content)
+    params = SqlParameters(display_format, mock_user, sql_content)
 
     with pytest.raises(ValueError, match="obligatoire"):
         params.set_display_values({"@param1": ""})

@@ -3,6 +3,8 @@ from typing import Self
 
 from Pytre_Core.context import AppContext, UserContext
 from Pytre_Core.remotes import RemoteServer
+from Pytre_Core.user_prefs import DisplayFormat
+
 from Pytre_Core.sql_query.file_parser import FileParser
 from Pytre_Core.sql_query.parameters import SqlParam, SqlParameters
 from Pytre_Core.sql_query.cmd_builder import CmdBuilder
@@ -27,16 +29,22 @@ class Query:
         self.hide: int = self._set_hide_level()
         self.description: str = self._set_description()
         self.grp_authorized: list[str] = self.infos.get("grp_authorized", [])
-        all_servers_id = list(app_ctx.servers.servers_dict.keys())
+
+        all_servers_id = list(app_ctx.servers.servers_dict.keys()) if app_ctx.acts_as_server else []
         self.servers_id: list[str] = self.infos.get("servers", all_servers_id)
 
-        self.parameters = SqlParameters(self.app_ctx.settings, self.user_ctx.current_user, self.file_content)
-        self.cmd_builder = CmdBuilder(self.app_ctx.settings, self.user_ctx.user_prefs, self.raw_cmd, self.parameters)
+        self.parameters = SqlParameters(self.user_ctx.display_format, self.user_ctx.user, self.file_content)
+        self.cmd_builder = CmdBuilder(self.user_ctx.user_prefs, self.raw_cmd, self.parameters)
 
     @property
     def file_id(self):
         """Filesystem-guaranteed unique identifier for this query. Used for server-side wire identity."""
         return self.filename.stem
+
+    @property
+    def display_format(self) -> DisplayFormat:
+        """Format display parameters are using."""
+        return self.parameters.display_format
 
     def _set_hide_level(self) -> int:
         hide: str = self.infos.get("hide", "0")
@@ -115,6 +123,7 @@ class Query:
             "grp_authorized": self.grp_authorized,
             "servers_id": self.servers_id,
             "display_params": display_params,
+            "display_format": self.display_format.to_dict(),
             "cmd_template": self.cmd_builder.template,
         }
 
@@ -142,8 +151,9 @@ class Query:
         query.grp_authorized = data["grp_authorized"]
         query.servers_id = data["servers_id"]
 
-        query.parameters = SqlParameters(app_ctx.settings, query_user_ctx.current_user, query.file_content)
-        query.cmd_builder = CmdBuilder(app_ctx.settings, query_user_ctx.user_prefs, query.raw_cmd, query.parameters)
+        display_format = DisplayFormat(**data["display_format"])  # format display_params were rendered with
+        query.parameters = SqlParameters(display_format, query_user_ctx.user, query.file_content)
+        query.cmd_builder = CmdBuilder(query_user_ctx.user_prefs, query.raw_cmd, query.parameters)
 
         display_params: dict[str, str] = data["display_params"]
         query.set_display_values(display_params)

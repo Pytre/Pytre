@@ -2,7 +2,7 @@
 Tests for Pytre/settings.py
 
 REGRESSION TESTS:
-- Input validation for field_separator, decimal_separator, paths
+- Input validation for paths
 - Kee initialized in __init__ (not at class level)
 """
 
@@ -65,85 +65,6 @@ def test_kee_injected_via_constructor(mock_kee):
 
 
 @pytest.mark.regression
-def test_field_separator_validates_length(mock_kee):
-    """
-    Regression test: field_separator must be single char
-
-    If invalid, should use default ';'
-    """
-    entry = Mock()
-    entry.username = ";;"  # Invalid: 2 characters
-    mock_kee.db.find_entries = Mock(return_value=entry)
-
-    settings = Settings(mock_kee)
-
-    # Should use default ';'
-    assert settings.field_separator == ";"
-    assert len(settings.field_separator) == 1
-
-
-@pytest.mark.regression
-def test_field_separator_empty_uses_default(mock_kee):
-    """Empty field_separator should use default"""
-    entry = Mock()
-    entry.username = ""  # Empty
-    mock_kee.db.find_entries = Mock(return_value=entry)
-
-    settings = Settings(mock_kee)
-
-    assert settings.field_separator == ";"
-
-
-@pytest.mark.regression
-def test_decimal_separator_validates_length(mock_kee):
-    """
-    Regression test: decimal_separator must be single char
-    """
-
-    def mock_find_entries(title, group, first):
-        entry = Mock()
-        if title == "FIELD_SEPARATOR":
-            entry.username = ";"
-        elif title == "DECIMAL_SEPARATOR":
-            entry.username = ",,"  # Invalid: 2 characters
-        else:
-            return None
-        return entry
-
-    mock_kee.db.find_entries = mock_find_entries
-
-    settings = Settings(mock_kee)
-
-    # Should use default ','
-    assert settings.decimal_separator == ","
-
-
-@pytest.mark.regression
-def test_decimal_separator_cannot_equal_field_separator(mock_kee):
-    """
-    Regression test: separators must be different
-    """
-
-    def mock_find_entries(title, group, first):
-        entry = Mock()
-        if title == "FIELD_SEPARATOR":
-            entry.username = ";"
-        elif title == "DECIMAL_SEPARATOR":
-            entry.username = ";"  # Same as field separator!
-        else:
-            return None
-        return entry
-
-    mock_kee.db.find_entries = mock_find_entries
-
-    settings = Settings(mock_kee)
-
-    # Should use default ',' instead
-    assert settings.decimal_separator == ","
-    assert settings.decimal_separator != settings.field_separator
-
-
-@pytest.mark.regression
 def test_queries_folder_validates_exists(mock_kee, tmp_path):
     """
     Regression test: queries_folder must exist
@@ -187,51 +108,6 @@ def test_logs_folder_validates_exists(mock_kee, tmp_path):
 
     # Should use default
     assert settings.logs_folder == DEFAULT_LOGS_FOLDER
-
-
-# ================================================================================
-# Encoding Validation
-# ================================================================================
-
-
-@pytest.mark.unit
-def test_validate_encoding_format_valid(mock_kee):
-    """Should accept valid encodings"""
-    settings = Settings(mock_kee)
-
-    # Should not raise error
-    assert settings._validate_encoding_format("utf-8") is True
-    assert settings._validate_encoding_format("utf-8-sig") is True
-    assert settings._validate_encoding_format("latin-1") is True
-
-
-@pytest.mark.unit
-def test_validate_encoding_format_invalid_raises_error(mock_kee):
-    """Should reject invalid encodings"""
-    settings = Settings(mock_kee)
-
-    with pytest.raises(LookupError, match="Unknown encoding"):
-        settings._validate_encoding_format("invalid-encoding-xyz")
-
-
-@pytest.mark.unit
-def test_extract_encoding_invalid_uses_default(mock_kee):
-    """Invalid extract_encoding should use default"""
-
-    def mock_find_entries(title, group, first):
-        entry = Mock()
-        if title == "EXTRACT_ENCODING":
-            entry.username = "invalid-encoding"
-        else:
-            return None
-        return entry
-
-    mock_kee.db.find_entries = mock_find_entries
-
-    settings = Settings(mock_kee)
-
-    # Should use default
-    assert settings.extract_encoding == "utf-8-sig"
 
 
 # ================================================================================
@@ -314,12 +190,8 @@ def test_load_reads_from_keepass(mock_kee):
 
     def mock_find_entries(title, group, first):
         entry = Mock()
-        if title == "FIELD_SEPARATOR":
-            entry.username = "|"
-        elif title == "DECIMAL_SEPARATOR":
-            entry.username = "."
-        elif title == "DATE_FORMAT":
-            entry.username = "%Y-%m-%d"
+        if title == "SETTINGS_VERSION":
+            entry.username = "12"
         else:
             return None
         return entry
@@ -329,9 +201,7 @@ def test_load_reads_from_keepass(mock_kee):
     settings = Settings(mock_kee)
 
     # Verify loaded values
-    assert settings.field_separator == "|"
-    assert settings.decimal_separator == "."
-    assert settings.date_format == "%Y-%m-%d"
+    assert settings.settings_version == "12"
 
 
 @pytest.mark.unit
@@ -345,7 +215,7 @@ def test_save_writes_to_keepass(mock_kee, tmp_path):
     settings = Settings(mock_kee)
 
     # Change a value
-    settings.field_separator = "|"
+    settings.settings_version = "12"
     settings.queries_folder = tmp_path  # must exist - save() now validates it regardless of what changed
 
     # Save
@@ -368,7 +238,6 @@ def test_save_creates_missing_entries(mock_kee, tmp_path):
     mock_kee.db.add_entry = Mock(return_value=new_entry)
 
     settings = Settings(mock_kee)
-    settings.field_separator = ";"
     settings.queries_folder = tmp_path  # must exist - save() now validates it regardless of what changed
 
     # Save
@@ -579,89 +448,5 @@ def test_load_handles_db_open_failure(mock_kee):
 
     # Should not raise error
     # Settings should keep the __init__ defaults, since load() bailed out early
-    assert settings.field_separator == ";"
-
-
-@pytest.mark.unit
-def test_date_format_empty_uses_default(mock_kee):
-    """Empty date format should use default %d/%m/%Y"""
-
-    def mock_find_entries(title, group, first):
-        entry = Mock()
-        if title == "DATE_FORMAT":
-            entry.username = ""
-        else:
-            return None
-        return entry
-
-    mock_kee.db.find_entries = mock_find_entries
-
-    settings = Settings(mock_kee)
-
-    assert settings.date_format == "%d/%m/%Y"
-
-
-# ================================================================================
-# Date Format Validation
-# ================================================================================
-
-
-@pytest.mark.unit
-def test_validate_date_format_valid(mock_kee):
-    """Should accept valid strftime date formats"""
-    settings = Settings(mock_kee)
-
-    assert settings._validate_date_format("%d/%m/%Y") is True
-    assert settings._validate_date_format("%Y-%m-%d") is True
-    assert settings._validate_date_format("%d-%m-%Y") is True
-
-
-@pytest.mark.unit
-def test_validate_date_format_invalid_raises_error(mock_kee):
-    """Should reject formats with no usable date directives"""
-    settings = Settings(mock_kee)
-
-    with pytest.raises(ValueError, match="Invalid date format"):
-        settings._validate_date_format("not-a-date")
-
-
-@pytest.mark.unit
-def test_validate_date_format_missing_component_raises_error(mock_kee):
-    """Should reject formats missing a day, month or year directive"""
-    settings = Settings(mock_kee)
-
-    with pytest.raises(ValueError, match="Invalid date format"):
-        settings._validate_date_format("%m/%Y")  # missing day
-
-
-@pytest.mark.unit
-def test_date_format_invalid_uses_default(mock_kee):
-    """Invalid date_format from KeePass should fall back to the default"""
-
-    def mock_find_entries(title, group, first):
-        entry = Mock()
-        if title == "DATE_FORMAT":
-            entry.username = "yyyy-MM-dd"  # not a strftime format
-        else:
-            return None
-        return entry
-
-    mock_kee.db.find_entries = mock_find_entries
-
-    settings = Settings(mock_kee)
-
-    assert settings.date_format == "%d/%m/%Y"
-
-
-@pytest.mark.unit
-def test_save_date_format_invalid_raises_error(mock_kee):
-    """save() should raise if date_format is invalid at save time"""
-    mock_entry = Mock()
-    mock_entry.username = ""
-    mock_kee.db.find_entries = Mock(return_value=mock_entry)
-
-    settings = Settings(mock_kee)
-    settings.date_format = "not-a-date"
-
-    with pytest.raises(ValueError, match="Invalid date format"):
-        settings.save()
+    assert settings.settings_version == ""
+    assert settings.queries_folder == DEFAULT_QUERIES_FOLDER

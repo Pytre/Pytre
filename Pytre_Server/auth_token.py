@@ -29,13 +29,13 @@ def decode_token(token: str, key: str, expected_type: TokenType) -> dict:
 
 
 if __name__ == "__main__":
-    from Pytre_Core.context import AppContext
+    from Pytre_Core.context import AppContext, AppMode
     from Pytre_Server.master_key import get_master_key_interactive
 
     master_key: str | None = get_master_key_interactive()
 
     if master_key:
-        app_ctx = AppContext(master_key=master_key)
+        app_ctx = AppContext(master_key=master_key, mode=AppMode.SERVER)
         token = create_token("dummy_user", app_ctx.settings.jwt_secret, TokenType.ACCESS)
         decoded = jwt.decode(token, options={"verify_signature": False})
         print(decoded)

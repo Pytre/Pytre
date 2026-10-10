@@ -15,7 +15,7 @@ from uuid import uuid4
 import httpx2
 
 from Pytre_Core.keyring import KeyringCatalog
-from Pytre_Core.user_prefs import CONFIG_FOLDER
+from Pytre_Core.user_prefs import CONFIG_FOLDER, DisplayFormat
 from Pytre_Core.users import AuthType
 from Pytre_Core.utils import detect_encoding, log as _log
 
@@ -712,8 +712,11 @@ class RemoteServer:
         return self.remote.auth_headers
 
     @contextmanager
-    def execute(self, query_id: str, template_hash: str, parameters: dict[str, str]) -> Generator[RemoteCursor]:
+    def execute(
+        self, query_id: str, template_hash: str, display_format: DisplayFormat, display_parameters: dict[str, str]
+    ) -> Generator[RemoteCursor]:
         """Executes query_id via POST /execute, streaming NDJSON rows.
+        `display_format` is the one `parameters` were rendered with.
         The underlying HTTP connection closes as soon as the `with` block exits."""
 
         # check if server is available to avoid long timeout if it is not
@@ -725,7 +728,8 @@ class RemoteServer:
             "server_id": self.id_on_remote,
             "query_id": query_id,
             "template_hash": template_hash,
-            "parameters": parameters,
+            "display_format": display_format.to_dict(),
+            "display_parameters": display_parameters,
         }
 
         max_login_retry = 1
@@ -773,14 +777,14 @@ class RemoteServer:
             error = record["__error__"]
             raise RemoteExecutionError(f"{error['type']}: {error['message']}")
 
-    def get_serialized_queries(self) -> list[dict]:
+    def get_serialized_queries(self, display_format: DisplayFormat) -> list[dict]:
         """Fetches queries exposed by this remote server. Called on demand and not eagerly.
         On failure, logs a warning, sets last_error and keeps the previous list rather than clearing it."""
         id_for_error_msg = f"{self.address.build_url()} (server_id={self.id_on_remote})"
 
         try:
             url_route = self.address.build_url(route="/queries")
-            params = {"server_id": self.id_on_remote}
+            params = {"server_id": self.id_on_remote, "display_format": json.dumps(display_format.to_dict())}
             response = self.remote.get_authenticated(url=url_route, params=params)
             response.raise_for_status()
             serialized_queries = response.json()

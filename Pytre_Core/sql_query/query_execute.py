@@ -1,12 +1,11 @@
 import csv
-import codecs
 from datetime import datetime
 from pathlib import Path
 from multiprocessing import Queue, Event as proc_get_event
 from multiprocessing.synchronize import Event as ProcEvent
-from typing import Any, TYPE_CHECKING
+from typing import Any
 
-from Pytre_Core import settings, users, logs_user
+from Pytre_Core import users, logs_user
 from Pytre_Core.context import AppContext, UserContext
 from Pytre_Core.remotes import RemoteCursor, RemoteError, RemoteRequestError, RemoteServer
 from Pytre_Core.servers import Server
@@ -29,17 +28,16 @@ class QueryExecute:
         self.user_ctx: UserContext = user_ctx
         self.query: Query | None = query
 
+        display_format = query.display_format if query else user_ctx.display_format
         self.converter: SqlTypeConverter = SqlTypeConverter(
-            date_display=app_ctx.settings.date_format,
-            decimal_separator=app_ctx.settings.decimal_separator,
+            date_display=display_format.date_format,
+            decimal_separator=display_format.decimal_separator,
         )
 
         self.config: LocalExecuteCfg | RemoteExecuteCfg | None = None
         self.server: Server | None = None
         self.remote: RemoteServer | None = None
 
-        self.app_settings: settings.Settings = app_ctx.settings
-        self.field_separator = self.app_settings.field_separator
         self.print_date_format = PRINT_DATE_FORMAT
 
         self.queue: Queue = Queue()  # to relay message to UI
@@ -203,7 +201,9 @@ class QueryExecute:
         self.queue.put((ExecResultMsg.START_TIMER, ""))
         try:
             # execute query
-            with self.remote.execute(cfg.remote_query_id, cfg.template_hash, cfg.display_parameters) as cursor:
+            with self.remote.execute(
+                cfg.remote_query_id, cfg.template_hash, cfg.display_format, cfg.display_parameters
+            ) as cursor:
                 self.cannot_stop.clear()
                 self.queue.put((ExecResultMsg.STOP_TIMER, ""))
                 # extract records
@@ -235,8 +235,8 @@ class QueryExecute:
         )
 
         # if on, launch central log
-        if self.app_settings.logs_are_on and not self.remote:
-            user: users.User = self.user_ctx.current_user
+        if not self.remote and self.app_ctx.settings.logs_are_on:
+            user: users.User = self.user_ctx.user
             log_infos: dict = {"user_logs": user_log.db_path, "user_id": user.username, "user_name": user.title}
             self.queue.put((ExecResultMsg.CENTRAL_LOG, log_infos))
 
@@ -270,7 +270,7 @@ class QueryExecute:
         # else extract rows to a file
         try:
             self._broadcast(self._time_log() + " - Début récupération des lignes...")
-            rows_count, execute_output = self._extract_to_file(cursor, self.config.extract_encoding)
+            rows_count, execute_output = self._extract_to_file(cursor)
             if execute_output == "" and self.stop_requested.is_set():
                 raise InterruptedError()
             ending_date = datetime.now()
@@ -315,7 +315,7 @@ class QueryExecute:
 
         return row_num + 1, buffer
 
-    def _extract_to_file(self, cursor: Cursor, encoding: str) -> tuple[int, Path | None]:
+    def _extract_to_file(self, cursor: Cursor) -> tuple[int, Path | None]:
         """Extracts records from a local or remote cursor into a file.
         Returns as a tuple how many lines have been extracted and a filepath."""
 
@@ -326,17 +326,15 @@ class QueryExecute:
         if self.config is None or self.config.extract_file == Path():
             raise ValueError("Extraction to file is not possible without specifying one")
 
-        try:
-            codecs.lookup(encoding)
-        except LookupError:
-            encoding = "utf-8-sig"
-            self._broadcast(
-                self._time_log() + f" - Encodage pour extraction invalide, utilisation '{encoding}' par défaut"
-            )
+        # get csv format
+        encoding = self.config.csv_format.encoding
+        delimiter = self.config.csv_format.delimiter
+        quotechar = self.config.csv_format.quotechar
 
+        # write csv
         self.config.extract_file.parent.mkdir(parents=True, exist_ok=True)
         with open(self.config.extract_file, mode="w", encoding=encoding, errors="replace", newline="") as f:
-            csv_writer = csv.writer(f, delimiter=self.field_separator, quotechar='"', quoting=csv.QUOTE_MINIMAL)
+            csv_writer = csv.writer(f, delimiter=delimiter, quotechar=quotechar, quoting=csv.QUOTE_MINIMAL)
 
             # add header to buffer
             if cursor.description:

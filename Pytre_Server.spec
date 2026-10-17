@@ -1,5 +1,11 @@
 # -*- mode: python ; coding: utf-8 -*-
+import sys
+
 from PyInstaller.utils.hooks import collect_all
+
+if sys.platform == "win32":
+    sys.path.insert(0, SPECPATH)
+    from version_info import version_info
 
 datas = [('Pytre_Core/res', 'res'), ('Pytre_Server/templates', 'Pytre_Server/templates')]
 binaries = []
@@ -38,17 +44,9 @@ exe = EXE(pyz,
           debug=False,
           bootloader_ignore_signals=False,
           strip=False,
-          upx=True,
+          upx=False,
           upx_exclude=[],
           runtime_tmpdir=None,
           console=True,
-          icon='Pytre_Core/res/app.ico')
-
-coll = COLLECT(exe,
-               a.binaries,
-               a.zipfiles,
-               a.datas, 
-               strip=False,
-               upx=True,
-               upx_exclude=[],
-               name='pytre_server_build')
+          icon='Pytre_Core/res/app.ico',
+          version=version_info('Pytre Server', 'Pytre_Server.exe'))

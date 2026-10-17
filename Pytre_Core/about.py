@@ -5,7 +5,7 @@ from Pytre_Core.utils import get_app_path
 
 APP_NAME = "Pytre"
 APP_VERSION = "1.8.1"
-APP_STATUS = ""
+APP_STATUS: str | None = ""  # github builds will be flagged as pre-release when set
 APP_BUILD = "1"
 COPYRIGHT_YEAR = "2021"
 AUTHOR = "Matthieu Ferrier"

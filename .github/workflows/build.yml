@@ -1,0 +1,158 @@
+name: Build executables
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    name: Check version
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      prerelease: ${{ steps.about.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.14"
+
+      - name: Check tag against about.py
+        id: about
+        run: |
+          python - <<'EOF'
+          import os, sys
+          from Pytre_Core.about import APP_STATUS, expected_git_tag
+
+          tag = os.environ["GITHUB_REF_NAME"]
+          if os.environ["GITHUB_REF_TYPE"] == "tag" and tag != expected_git_tag():
+              print(f"::error::Tag {tag} does not match about.py, expected tag: {expected_git_tag()}")
+              sys.exit(1)
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"prerelease={'true' if APP_STATUS else 'false'}\n")
+          EOF
+
+  test:
+    name: Tests
+    needs: version
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements-build.lock
+
+      - name: Install dependencies
+        run: pip install --require-hashes -r requirements-build.lock
+
+      - name: Run tests
+        run: python -m pytest
+
+  build:
+    name: Build ${{ matrix.name }}
+    needs: [version, test]
+    runs-on: windows-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Pytre_Client
+            spec: Pytre_Client.spec
+            exe: Pytre
+          - name: Pytre_Server
+            spec: Pytre_Server.spec
+            exe: Pytre_Server
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.14"
+          architecture: x64
+          cache: pip
+          cache-dependency-path: requirements-build.lock
+
+      # Same single environment as the local build: PyInstaller only bundles what is actually imported
+      - name: Install dependencies
+        run: pip install --require-hashes -r requirements-build.lock
+
+      - name: Build with PyInstaller
+        run: pyinstaller --noconfirm --clean ${{ matrix.spec }}
+
+      - name: Smoke test server executable
+        if: matrix.name == 'Pytre_Server'
+        run: ./dist/Pytre_Server.exe --help
+
+      # Tag "v.2.0.0_ALPHA" -> Pytre_Client_2.0.0_ALPHA.exe ; manual run on a branch -> Pytre_Client_dev.exe
+      - name: Add version to executable name
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          version="${version#.}"
+          version="${version//\//-}"
+          mv "dist/${{ matrix.exe }}.exe" "dist/${{ matrix.name }}_${version}.exe"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ matrix.name }}
+          path: dist/${{ matrix.name }}_*.exe
+          if-no-files-found: error
+
+      - uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          subject-path: dist/${{ matrix.name }}_*.exe
+
+  release:
+    needs: [version, build]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Compute checksums
+        run: cd dist && sha256sum *.exe > SHA256SUMS.txt
+
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        with:
+          files: |
+            dist/*.exe
+            dist/SHA256SUMS.txt
+          prerelease: ${{ needs.version.outputs.prerelease == 'true' }}
+          generate_release_notes: true
+          body: |
+            Portable Windows executables, no installation needed: download and run.
+            - `Pytre_Client_*.exe`: desktop client (pure client mode only, see README)
+            - `Pytre_Server_*.exe`: server (console application)
+
+            To verify a download: compare its hash with `SHA256SUMS.txt` (`Get-FileHash <file>` in PowerShell),
+            or check its build provenance with `gh attestation verify <file> --repo Pytre/Pytre`.

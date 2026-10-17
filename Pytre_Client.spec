@@ -1,5 +1,11 @@
 # -*- mode: python ; coding: utf-8 -*-
+import sys
+
 from PyInstaller.utils.hooks import collect_all
+
+if sys.platform == "win32":
+    sys.path.insert(0, SPECPATH)
+    from version_info import version_info
 
 datas = [('Pytre_Core/res', 'res')]
 binaries = []
@@ -39,8 +45,9 @@ exe = EXE(pyz,
           debug=False,
           bootloader_ignore_signals=False,
           strip=False,
-          upx=True,
+          upx=False,
           upx_exclude=[],
           runtime_tmpdir=None,
           console=False,
-          icon='Pytre_Core/res/app.ico')
+          icon='Pytre_Core/res/app.ico',
+          version=version_info('Pytre', 'Pytre.exe'))

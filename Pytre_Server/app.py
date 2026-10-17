@@ -6,12 +6,19 @@ from fastapi.responses import RedirectResponse
 
 from Pytre_Core.context import AppContext, AppMode
 from Pytre_Core.logs_central import ServerDriven
+from Pytre_Core.utils import log as _log
 
+from Pytre_Server.log_buffer import setup_log_buffer
+from Pytre_Server.logs import MAX_LOG_SIZE_MB
+from Pytre_Server.query_catalog import QueryCatalog
 from Pytre_Server.routes.admin_auth import AdminAuthRequired, admin_auth_required_handler
 from Pytre_Server.routes.admin_router import router as admin_router
 from Pytre_Server.routes.client import router as client_router
-from Pytre_Server.query_catalog import QueryCatalog
 from Pytre_Server.server_state import ServerResources, ServerState
+
+
+def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__) -> None:
+    _log(msg, level=level, sublogger=sublogger)
 
 
 @asynccontextmanager
@@ -28,9 +35,15 @@ async def _lifespan(app: FastAPI):
 
 
 def create_app(
-    master_key: str, chunk_size: int = 2000, max_concurrency_per_user: int = 4, heartbeat_secs: int = 30
+    master_key: str,
+    chunk_size: int = 2000,
+    max_concurrency_per_user: int = 4,
+    heartbeat_secs: int = 30,
+    log_buffer_mb: int = MAX_LOG_SIZE_MB,
 ) -> FastAPI:
     """Build and configure the FastAPI app"""
+
+    log_buffer = setup_log_buffer(max_mb=log_buffer_mb)
 
     app = FastAPI(title="Pytre Server", lifespan=_lifespan)
     _app_ctx = AppContext(master_key=master_key, mode=AppMode.SERVER)
@@ -45,7 +58,7 @@ def create_app(
         chunk_size=chunk_size,
         max_concurrency_per_user=max_concurrency_per_user,
         heartbeat_secs=heartbeat_secs,
-        resources=ServerResources(execution_logs=execution_logs),
+        resources=ServerResources(execution_logs=execution_logs, log_buffer=log_buffer),
     )
 
     @app.get("/", include_in_schema=False)
@@ -55,6 +68,8 @@ def create_app(
     app.include_router(client_router)
     app.include_router(admin_router)
     app.add_exception_handler(AdminAuthRequired, admin_auth_required_handler)
+
+    log("Server started", logging.INFO)
 
     return app
 

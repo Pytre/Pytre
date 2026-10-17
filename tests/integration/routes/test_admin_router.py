@@ -44,7 +44,16 @@ def test_admin_favicon_is_served(client):
 # One page per route module: each used to build its own Jinja2Templates, so a global registered on
 # one of them was missing on the others (Jinja renders an unknown variable as empty, no error).
 @pytest.mark.parametrize(
-    "path", ["/admin", "/admin/users", "/admin/servers", "/admin/queries", "/admin/settings", "/admin/master-key"]
+    "path",
+    [
+        "/admin",
+        "/admin/users",
+        "/admin/servers",
+        "/admin/queries",
+        "/admin/settings",
+        "/admin/master-key",
+        "/admin/logs",
+    ],
 )
 def test_sidebar_shows_the_app_version_on_every_admin_page(admin_client, path):
     response = admin_client.get(path)

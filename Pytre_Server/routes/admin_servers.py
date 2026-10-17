@@ -4,6 +4,7 @@ Gated by require_admin_session (see admin_routes.py)
 """
 
 import asyncio
+import logging
 import os
 import tempfile
 from pathlib import Path
@@ -16,11 +17,17 @@ from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
 
 from Pytre_Core.servers import Server, ServerType
+from Pytre_Core.utils import log as _log
+from Pytre_Server.routes.admin_auth import require_admin_session
 from Pytre_Server.server_state import ServerState, get_server_state
 from Pytre_Server.templating import templates
 
 
 router = APIRouter(prefix="/servers")
+
+
+def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__) -> None:
+    _log(msg, level=level, sublogger=sublogger)
 
 
 class ServerForm(BaseModel):
@@ -118,14 +125,17 @@ async def server_new_submit(
     request: Request,
     server_form: Annotated[ServerForm, Form()],
     state: ServerState = Depends(get_server_state),
+    admin_username: str = Depends(require_admin_session),
 ) -> HTMLResponse | RedirectResponse:
     server_obj = Server(state.app_ctx.servers)
-    return await _save_server(request, state, server_obj, server_form)
+    return await _save_server(request, state, server_obj, server_form, admin_username)
 
 
 @router.get("/{uuid}/edit", response_class=HTMLResponse, response_model=None)
 def server_edit_form(
-    uuid: str, request: Request, state: ServerState = Depends(get_server_state)
+    uuid: str,
+    request: Request,
+    state: ServerState = Depends(get_server_state),
 ) -> HTMLResponse | RedirectResponse:
     server = state.app_ctx.servers.find_server_by_uuid(uuid)
     if server is None:
@@ -139,15 +149,16 @@ async def server_edit_submit(
     request: Request,
     server_form: Annotated[ServerForm, Form()],
     state: ServerState = Depends(get_server_state),
+    admin_username: str = Depends(require_admin_session),
 ) -> HTMLResponse | RedirectResponse:
     server_obj = state.app_ctx.servers.find_server_by_uuid(uuid)
     if server_obj is None:
         return RedirectResponse(url="/admin/servers?error=Server+not+found", status_code=status.HTTP_303_SEE_OTHER)
-    return await _save_server(request, state, server_obj, server_form)
+    return await _save_server(request, state, server_obj, server_form, admin_username)
 
 
 async def _save_server(
-    request: Request, state: ServerState, server_obj: Server, server_form: ServerForm
+    request: Request, state: ServerState, server_obj: Server, server_form: ServerForm, admin_username: str
 ) -> HTMLResponse | RedirectResponse:
     """Applies submitted form values onto `server_obj` and saves it. Shared by create and edit -
     `server_obj` is either a blank new Server or one just loaded via find_server_by_uuid()."""
@@ -160,6 +171,7 @@ async def _save_server(
         context["error"] = str(e)
         return templates.TemplateResponse(request, "admin/server_form.html", context)
 
+    log(f"Server '{server_obj.id}' saved by admin '{admin_username}'", logging.INFO)
     await state.resources.reset_connections(server_obj.id)
     return RedirectResponse(url="/admin/servers?msg=Server+saved", status_code=status.HTTP_303_SEE_OTHER)
 
@@ -168,7 +180,9 @@ async def _save_server(
 # Delete
 # ------------------------------------------------------------------------------------------
 @router.post("/{uuid}/delete")
-async def server_delete(uuid: str, state: ServerState = Depends(get_server_state)) -> RedirectResponse:
+async def server_delete(
+    uuid: str, state: ServerState = Depends(get_server_state), admin_username: str = Depends(require_admin_session)
+) -> RedirectResponse:
     server = state.app_ctx.servers.find_server_by_uuid(uuid)
     if server is None:
         return RedirectResponse(url="/admin/servers?error=Server+not+found", status_code=status.HTTP_303_SEE_OTHER)
@@ -178,13 +192,16 @@ async def server_delete(uuid: str, state: ServerState = Depends(get_server_state
     except LookupError as e:
         return RedirectResponse(url=f"/admin/servers?error={e}", status_code=status.HTTP_303_SEE_OTHER)
 
+    log(f"Server '{server.id}' deleted by admin '{admin_username}'", logging.WARNING)
     await state.resources.reset_connections(server.id)
     return RedirectResponse(url="/admin/servers?msg=Server+deleted", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @router.post("/delete")
 async def servers_delete_bulk(
-    uuids: list[str] = Form(default_factory=list), state: ServerState = Depends(get_server_state)
+    uuids: list[str] = Form(default_factory=list),
+    state: ServerState = Depends(get_server_state),
+    admin_username: str = Depends(require_admin_session),
 ) -> RedirectResponse:
     nb_ok = 0
     nb_errors = 0
@@ -195,6 +212,7 @@ async def servers_delete_bulk(
             continue
         try:
             await asyncio.to_thread(server.delete)
+            log(f"Server '{server.id}' deleted by admin '{admin_username}' (bulk)", logging.WARNING)
             await state.resources.reset_connections(server.id)
             nb_ok += 1
         except LookupError:

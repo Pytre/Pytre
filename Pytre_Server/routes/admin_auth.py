@@ -193,12 +193,14 @@ def admin_login_submit(
 
     if not is_valid_admin or not password_ok:
         resources.throttle_record_failing(username)
+        log(f"Failed admin login attempt for '{username}'", logging.WARNING)
         context = {"error": "Invalid username or password", "next": next}
         return templates.TemplateResponse(
             request, "admin/login.html", context, status_code=status.HTTP_401_UNAUTHORIZED
         )
 
     resources.throttle_reset_failings(username)
+    log(f"Admin '{user.username}' logged in", logging.INFO)
 
     response = RedirectResponse(_safe_next(next), status_code=status.HTTP_303_SEE_OTHER)
     _issue_session_cookie(response, request, state, user.username)
@@ -248,6 +250,8 @@ def admin_bootstrap_submit(
             context.to_dict(),
             status_code=status.HTTP_400_BAD_REQUEST,
         )
+
+    log(f"First admin account '{user.username}' created via bootstrap", logging.WARNING)
 
     response = RedirectResponse(_safe_next(next), status_code=status.HTTP_303_SEE_OTHER)
     _issue_session_cookie(response, request, state, user.username)

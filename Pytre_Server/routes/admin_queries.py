@@ -4,6 +4,7 @@ manage a temporary exemption from the template_hash staleness check.
 Gated by require_admin_session (see admin_router.py)
 """
 
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from urllib.parse import quote_plus
@@ -13,6 +14,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 
 from Pytre_Core.context import UserContext
 from Pytre_Core.sql_query.file_parser import FileParser
+from Pytre_Core.utils import log as _log
 from Pytre_Server.query_catalog import QueryCatalog
 from Pytre_Server.routes.admin_auth import require_admin_session
 from Pytre_Server.server_state import ServerState, get_server_state
@@ -20,6 +22,10 @@ from Pytre_Server.templating import templates
 
 
 router = APIRouter(prefix="/queries")
+
+
+def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__) -> None:
+    _log(msg, level=level, sublogger=sublogger)
 
 
 @dataclass
@@ -52,8 +58,9 @@ def _build_query_row(parser: FileParser, ignore_hash_until: dict[str, datetime])
     )
 
 
-def _clear_hash_exemption(state: ServerState, file_id: str) -> RedirectResponse:
-    state.resources.ignore_hash_until.pop(file_id, None)
+def _clear_hash_exemption(state: ServerState, file_id: str, admin_username: str) -> RedirectResponse:
+    if state.resources.ignore_hash_until.pop(file_id, None) is not None:
+        log(f"Hash-check exemption for '{file_id}' cleared by admin '{admin_username}'", logging.WARNING)
     return RedirectResponse(
         url=f"/admin/queries?msg=Hash+exemption+for+{file_id}+cleared", status_code=status.HTTP_303_SEE_OTHER
     )
@@ -139,7 +146,10 @@ def query_edit_form(
 
 @router.post("/{file_id}/ignore-hash")
 def query_ignore_hash_set(
-    file_id: str, state: ServerState = Depends(get_server_state), until_ts: str = Form("")
+    file_id: str,
+    state: ServerState = Depends(get_server_state),
+    until_ts: str = Form(""),
+    admin_username: str = Depends(require_admin_session),
 ) -> RedirectResponse:
     """`until_ts` is the epoch (UTC seconds) the browser computed and displayed - applied as-is,
     so what the webui displayed is exactly what gets stored, however long it took to hit Save.
@@ -149,14 +159,14 @@ def query_ignore_hash_set(
         return RedirectResponse(url="/admin/queries?error=Query+not+found", status_code=status.HTTP_303_SEE_OTHER)
 
     if not until_ts:
-        return _clear_hash_exemption(state, file_id)
+        return _clear_hash_exemption(state, file_id, admin_username)
 
     # Convert until_ts to UTC datetime and remove exemption if it's in the past
     try:
         new_datetime = datetime.fromtimestamp(int(until_ts), tz=timezone.utc)
         now = datetime.now(timezone.utc)
         if new_datetime <= now:
-            return _clear_hash_exemption(state, file_id)
+            return _clear_hash_exemption(state, file_id, admin_username)
     except (ValueError, OverflowError, OSError):
         return RedirectResponse(url="/admin/queries?error=Invalid+date", status_code=status.HTTP_303_SEE_OTHER)
 
@@ -165,6 +175,10 @@ def query_ignore_hash_set(
     if current_datetime is None or int(new_datetime.timestamp()) != int(current_datetime.timestamp()):
         msg = f"Hash check for {file_id} updated"
         state.resources.ignore_hash_until[file_id] = new_datetime
+        log(
+            f"Hash-check exemption for '{file_id}' set until {new_datetime.isoformat()} by admin '{admin_username}'",
+            logging.WARNING,
+        )
     else:
         msg = f"Hash exemption for {file_id} unchanged"
 

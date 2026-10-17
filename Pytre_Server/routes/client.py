@@ -290,6 +290,11 @@ async def execute_query(
 
     await semaphore.acquire()  # released by _run_query()
 
+    # log execution request
+    msg_params = f"with {params} as parameters" if params else "(no parameter)"
+    msg = f"Query execution for '{username}': '{request.query_id}' on '{request.server_id}' {msg_params}"
+    log(msg, logging.INFO)
+
     # stream result - sends pings while the query is executing then NDJSON columns/rows once it completes
     return StreamingResponse(
         _run_query(state, resources, request, user_ctx, template, params, semaphore, http_request),

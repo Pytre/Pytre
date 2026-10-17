@@ -187,7 +187,7 @@ def test_start_server_runs_uvicorn_with_resolved_master_key(monkeypatch):
     start_server(args)
 
     create_app_mock.assert_called_once_with(
-        master_key="s3cret", chunk_size=2000, max_concurrency_per_user=4, heartbeat_secs=30
+        master_key="s3cret", chunk_size=2000, max_concurrency_per_user=4, heartbeat_secs=30, log_buffer_mb=10
     )
     run.assert_called_once_with("app", host="0.0.0.0", port=9000, forwarded_allow_ips=None)
 

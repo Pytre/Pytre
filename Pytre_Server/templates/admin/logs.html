@@ -1,0 +1,138 @@
+{% extends "admin/base.html" %}
+{% block title %}Logs — Pytre Server{% endblock %}
+{% block main_class %}main-flush{% endblock %}
+{% block content %}
+<div class="logs-page">
+    <div class="toolbar logs-toolbar">
+        <button type="button" id="logs-pause-btn">Pause</button>
+        <span id="logs-paused-indicator" hidden>Paused (<span id="logs-pending-count">0</span> new)</span>
+        <label class="checkbox-item"><input type="checkbox" id="logs-show-logger-cb"> Logger name</label>
+        <span class="toolbar-sep"></span>
+        <span class="toolbar-label">Level:</span>
+        {% for level in levels %}
+        <label class="checkbox-item"><input type="checkbox" class="log-level-cb" data-level="{{ level }}"{% if level != "DEBUG" %} checked{% endif %}> {{ level }}</label>
+        {% endfor %}
+    </div>
+    <div class="logs-scroll" id="logs-scroll" data-last-seq="{{ last_seq }}">
+        {% for e in entries %}
+        <div class="log-row" data-level="{{ e.level_name }}" data-seq="{{ e.seq }}">
+            <span class="log-ts" data-ts="{{ e.timestamp | int }}"></span>
+            <span class="log-level log-level-{{ e.level_name | lower }}">{{ e.level_name }}</span>
+            <span class="log-logger">{{ e.logger_name }}</span>
+            <span class="log-message">{{ e.message }}</span>
+        </div>
+        {% endfor %}
+        <div id="logs-older-sentinel"></div>
+    </div>
+</div>
+<script>
+(function () {
+    var scrollBox = document.getElementById("logs-scroll");
+    var sentinel = document.getElementById("logs-older-sentinel");
+    var pauseBtn = document.getElementById("logs-pause-btn");
+    var pausedIndicator = document.getElementById("logs-paused-indicator");
+    var pendingCountEl = document.getElementById("logs-pending-count");
+    var showLoggerCb = document.getElementById("logs-show-logger-cb");
+    var paused = false;
+    var pendingEntries = [];  // raw entries received while paused, flushed on resume
+    var isLoadingOlder = false;
+    var noMoreOlder = false;
+    var levelVisible = {};
+
+    Array.prototype.forEach.call(scrollBox.querySelectorAll(".log-ts[data-ts]"), function (el) {
+        el.textContent = pytreFormatLocal(parseInt(el.dataset.ts, 10));
+    });
+
+    showLoggerCb.addEventListener("change", function () {
+        scrollBox.classList.toggle("show-logger", showLoggerCb.checked);
+    });
+
+    function applyLevelVisibility(row) {
+        row.style.display = levelVisible[row.dataset.level] === false ? "none" : "";
+    }
+
+    Array.prototype.forEach.call(document.querySelectorAll(".log-level-cb"), function (cb) {
+        levelVisible[cb.dataset.level] = cb.checked;
+        cb.addEventListener("change", function () {
+            levelVisible[cb.dataset.level] = cb.checked;
+            Array.prototype.forEach.call(scrollBox.querySelectorAll(".log-row"), applyLevelVisibility);
+        });
+    });
+    Array.prototype.forEach.call(scrollBox.querySelectorAll(".log-row"), applyLevelVisibility);
+
+    function buildRow(entry) {
+        var row = document.createElement("div");
+        row.className = "log-row";
+        row.dataset.level = entry.level_name;
+        row.dataset.seq = entry.seq;
+        row.innerHTML =
+            '<span class="log-ts"></span>' +
+            '<span class="log-level log-level-' + entry.level_name.toLowerCase() + '">' + entry.level_name + '</span>' +
+            '<span class="log-logger"></span><span class="log-message"></span>';
+        row.querySelector(".log-ts").textContent = pytreFormatLocal(entry.timestamp);
+        row.querySelector(".log-logger").textContent = entry.logger_name;
+        row.querySelector(".log-message").textContent = entry.message;
+        applyLevelVisibility(row);
+        return row;
+    }
+
+    function prependRow(entry) {
+        var row = buildRow(entry);
+        var insertedAboveViewport = scrollBox.scrollTop > 0;
+        scrollBox.insertBefore(row, scrollBox.firstChild);
+        if (insertedAboveViewport) {
+            // keep the reading position stable instead of visually pushing it down
+            scrollBox.scrollTop += row.offsetHeight;
+        }
+    }
+
+    pauseBtn.addEventListener("click", function () {
+        paused = !paused;
+        pauseBtn.textContent = paused ? "Resume" : "Pause";
+        pausedIndicator.hidden = !paused;
+        if (!paused) {
+            pendingEntries.forEach(prependRow);
+            pendingEntries = [];
+            pendingCountEl.textContent = "0";
+        }
+    });
+
+    var lastSeq = parseInt(scrollBox.dataset.lastSeq, 10);
+    var source = new EventSource("/admin/logs/stream?after=" + lastSeq);
+    source.onmessage = function (ev) {
+        var entry = JSON.parse(ev.data);
+        if (paused) {
+            pendingEntries.push(entry);
+            pendingCountEl.textContent = pendingEntries.length;
+        } else {
+            prependRow(entry);
+        }
+    };
+
+    function loadOlder() {
+        if (isLoadingOlder || noMoreOlder) return;
+        var rows = scrollBox.querySelectorAll(".log-row");
+        if (!rows.length) return;
+        var oldestSeq = rows[rows.length - 1].dataset.seq;
+
+        isLoadingOlder = true;
+        fetch("/admin/logs/before?before=" + oldestSeq + "&limit=300")
+            .then(function (resp) { return resp.json(); })
+            .then(function (entries) {
+                if (!entries.length) {
+                    noMoreOlder = true;
+                    return;
+                }
+                entries.forEach(function (entry) {
+                    scrollBox.insertBefore(buildRow(entry), sentinel);
+                });
+            })
+            .finally(function () { isLoadingOlder = false; });
+    }
+
+    new IntersectionObserver(function (observerEntries) {
+        if (observerEntries[0].isIntersecting) loadOlder();
+    }, { root: scrollBox }).observe(sentinel);
+})();
+</script>
+{% endblock %}

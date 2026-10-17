@@ -5,6 +5,7 @@ Gated by require_admin_session (see admin_routes.py)
 """
 
 import asyncio
+import logging
 import os
 import tempfile
 from pathlib import Path
@@ -17,11 +18,17 @@ from starlette.background import BackgroundTask
 from starlette.datastructures import FormData
 
 from Pytre_Core.users import AuthType, OidcLink, User, UserField, hash_password
+from Pytre_Core.utils import log as _log
+from Pytre_Server.routes.admin_auth import require_admin_session
 from Pytre_Server.server_state import ServerState, get_server_state
 from Pytre_Server.templating import templates
 
 
 router = APIRouter(prefix="/users")
+
+
+def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__) -> None:
+    _log(msg, level=level, sublogger=sublogger)
 
 
 class UserForm(BaseModel):
@@ -78,6 +85,7 @@ async def _save_user(
     state: ServerState,
     user: User,
     user_form: UserForm,
+    admin_username: str,
 ) -> HTMLResponse | RedirectResponse:
     """Applies submitted form values onto `user` and saves it. Shared by create and edit -
     `user` is either a blank new User or one just loaded via find_user_by_uuid()."""
@@ -99,6 +107,7 @@ async def _save_user(
         context["error"] = str(e)
         return templates.TemplateResponse(request, "admin/user_form.html", context)
 
+    log(f"User '{user.username}' saved by admin '{admin_username}'", logging.INFO)
     return RedirectResponse(url="/admin/users?msg=User+saved", status_code=status.HTTP_303_SEE_OTHER)
 
 
@@ -148,9 +157,10 @@ async def user_new_submit(
     request: Request,
     user_form: Annotated[UserForm, Form()],
     state: ServerState = Depends(get_server_state),
+    admin_username: str = Depends(require_admin_session),
 ) -> HTMLResponse | RedirectResponse:
     user = User(state.app_ctx.users, detect_user=False)
-    return await _save_user(request, state, user, user_form)
+    return await _save_user(request, state, user, user_form, admin_username)
 
 
 @router.get("/{uuid}/edit", response_class=HTMLResponse, response_model=None)
@@ -171,18 +181,21 @@ async def user_edit_submit(
     request: Request,
     user_form: Annotated[UserForm, Form()],
     state: ServerState = Depends(get_server_state),
+    admin_username: str = Depends(require_admin_session),
 ) -> HTMLResponse | RedirectResponse:
     user = state.app_ctx.users.find_user_by_uuid(uuid)
     if user is None:
         return RedirectResponse(url="/admin/users?error=User+not+found", status_code=status.HTTP_303_SEE_OTHER)
-    return await _save_user(request, state, user, user_form)
+    return await _save_user(request, state, user, user_form, admin_username)
 
 
 # ------------------------------------------------------------------------------------------
 # Delete
 # ------------------------------------------------------------------------------------------
 @router.post("/{uuid}/delete")
-def user_delete(uuid: str, state: ServerState = Depends(get_server_state)) -> RedirectResponse:
+def user_delete(
+    uuid: str, state: ServerState = Depends(get_server_state), admin_username: str = Depends(require_admin_session)
+) -> RedirectResponse:
     user = state.app_ctx.users.find_user_by_uuid(uuid)
     if user is None:
         return RedirectResponse(url="/admin/users?error=User+not+found", status_code=status.HTTP_303_SEE_OTHER)
@@ -192,12 +205,15 @@ def user_delete(uuid: str, state: ServerState = Depends(get_server_state)) -> Re
     except LookupError as e:
         return RedirectResponse(url=f"/admin/users?error={e}", status_code=status.HTTP_303_SEE_OTHER)
 
+    log(f"User '{user.username}' deleted by admin '{admin_username}'", logging.WARNING)
     return RedirectResponse(url="/admin/users?msg=User+deleted", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @router.post("/delete")
 def users_delete_bulk(
-    uuids: list[str] = Form(default_factory=list), state: ServerState = Depends(get_server_state)
+    uuids: list[str] = Form(default_factory=list),
+    state: ServerState = Depends(get_server_state),
+    admin_username: str = Depends(require_admin_session),
 ) -> RedirectResponse:
     nb_ok = 0
     nb_errors = 0
@@ -208,6 +224,7 @@ def users_delete_bulk(
             continue
         try:
             user.delete()
+            log(f"User '{user.username}' deleted by admin '{admin_username}' (bulk)", logging.WARNING)
             nb_ok += 1
         except LookupError:
             nb_errors += 1

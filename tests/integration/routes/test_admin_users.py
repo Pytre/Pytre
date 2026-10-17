@@ -3,11 +3,13 @@ Integration tests for the /admin/users routes (Pytre_Server/routes/admin_users.p
 create, edit, delete. Uses `isolated_admin_client` for anything that writes to the KeePass database.
 """
 
+import logging
 import re
 
 import pytest
 
 from Pytre_Core.users import verify_password
+from tests.integration.conftest import TEST_USERNAME
 
 pytestmark = pytest.mark.integration
 
@@ -77,6 +79,18 @@ def test_create_user_succeeds_and_appears_in_list(isolated_admin_client):
     assert "new_admin" in list_page.text
     assert "New Admin" in list_page.text
     assert "it" in list_page.text and "ops" in list_page.text
+
+
+def test_create_user_is_logged_with_the_admin_username(isolated_admin_client, caplog):
+    with caplog.at_level(logging.INFO):
+        isolated_admin_client.post(
+            "/admin/users/new",
+            data={"username": "logged_user", "title": "", "auth_type": "none", "password": ""},
+        )
+
+    assert any(
+        f"User 'logged_user' saved by admin '{TEST_USERNAME}'" in r.message for r in caplog.records
+    )
 
 
 def test_create_user_blank_username_reports_error(isolated_admin_client):
@@ -268,6 +282,22 @@ def test_delete_single_user(isolated_admin_client):
     assert "delete_me" not in list_page_after.text
 
 
+def test_delete_single_user_is_logged_with_the_admin_username(isolated_admin_client, caplog):
+    isolated_admin_client.post(
+        "/admin/users/new",
+        data={"username": "delete_me_logged", "title": "", "auth_type": "none", "password": ""},
+    )
+    list_page = isolated_admin_client.get("/admin/users")
+    uuid = _find_uuid(list_page.text, "delete_me_logged")
+
+    with caplog.at_level(logging.INFO):
+        isolated_admin_client.post(f"/admin/users/{uuid}/delete")
+
+    assert any(
+        f"User 'delete_me_logged' deleted by admin '{TEST_USERNAME}'" in r.message for r in caplog.records
+    )
+
+
 def test_delete_unknown_uuid_redirects_with_error(isolated_admin_client):
     response = isolated_admin_client.post(
         "/admin/users/00000000-0000-0000-0000-000000000000/delete", follow_redirects=False
@@ -296,6 +326,22 @@ def test_bulk_delete_removes_all_selected(isolated_admin_client):
     list_page_after = isolated_admin_client.get("/admin/users")
     assert "bulk_a" not in list_page_after.text
     assert "bulk_b" not in list_page_after.text
+
+
+def test_bulk_delete_is_logged_per_user_with_the_admin_username(isolated_admin_client, caplog):
+    for username in ("bulk_log_a", "bulk_log_b"):
+        isolated_admin_client.post(
+            "/admin/users/new", data={"username": username, "title": "", "auth_type": "none", "password": ""}
+        )
+    list_page = isolated_admin_client.get("/admin/users")
+    uuid_a = _find_uuid(list_page.text, "bulk_log_a")
+    uuid_b = _find_uuid(list_page.text, "bulk_log_b")
+
+    with caplog.at_level(logging.INFO):
+        isolated_admin_client.post("/admin/users/delete", data={"uuids": [uuid_a, uuid_b]})
+
+    assert any(f"User 'bulk_log_a' deleted by admin '{TEST_USERNAME}' (bulk)" in r.message for r in caplog.records)
+    assert any(f"User 'bulk_log_b' deleted by admin '{TEST_USERNAME}' (bulk)" in r.message for r in caplog.records)
 
 
 def test_bulk_delete_reports_partial_failure(isolated_admin_client):

@@ -9,7 +9,7 @@ from Pytre_Core.users import hash_password
 from Pytre_Core.utils import log as _log
 
 from Pytre_Server.app import create_app
-from Pytre_Server.logs import setup_file_logging, setup_terminal_logging
+from Pytre_Server.logs import MAX_LOG_SIZE_MB, setup_file_logging, setup_terminal_logging
 from Pytre_Server.master_key import (
     get_master_key_interactive,
     show_master_key_interactive,
@@ -37,6 +37,9 @@ def create_parser() -> argparse.ArgumentParser:
         help="Seconds between keep alive pings while a query executes, 0 disables (default %(default)s)",
     )
     parser.add_argument("--log-file", type=Path, default=None, help="File to log messages to (disabled by default)")
+    parser.add_argument(
+        "--log-buffer-mb", type=int, default=MAX_LOG_SIZE_MB, help="Size of logs in MB (default %(default)s)"
+    )
     parser.add_argument(
         "--forwarded-allow-ips",
         default=None,
@@ -103,6 +106,7 @@ def start_server(args: argparse.Namespace):
             chunk_size=args.chunk_size,
             max_concurrency_per_user=args.max_concurrency_per_user,
             heartbeat_secs=args.heartbeat_secs,
+            log_buffer_mb=args.log_buffer_mb,
         ),
         host=args.host,
         port=args.port,

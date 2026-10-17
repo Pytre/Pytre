@@ -4,6 +4,7 @@ edit (hash exemption only), reload. Read-only against the real, shared queries f
 here writes .sql files), so `admin_client` (no per-test isolation needed) is used throughout.
 """
 
+import logging
 import re
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
@@ -12,6 +13,7 @@ import pytest
 
 from Pytre_Core.sql_query.file_parser import FileParser
 from Pytre_Server.query_catalog import QueryCatalog
+from tests.integration.conftest import TEST_USERNAME
 
 pytestmark = pytest.mark.integration
 
@@ -207,6 +209,18 @@ def test_ignore_hash_set_persists_a_brand_new_exemption(admin_client):
     assert stored == datetime.fromtimestamp(until_ts, tz=timezone.utc)
 
 
+def test_ignore_hash_set_is_logged_with_the_admin_username(admin_client, caplog):
+    until_ts = _future_ts()
+
+    with caplog.at_level(logging.INFO):
+        admin_client.post(f"/admin/queries/{TEST_QUERY_ID}/ignore-hash", data={"until_ts": str(until_ts)})
+
+    assert any(
+        f"Hash-check exemption for '{TEST_QUERY_ID}' set" in r.message and f"by admin '{TEST_USERNAME}'" in r.message
+        for r in caplog.records
+    )
+
+
 def test_ignore_hash_set_same_timestamp_is_reported_unchanged(admin_client):
     until_ts = _future_ts()
     admin_client.post(f"/admin/queries/{TEST_QUERY_ID}/ignore-hash", data={"until_ts": str(until_ts)})
@@ -229,6 +243,18 @@ def test_ignore_hash_set_empty_clears_the_exemption(admin_client):
     assert response.status_code == 303
     assert response.headers["location"] == f"/admin/queries?msg=Hash+exemption+for+{TEST_QUERY_ID}+cleared"
     assert TEST_QUERY_ID not in admin_client.app.state.server.resources.ignore_hash_until
+
+
+def test_ignore_hash_clear_is_logged_with_the_admin_username(admin_client, caplog):
+    admin_client.post(f"/admin/queries/{TEST_QUERY_ID}/ignore-hash", data={"until_ts": str(_future_ts())})
+
+    with caplog.at_level(logging.INFO):
+        admin_client.post(f"/admin/queries/{TEST_QUERY_ID}/ignore-hash", data={"until_ts": ""})
+
+    assert any(
+        f"Hash-check exemption for '{TEST_QUERY_ID}' cleared by admin '{TEST_USERNAME}'" in r.message
+        for r in caplog.records
+    )
 
 
 def test_ignore_hash_set_past_timestamp_clears_the_exemption(admin_client):

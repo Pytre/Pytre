@@ -3,6 +3,7 @@ Admin webui routes for managing OIDC providers - list, create, edit, delete.
 Gated by require_admin_session (see admin_router.py)
 """
 
+import logging
 from typing import Annotated
 from urllib.parse import quote_plus
 
@@ -11,11 +12,17 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
 
 from Pytre_Core.oidc_providers import OidcProvider
+from Pytre_Core.utils import log as _log
+from Pytre_Server.routes.admin_auth import require_admin_session
 from Pytre_Server.server_state import ServerState, get_server_state
 from Pytre_Server.templating import templates
 
 
 router = APIRouter(prefix="/sso")
+
+
+def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__) -> None:
+    _log(msg, level=level, sublogger=sublogger)
 
 
 class OidcProviderForm(BaseModel):
@@ -87,9 +94,10 @@ def sso_new_submit(
     request: Request,
     provider_form: Annotated[OidcProviderForm, Form()],
     state: ServerState = Depends(get_server_state),
+    admin_username: str = Depends(require_admin_session),
 ) -> HTMLResponse | RedirectResponse:
     provider = OidcProvider(state.app_ctx.oidc_providers)
-    return _save_provider(request, provider, provider_form)
+    return _save_provider(request, provider, provider_form, admin_username)
 
 
 @router.get("/{uuid}/edit", response_class=HTMLResponse, response_model=None)
@@ -108,15 +116,16 @@ def sso_edit_submit(
     request: Request,
     provider_form: Annotated[OidcProviderForm, Form()],
     state: ServerState = Depends(get_server_state),
+    admin_username: str = Depends(require_admin_session),
 ) -> HTMLResponse | RedirectResponse:
     provider = state.app_ctx.oidc_providers.find_provider_by_uuid(uuid)
     if provider is None:
         return RedirectResponse(url="/admin/sso?error=Provider+not+found", status_code=status.HTTP_303_SEE_OTHER)
-    return _save_provider(request, provider, provider_form)
+    return _save_provider(request, provider, provider_form, admin_username)
 
 
 def _save_provider(
-    request: Request, provider: OidcProvider, provider_form: OidcProviderForm
+    request: Request, provider: OidcProvider, provider_form: OidcProviderForm, admin_username: str
 ) -> HTMLResponse | RedirectResponse:
     provider_form.apply_to(provider)
 
@@ -127,6 +136,10 @@ def _save_provider(
         context["error"] = str(e)
         return templates.TemplateResponse(request, "admin/oidc_provider_form.html", context)
 
+    log(
+        f"OIDC provider '{provider.issuer}' saved by admin '{admin_username}' (enabled={provider.enabled})",
+        logging.WARNING,
+    )
     return RedirectResponse(url="/admin/sso?msg=Provider+saved", status_code=status.HTTP_303_SEE_OTHER)
 
 
@@ -134,7 +147,9 @@ def _save_provider(
 # Delete
 # ------------------------------------------------------------------------------------------
 @router.post("/{uuid}/delete")
-def sso_delete(uuid: str, state: ServerState = Depends(get_server_state)) -> RedirectResponse:
+def sso_delete(
+    uuid: str, state: ServerState = Depends(get_server_state), admin_username: str = Depends(require_admin_session)
+) -> RedirectResponse:
     provider = state.app_ctx.oidc_providers.find_provider_by_uuid(uuid)
     if provider is None:
         return RedirectResponse(url="/admin/sso?error=Provider+not+found", status_code=status.HTTP_303_SEE_OTHER)
@@ -144,12 +159,15 @@ def sso_delete(uuid: str, state: ServerState = Depends(get_server_state)) -> Red
     except LookupError as e:
         return RedirectResponse(url=f"/admin/sso?error={e}", status_code=status.HTTP_303_SEE_OTHER)
 
+    log(f"OIDC provider '{provider.issuer}' deleted by admin '{admin_username}'", logging.WARNING)
     return RedirectResponse(url="/admin/sso?msg=Provider+deleted", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @router.post("/delete")
 def sso_delete_bulk(
-    uuids: list[str] = Form(default_factory=list), state: ServerState = Depends(get_server_state)
+    uuids: list[str] = Form(default_factory=list),
+    state: ServerState = Depends(get_server_state),
+    admin_username: str = Depends(require_admin_session),
 ) -> RedirectResponse:
     nb_ok = 0
     nb_errors = 0
@@ -160,6 +178,7 @@ def sso_delete_bulk(
             continue
         try:
             provider.delete()
+            log(f"OIDC provider '{provider.issuer}' deleted by admin '{admin_username}' (bulk)", logging.WARNING)
             nb_ok += 1
         except LookupError:
             nb_errors += 1

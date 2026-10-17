@@ -14,30 +14,6 @@ USERNAME = "test_user"
 
 
 @pytest.fixture
-def fake_keyring(monkeypatch):
-    """In-memory stand-in for the OS keyring backend - avoids touching the real
-    system credential store during tests."""
-    store: dict[tuple[str, str], str] = {}
-
-    def fake_get_password(service, username):
-        return store.get((service, username))
-
-    def fake_set_password(service, username, password):
-        store[(service, username)] = password
-
-    def fake_delete_password(service, username):
-        if (service, username) not in store:
-            raise keyring.errors.PasswordDeleteError("not found")
-        del store[(service, username)]
-
-    monkeypatch.setattr(keyring, "get_password", fake_get_password)
-    monkeypatch.setattr(keyring, "set_password", fake_set_password)
-    monkeypatch.setattr(keyring, "delete_password", fake_delete_password)
-
-    return store
-
-
-@pytest.fixture
 def catalog(fake_keyring):
     """KeyringCatalog.REMOTES_KEY, with its `_cipher` cache reset before and after - the enum
     member is a singleton, so its cache would otherwise leak state between tests."""

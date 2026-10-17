@@ -4,10 +4,10 @@ build/
 dist/
 Requetes SQL/
 /app*/
-.coverage
+.coverage*
 
 changelog*.txt
-/pytre_core/credentials_secrets.py
+/Pytre_Core/credentials_secrets.py
 
 /Pytre.key
 /Pytre*.db

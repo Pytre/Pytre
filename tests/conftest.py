@@ -1,3 +1,5 @@
+import keyring
+import keyring.errors
 import pytest
 from pathlib import Path
 from unittest.mock import Mock, MagicMock
@@ -13,6 +15,35 @@ from cryptography.fernet import Fernet
 def temp_dir(tmp_path):
     """Temporary directory for test files"""
     return tmp_path
+
+
+# ================================================================================
+# System keyring isolation
+# ================================================================================
+
+
+@pytest.fixture(autouse=True)
+def fake_keyring(monkeypatch):
+    """In-memory stand-in for the OS keyring backend, applied to every test - never touches the
+    real system credential store, and works on machines without any backend (CI runners)."""
+    store: dict[tuple[str, str], str] = {}
+
+    def fake_get_password(service, username):
+        return store.get((service, username))
+
+    def fake_set_password(service, username, password):
+        store[(service, username)] = password
+
+    def fake_delete_password(service, username):
+        if (service, username) not in store:
+            raise keyring.errors.PasswordDeleteError("not found")
+        del store[(service, username)]
+
+    monkeypatch.setattr(keyring, "get_password", fake_get_password)
+    monkeypatch.setattr(keyring, "set_password", fake_set_password)
+    monkeypatch.setattr(keyring, "delete_password", fake_delete_password)
+
+    return store
 
 
 # ================================================================================

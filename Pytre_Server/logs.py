@@ -4,8 +4,9 @@ from pathlib import Path
 
 from Pytre_Core.utils import LOGGER_ROOT_NAME
 
-MAX_BYTES = 10 * 1024**2  # 10 MB per file before rotating
-BACKUP_COUNT = 5  # rotated files kept in addition to the active one
+MAX_LOG_SIZE_MB = 10
+MAX_BYTES = MAX_LOG_SIZE_MB * 1024**2  # 10 MB per file before rotating
+BACKUP_COUNT = 0  # rotated files kept in addition to the active one
 ENCODING = "utf-8"
 
 

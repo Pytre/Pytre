@@ -16,6 +16,7 @@ from Pytre_Core.servers import Server
 from Pytre_Core.utils import log as _log
 from Pytre_Core.sql_query.query_drivers_async import AsyncSqlDriver, get_driver
 
+from Pytre_Server.log_buffer import LogBufferHandler
 from Pytre_Server.query_catalog import QueryCatalog
 
 
@@ -82,6 +83,7 @@ class ServerResources:
     throttle_failed_login: dict[str, list[datetime]] = field(default_factory=dict)  # UTC datetime
 
     execution_logs: ServerDriven | None = None
+    log_buffer: LogBufferHandler | None = None
     ignore_hash_until: dict[str, datetime] = field(default_factory=dict)  # query_id -> until UTC datetime
 
     oidc_client: OidcClient = field(default_factory=OidcClient)

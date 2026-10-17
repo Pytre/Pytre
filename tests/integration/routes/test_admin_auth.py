@@ -98,6 +98,20 @@ def test_login_throttles_after_too_many_failures(client):
     assert response.status_code == 429
 
 
+def test_login_failure_is_logged(client, caplog):
+    with caplog.at_level(logging.INFO):
+        client.post("/admin/login", data={"username": TEST_USERNAME, "password": "wrong-password"})
+
+    assert any(f"Failed admin login attempt for '{TEST_USERNAME}'" in r.message for r in caplog.records)
+
+
+def test_login_success_is_logged(client, caplog):
+    with caplog.at_level(logging.INFO):
+        client.post("/admin/login", data={"username": TEST_USERNAME, "password": TEST_USER_PASSWORD})
+
+    assert any(f"Admin '{TEST_USERNAME}' logged in" in r.message for r in caplog.records)
+
+
 def test_login_success_sets_cookie_and_redirects_to_admin_by_default(client):
     response = client.post(
         "/admin/login", data={"username": TEST_USERNAME, "password": TEST_USER_PASSWORD}, follow_redirects=False
@@ -490,6 +504,19 @@ def test_bootstrap_creates_admin_and_auto_logs_in(monkeypatch, isolated_client):
     assert response.status_code == 303
     assert response.headers["location"] == "/admin"
     assert "admin_session=" in response.headers["set-cookie"]
+
+
+def test_bootstrap_is_logged(monkeypatch, isolated_client, caplog):
+    monkeypatch.setattr(Users, "users_admin_exists", lambda self, reload=False: False)
+    bootstrap_client = _loopback_client()
+
+    with caplog.at_level(logging.INFO):
+        bootstrap_client.post(
+            "/admin/bootstrap",
+            data={"username": "newadmin", "password": "Secret123!", "confirm_password": "Secret123!"},
+        )
+
+    assert any("First admin account 'newadmin' created via bootstrap" in r.message for r in caplog.records)
 
 
 def test_bootstrap_created_account_can_log_in_normally_afterwards(monkeypatch, isolated_client):

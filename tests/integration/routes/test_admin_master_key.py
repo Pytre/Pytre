@@ -7,11 +7,14 @@ of the KeePass test database (these routes never read/write Pytre.db), so the sh
 fixture is enough - no need for an isolated per-test DB copy.
 """
 
+import logging
 import re
 
 import keyring
 import keyring.errors
 import pytest
+
+from tests.integration.conftest import TEST_USERNAME
 
 pytestmark = pytest.mark.integration
 
@@ -122,6 +125,15 @@ def test_set_stores_the_new_value(admin_client, fake_keyring):
     assert fake_keyring[("Pytre_Server", "master_key")] == "s3cret!"
 
 
+def test_set_is_logged_with_the_admin_username(admin_client, fake_keyring, caplog):
+    with caplog.at_level(logging.INFO):
+        admin_client.post("/admin/master-key/set", data={"password": "s3cret!", "confirm_password": "s3cret!"})
+
+    assert any(
+        f"Master key set/changed in keyring by admin '{TEST_USERNAME}'" in r.message for r in caplog.records
+    )
+
+
 def test_page_reflects_key_exists_after_set(admin_client, fake_keyring):
     admin_client.post("/admin/master-key/set", data={"password": "s3cret!", "confirm_password": "s3cret!"})
 
@@ -142,6 +154,15 @@ def test_reveal_returns_the_stored_value_as_json(admin_client, fake_keyring):
 
     assert response.status_code == 200
     assert response.json() == {"value": "s3cret!"}
+
+
+def test_reveal_is_logged_with_the_admin_username(admin_client, fake_keyring, caplog):
+    admin_client.post("/admin/master-key/set", data={"password": "s3cret!", "confirm_password": "s3cret!"})
+
+    with caplog.at_level(logging.INFO):
+        admin_client.post("/admin/master-key/reveal")
+
+    assert any(f"Master key revealed by admin '{TEST_USERNAME}'" in r.message for r in caplog.records)
 
 
 def test_reveal_returns_null_if_nothing_stored(admin_client, fake_keyring):
@@ -173,6 +194,17 @@ def test_delete_removes_the_stored_value(admin_client, fake_keyring):
 
     page = admin_client.get("/admin/master-key")
     assert "no master key stored" in page.text
+
+
+def test_delete_is_logged_with_the_admin_username(admin_client, fake_keyring, caplog):
+    admin_client.post("/admin/master-key/set", data={"password": "s3cret!", "confirm_password": "s3cret!"})
+
+    with caplog.at_level(logging.INFO):
+        admin_client.post("/admin/master-key/delete")
+
+    assert any(
+        f"Master key deleted from keyring by admin '{TEST_USERNAME}'" in r.message for r in caplog.records
+    )
 
 
 def test_delete_is_a_noop_if_nothing_stored(admin_client, fake_keyring):

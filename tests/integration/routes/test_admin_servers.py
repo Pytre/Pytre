@@ -3,12 +3,14 @@ Integration tests for the /admin/servers routes (Pytre_Server/routes/admin_serve
 create, edit, delete. Uses `isolated_admin_client` for anything that writes to the KeePass database.
 """
 
+import logging
 import re
 from unittest.mock import AsyncMock, Mock
 
 import pytest
 
 from Pytre_Server.server_state import _DriverEntry
+from tests.integration.conftest import TEST_USERNAME
 
 pytestmark = pytest.mark.integration
 
@@ -63,6 +65,26 @@ def test_create_server_succeeds_and_appears_in_list(isolated_admin_client):
     assert "new_server" in list_page.text
     assert "New Server" in list_page.text
     assert "it" in list_page.text and "ops" in list_page.text
+
+
+def test_create_server_is_logged_with_the_admin_username(isolated_admin_client, caplog):
+    with caplog.at_level(logging.INFO):
+        isolated_admin_client.post(
+            "/admin/servers/new",
+            data={
+                "id": "logged_server",
+                "description": "",
+                "login": "",
+                "password": "",
+                "type": "SQL Server",
+                "login_timeout": "60",
+                "timeout": "300",
+            },
+        )
+
+    assert any(
+        f"Server 'logged_server' saved by admin '{TEST_USERNAME}'" in r.message for r in caplog.records
+    )
 
 
 def test_create_server_round_trip_keeps_each_field_distinct(isolated_admin_client):
@@ -268,6 +290,30 @@ def test_delete_unknown_uuid_redirects_with_error(isolated_admin_client):
     assert response.headers["location"] == "/admin/servers?error=Server+not+found"
 
 
+def test_delete_single_server_is_logged_with_the_admin_username(isolated_admin_client, caplog):
+    isolated_admin_client.post(
+        "/admin/servers/new",
+        data={
+            "id": "delete_me_logged",
+            "description": "",
+            "login": "",
+            "password": "",
+            "type": "SQL Server",
+            "login_timeout": "60",
+            "timeout": "300",
+        },
+    )
+    list_page = isolated_admin_client.get("/admin/servers")
+    uuid = _find_uuid(list_page.text, "delete_me_logged")
+
+    with caplog.at_level(logging.INFO):
+        isolated_admin_client.post(f"/admin/servers/{uuid}/delete")
+
+    assert any(
+        f"Server 'delete_me_logged' deleted by admin '{TEST_USERNAME}'" in r.message for r in caplog.records
+    )
+
+
 def test_bulk_delete_removes_all_selected(isolated_admin_client):
     for server_id in ("bulk_a", "bulk_b"):
         isolated_admin_client.post(
@@ -288,6 +334,27 @@ def test_bulk_delete_removes_all_selected(isolated_admin_client):
     list_page_after = isolated_admin_client.get("/admin/servers")
     assert "bulk_a" not in list_page_after.text
     assert "bulk_b" not in list_page_after.text
+
+
+def test_bulk_delete_is_logged_per_server_with_the_admin_username(isolated_admin_client, caplog):
+    for server_id in ("bulk_log_a", "bulk_log_b"):
+        isolated_admin_client.post(
+            "/admin/servers/new",
+            data={"id": server_id, "description": "", "login": "", "password": "", "type": "SQL Server", "login_timeout": "60", "timeout": "300"},
+        )
+    list_page = isolated_admin_client.get("/admin/servers")
+    uuid_a = _find_uuid(list_page.text, "bulk_log_a")
+    uuid_b = _find_uuid(list_page.text, "bulk_log_b")
+
+    with caplog.at_level(logging.INFO):
+        isolated_admin_client.post("/admin/servers/delete", data={"uuids": [uuid_a, uuid_b]})
+
+    assert any(
+        f"Server 'bulk_log_a' deleted by admin '{TEST_USERNAME}' (bulk)" in r.message for r in caplog.records
+    )
+    assert any(
+        f"Server 'bulk_log_b' deleted by admin '{TEST_USERNAME}' (bulk)" in r.message for r in caplog.records
+    )
 
 
 def test_bulk_delete_reports_partial_failure(isolated_admin_client):

@@ -47,6 +47,12 @@
             --btn-secondary-bg: #eee;
             --btn-secondary-text: #333;
             --btn-secondary-hover-bg: #e0e0e0;
+            --log-debug: #6c757d;
+            --log-info: var(--text);
+            --log-warning: #b8860b;
+            --log-error: #c0392b;
+            --log-critical-bg: #c0392b;
+            --log-critical-text: #ffffff;
 
             /* The sidebar intentionally always stays dark, regardless of the main theme - not
             redefined under :root[data-theme="dark"], so it never changes with the toggle. */
@@ -78,6 +84,11 @@
             --btn-secondary-bg: #3a3a3a;
             --btn-secondary-text: #e8e8e8;
             --btn-secondary-hover-bg: #454545;
+            --log-debug: #9aa0a6;
+            --log-warning: #f0b429;
+            --log-error: #ff8a80;
+            --log-critical-bg: #ff8a80;
+            --log-critical-text: #1b1b1b;
         }
         * { box-sizing: border-box; }
         /* An author `display` rule (e.g. .form-actions { display: flex }) always beats the UA
@@ -309,6 +320,8 @@
         button.danger { background: #c0392b; }
         .toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
         .toolbar button, .toolbar a.btn, .toolbar input[type="checkbox"] { margin-top: 0; }
+        .toolbar-sep { width: 1px; align-self: stretch; background: var(--border); }
+        .toolbar-label { font-size: 13px; }
         #filter { flex: 1 1 160px; min-width: 120px; }
         .checkbox-grid { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 18px; margin: 4px 0 14px; }
         .checkbox-item {
@@ -319,6 +332,7 @@
             font-weight: 400;
             margin: 0;
         }
+        .checkbox-item input[type="checkbox"] { margin: 0; position: relative; top: 1px; }
         .add-chip-btn {
             display: inline-flex;
             align-items: center;
@@ -370,6 +384,24 @@
         .users-table-wrap tbody tr.row-selected:hover { background: var(--row-selected-hover); }
         .users-table-wrap tbody td a { cursor: pointer; color: var(--accent); text-decoration: none; font-weight: 600; }
         .users-table-wrap tbody td a:hover { text-decoration: underline; }
+
+        /* Logs page (/admin/logs) - newest entries on top, oldest at the bottom */
+        .logs-page { height: 100%; display: flex; flex-direction: column; background: var(--surface); }
+        .logs-toolbar { padding: 14px 24px; background: var(--surface); flex-shrink: 0; margin-bottom: 0; }
+        .logs-scroll { flex: 1; overflow-y: auto; min-height: 0; padding: 0 24px 12px; font-family: monospace; font-size: 13px; }
+        .log-row { display: flex; gap: 10px; padding: 2px 0; white-space: pre-wrap; word-break: break-word; }
+        .log-row:hover { background: var(--row-hover); }
+        .log-ts { flex-shrink: 0; width: 10em; white-space: nowrap; color: var(--text-muted); }
+        .log-level { flex-shrink: 0; width: 5.5em; font-weight: 700; }
+        .log-level-debug { color: var(--log-debug); }
+        .log-level-info { color: var(--log-info); }
+        .log-level-warning { color: var(--log-warning); }
+        .log-level-error { color: var(--log-error); }
+        .log-level-critical { color: var(--log-critical-text); background: var(--log-critical-bg); padding: 0 4px; border-radius: 3px; }
+        .log-logger { display: none; flex-shrink: 0; max-width: 22em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary); }
+        .logs-scroll.show-logger .log-logger { display: inline-block; }
+        .log-message { flex: 1; }
+        #logs-paused-indicator { color: var(--text-secondary); font-size: 13px; }
 
         /* Full-bleed pages whose content should stay centered rather than fill the space, with
         no card chrome (border/shadow) - the whole area is plain, not a box on a gray ground */
@@ -549,6 +581,7 @@
             <a class="nav-link{% if request.url.path.startswith('/admin/sso') %} active{% endif %}" href="/admin/sso">SSO providers</a>
             <a class="nav-link{% if request.url.path.startswith('/admin/settings') %} active{% endif %}" href="/admin/settings">General settings</a>
             <a class="nav-link{% if request.url.path.startswith('/admin/master-key') %} active{% endif %}" href="/admin/master-key">Master key</a>
+            <a class="nav-link{% if request.url.path.startswith('/admin/logs') %} active{% endif %}" href="/admin/logs">Logs</a>
             {% if request.state.admin_username is defined and request.state.admin_username != "local" %}
             <div class="sidebar-logout">
                 <button type="submit" form="admin-logout-form" class="sidebar-logout-text" title="Connected as {{ request.state.admin_username }}">Log out</button>

@@ -4,9 +4,12 @@ edit, delete, bulk delete. Uses `isolated_admin_client` for anything that writes
 database.
 """
 
+import logging
 import re
 
 import pytest
+
+from tests.integration.conftest import TEST_USERNAME
 
 pytestmark = pytest.mark.integration
 
@@ -56,6 +59,16 @@ def test_create_provider_succeeds_and_appears_in_list(isolated_admin_client):
     assert "Company SSO" in list_page.text
     assert "https://idp1.example.com" in list_page.text
     assert ">Yes<" in list_page.text  # enabled and usable, both default true here
+
+
+def test_create_provider_is_logged_with_the_admin_username(isolated_admin_client, caplog):
+    with caplog.at_level(logging.INFO):
+        isolated_admin_client.post("/admin/sso/new", data=_new_provider_data("https://idp-logged.example.com"))
+
+    assert any(
+        f"OIDC provider 'https://idp-logged.example.com' saved by admin '{TEST_USERNAME}'" in r.message
+        for r in caplog.records
+    )
 
 
 def test_create_provider_round_trip_keeps_each_field_distinct(isolated_admin_client):
@@ -188,6 +201,20 @@ def test_delete_unknown_uuid_redirects_with_error(isolated_admin_client):
     assert response.headers["location"] == "/admin/sso?error=Provider+not+found"
 
 
+def test_delete_single_provider_is_logged_with_the_admin_username(isolated_admin_client, caplog):
+    isolated_admin_client.post("/admin/sso/new", data=_new_provider_data("https://idp-delete-logged.example.com"))
+    list_page = isolated_admin_client.get("/admin/sso")
+    uuid = _find_uuid(list_page.text, "https://idp-delete-logged.example.com")
+
+    with caplog.at_level(logging.INFO):
+        isolated_admin_client.post(f"/admin/sso/{uuid}/delete")
+
+    assert any(
+        f"OIDC provider 'https://idp-delete-logged.example.com' deleted by admin '{TEST_USERNAME}'" in r.message
+        for r in caplog.records
+    )
+
+
 def test_bulk_delete_removes_all_selected(isolated_admin_client):
     """Also a regression guard for a real bug found in review: sso_delete_bulk() once called
     `provider.delete` without parentheses - a no-op that still counted as a success, so this
@@ -207,6 +234,26 @@ def test_bulk_delete_removes_all_selected(isolated_admin_client):
     list_page_after = isolated_admin_client.get("/admin/sso")
     assert "idp-bulk-a" not in list_page_after.text
     assert "idp-bulk-b" not in list_page_after.text
+
+
+def test_bulk_delete_is_logged_per_provider_with_the_admin_username(isolated_admin_client, caplog):
+    for issuer in ("https://idp-bulk-log-a.example.com", "https://idp-bulk-log-b.example.com"):
+        isolated_admin_client.post("/admin/sso/new", data=_new_provider_data(issuer))
+    list_page = isolated_admin_client.get("/admin/sso")
+    uuid_a = _find_uuid(list_page.text, "https://idp-bulk-log-a.example.com")
+    uuid_b = _find_uuid(list_page.text, "https://idp-bulk-log-b.example.com")
+
+    with caplog.at_level(logging.INFO):
+        isolated_admin_client.post("/admin/sso/delete", data={"uuids": [uuid_a, uuid_b]})
+
+    assert any(
+        f"OIDC provider 'https://idp-bulk-log-a.example.com' deleted by admin '{TEST_USERNAME}' (bulk)" in r.message
+        for r in caplog.records
+    )
+    assert any(
+        f"OIDC provider 'https://idp-bulk-log-b.example.com' deleted by admin '{TEST_USERNAME}' (bulk)" in r.message
+        for r in caplog.records
+    )
 
 
 def test_bulk_delete_reports_partial_failure(isolated_admin_client):

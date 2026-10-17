@@ -4,16 +4,23 @@ shared across the whole process) - only the fields the server itself actually re
 Gated by require_admin_session (see admin_router.py)
 """
 
+import logging
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, Form, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 
+from Pytre_Core.utils import log as _log
+from Pytre_Server.routes.admin_auth import require_admin_session
 from Pytre_Server.server_state import ServerState, get_server_state
 from Pytre_Server.templating import templates
 
 
 router = APIRouter(prefix="/settings")
+
+
+def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__) -> None:
+    _log(msg, level=level, sublogger=sublogger)
 
 
 @router.get("", response_class=HTMLResponse)
@@ -44,6 +51,7 @@ def settings_save(
     queries_folder: str = Form(""),
     logs_are_on: str | None = Form(None),
     logs_folder: str = Form(""),
+    admin_username: str = Depends(require_admin_session),
 ) -> HTMLResponse | RedirectResponse:
 
     settings = state.app_ctx.settings
@@ -64,4 +72,9 @@ def settings_save(
         }
         return templates.TemplateResponse(request, "admin/settings.html", {"values": values, "error": str(e)})
 
+    log(
+        f"Settings changed by admin '{admin_username}': queries_folder='{settings.queries_folder}', "
+        f"logs_are_on={settings.logs_are_on}, logs_folder='{settings.logs_folder}'",
+        logging.INFO,
+    )
     return RedirectResponse(url="/admin/settings?msg=Settings+saved", status_code=status.HTTP_303_SEE_OTHER)

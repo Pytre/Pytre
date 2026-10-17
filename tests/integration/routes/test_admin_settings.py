@@ -4,9 +4,12 @@ general settings shown/edited via the admin webui. Uses `isolated_admin_client` 
 that writes to the KeePass database.
 """
 
+import logging
+
 import pytest
 
 from Pytre_Core.context import AppContext
+from tests.integration.conftest import TEST_USERNAME
 
 pytestmark = pytest.mark.integration
 
@@ -34,6 +37,25 @@ def test_settings_save_succeeds_and_persists(isolated_admin_client, tmp_path):
     app_ctx = AppContext(master_key="password")
     assert str(app_ctx.settings.queries_folder) == new_folder
     assert app_ctx.settings.logs_are_on is False
+
+
+def test_settings_save_is_logged_with_the_admin_username(isolated_admin_client, tmp_path, caplog):
+    with caplog.at_level(logging.INFO):
+        isolated_admin_client.post(
+            "/admin/settings", data={"queries_folder": str(tmp_path), "logs_folder": ""}
+        )
+
+    assert any(f"Settings changed by admin '{TEST_USERNAME}'" in r.message for r in caplog.records)
+
+
+def test_settings_save_failure_is_not_logged(isolated_admin_client, caplog):
+    """A failed save (invalid folder) must not be logged as a successful change."""
+    with caplog.at_level(logging.INFO):
+        isolated_admin_client.post(
+            "/admin/settings", data={"queries_folder": "/does/not/exist", "logs_folder": ""}
+        )
+
+    assert not any("Settings changed by admin" in r.message for r in caplog.records)
 
 
 def test_settings_save_invalid_queries_folder_shows_error_without_corrupting_settings(isolated_admin_client):

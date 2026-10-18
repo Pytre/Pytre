@@ -2,8 +2,10 @@ import pymssql
 import psycopg2
 import psycopg2.extensions
 
-from Pytre_Core.about import APP_NAME, APP_VERSION
+from Pytre_Core.about import APP_NAME, full_version
 from Pytre_Core.servers import ServerType, Server
+
+APP_ID = f"{APP_NAME}_{full_version()}"
 
 
 Connection = pymssql.Connection | psycopg2.extensions.connection
@@ -56,7 +58,7 @@ def _conn_mssql(server: Server) -> pymssql.Connection:
             as_dict=False,
             port=server.port,
             read_only=True,
-            appname=f"{APP_NAME}_{APP_VERSION}",
+            appname=APP_ID,
             conn_properties=conn_properties,
         )
     except pymssql._pymssql.OperationalError as err:
@@ -77,7 +79,7 @@ def _conn_postgre(server: Server) -> psycopg2.extensions.connection:
             connect_timeout=server.login_timeout,
             client_encoding=server.charset,
             port=server.port,
-            application_name=f"{APP_NAME}_{APP_VERSION}",
+            application_name=APP_ID,
         )
         cursor = conn.cursor()
         cursor.execute("SET statement_timeout = %s", (server.timeout * 1000,))  # needs to be milliseconds

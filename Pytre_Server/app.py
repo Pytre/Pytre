@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.responses import RedirectResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from Pytre_Core.context import AppContext, AppMode
 from Pytre_Core.logs_central import ServerDriven
@@ -11,7 +12,7 @@ from Pytre_Core.utils import log as _log
 from Pytre_Server.log_buffer import setup_log_buffer
 from Pytre_Server.logs import MAX_LOG_SIZE_MB
 from Pytre_Server.query_catalog import QueryCatalog
-from Pytre_Server.routes.admin_auth import AdminAuthRequired, admin_auth_required_handler
+from Pytre_Server.routes.admin_auth import AdminAuthRequired, admin_auth_required_handler, admin_session_middleware
 from Pytre_Server.routes.admin_router import router as admin_router
 from Pytre_Server.routes.client import router as client_router
 from Pytre_Server.server_state import ServerResources, ServerState
@@ -43,8 +44,10 @@ def create_app(
 ) -> FastAPI:
     """Build and configure the FastAPI app"""
 
+    # setup log_buffer
     log_buffer = setup_log_buffer(max_mb=log_buffer_mb)
 
+    # create app
     app = FastAPI(title="Pytre Server", lifespan=_lifespan)
     _app_ctx = AppContext(master_key=master_key, mode=AppMode.SERVER)
 
@@ -61,12 +64,18 @@ def create_app(
         resources=ServerResources(execution_logs=execution_logs, log_buffer=log_buffer),
     )
 
+    # add middleware (to allow for admin webui timeout on inactivity)
+    app.add_middleware(BaseHTTPMiddleware, dispatch=admin_session_middleware)
+
+    # declare routes
     @app.get("/", include_in_schema=False)
     async def root() -> RedirectResponse:
         return RedirectResponse(url="/admin")
 
     app.include_router(client_router)
     app.include_router(admin_router)
+
+    # exception handler to redirect to /admin/login when no valid admin session
     app.add_exception_handler(AdminAuthRequired, admin_auth_required_handler)
 
     log("Server started", logging.INFO)

@@ -8,17 +8,20 @@ focus on the route's own business logic without repeating the login dance in eve
 """
 
 import logging
+import time
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock
 from urllib.parse import unquote
 
+import jwt
 import pytest
 from fastapi.testclient import TestClient
 
 from Pytre_Core.context import AppContext
 from Pytre_Core.oidc_client import OidcDiscoveryError
-from Pytre_Core.users import AuthType, Users, User
+from Pytre_Core.users import AuthType, Users, User, hash_password
 from Pytre_Server.app import create_app
-from Pytre_Server.auth_token import TokenType, create_token
+from Pytre_Server.auth_token import JWT_ALGORITHM, TokenType, create_token, decode_token
 from tests.integration.conftest import TEST_DB_PASSWORD, TEST_USER_PASSWORD, TEST_USERNAME
 from tests.integration.routes.conftest import (
     SSO_ISSUER,
@@ -162,6 +165,86 @@ def test_cookie_grants_access_to_protected_routes_after_login(client):
     response = client.get("/admin/users")
 
     assert response.status_code == 200
+
+
+def test_protected_route_reissues_cookie_with_fresh_last_activity_only(client):
+    """admin_session_middleware must touch `last_activity` on every authenticated request, but
+    never `iat`/`exp`/`sub` - those stay fixed from login, that's what makes the 8h absolute cap
+    structural rather than something this middleware could break."""
+    app_ctx = client.app.state.server.app_ctx
+    client.post("/admin/login", data={"username": TEST_USERNAME, "password": TEST_USER_PASSWORD})
+    payload_after_login = decode_token(client.cookies.get("admin_session"), app_ctx.settings.jwt_secret, TokenType.ADMIN)
+
+    # last_activity has second precision - without this, login and the request below could land
+    # in the same wall-clock second and look unchanged by pure timing luck.
+    time.sleep(1)
+    client.get("/admin/users")
+    payload_after_request = decode_token(client.cookies.get("admin_session"), app_ctx.settings.jwt_secret, TokenType.ADMIN)
+
+    assert payload_after_request["iat"] == payload_after_login["iat"]
+    assert payload_after_request["exp"] == payload_after_login["exp"]
+    assert payload_after_request["sub"] == payload_after_login["sub"]
+    assert payload_after_request["last_activity"] > payload_after_login.get("last_activity", payload_after_login["iat"])
+
+
+def test_password_change_still_revokes_session_after_a_reissue(isolated_admin_client):
+    """Regression guard: iat must never move on reissue, or this revocation check (iat compared
+    to password_changed_at) would stop working for any session that outlives its first request."""
+    isolated_admin_client.get("/admin/users")  # admin_session_middleware reissues the cookie here
+
+    app_ctx = isolated_admin_client.app.state.server.app_ctx
+    # password_changed_at and the JWT "iat" claim are both second-precision - see
+    # test_change_password.py's test_old_token_is_rejected_after_password_change for the same reasoning.
+    time.sleep(1)
+    user = User(app_ctx.users, username=TEST_USERNAME)
+    user.password_hash = hash_password("a-new-password")
+    user.save()
+
+    # re-presents the reissued cookie still held by the client, not a fresh login
+    response = isolated_admin_client.get("/admin/users", follow_redirects=False)
+
+    assert response.status_code == 303
+    assert response.headers["location"].startswith("/admin/login")
+
+
+def test_inactive_session_past_the_timeout_is_rejected(client):
+    app_ctx = AppContext(master_key=TEST_DB_PASSWORD)
+    now = datetime.now(timezone.utc)
+    stale_claims = {
+        "sub": TEST_USERNAME,
+        "iat": now,
+        "exp": now + timedelta(hours=8),
+        "type": TokenType.ADMIN.name,
+        "last_activity": (now - timedelta(hours=1, minutes=1)).timestamp(),
+    }
+    token = jwt.encode(stale_claims, app_ctx.settings.jwt_secret, algorithm=JWT_ALGORITHM)
+    client.cookies.set("admin_session", token)
+
+    response = client.get("/admin/users", follow_redirects=False)
+
+    assert response.status_code == 303
+    assert response.headers["location"].startswith("/admin/login")
+
+
+def test_expired_token_is_rejected_even_with_recent_activity(client):
+    """Isolates that the native `exp` check (the absolute 8h cap) is what rejects this token, not
+    the inactivity check - last_activity is set to right now, only iat/exp are already stale."""
+    app_ctx = AppContext(master_key=TEST_DB_PASSWORD)
+    now = datetime.now(timezone.utc)
+    expired_claims = {
+        "sub": TEST_USERNAME,
+        "iat": now - timedelta(hours=9),
+        "exp": now - timedelta(hours=1),
+        "type": TokenType.ADMIN.name,
+        "last_activity": now.timestamp(),
+    }
+    token = jwt.encode(expired_claims, app_ctx.settings.jwt_secret, algorithm=JWT_ALGORITHM)
+    client.cookies.set("admin_session", token)
+
+    response = client.get("/admin/users", follow_redirects=False)
+
+    assert response.status_code == 303
+    assert response.headers["location"].startswith("/admin/login")
 
 
 def test_admin_session_is_rejected_once_the_user_is_disabled(isolated_client, caplog):

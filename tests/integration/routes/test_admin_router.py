@@ -11,7 +11,7 @@ import re
 
 import pytest
 
-from Pytre_Core.about import APP_STATUS, APP_VERSION
+from Pytre_Core.about import full_version
 
 pytestmark = pytest.mark.integration
 
@@ -61,9 +61,7 @@ def test_sidebar_shows_the_app_version_on_every_admin_page(admin_client, path):
     assert response.status_code == 200
     version_block = re.search(r'<div class="sidebar-version">([^<]*)</div>', response.text)
     assert version_block is not None
-    assert APP_VERSION in version_block.group(1)
-    if APP_STATUS:
-        assert APP_STATUS in version_block.group(1)
+    assert full_version() in version_block.group(1)
 
 
 def test_login_page_has_no_sidebar_version(client):

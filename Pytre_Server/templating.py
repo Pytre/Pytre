@@ -6,9 +6,9 @@ from typing import Any, cast
 
 from fastapi.templating import Jinja2Templates
 
-from Pytre_Core.about import APP_STATUS, APP_VERSION
+from Pytre_Core.about import full_version
 
 templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
 
-app_version = APP_VERSION if not APP_STATUS else f"{APP_VERSION} {APP_STATUS}"
+app_version = full_version()
 cast(dict[str, Any], templates.env.globals)["app_version"] = app_version

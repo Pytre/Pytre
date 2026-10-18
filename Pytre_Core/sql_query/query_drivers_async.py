@@ -12,11 +12,12 @@ from typing import Any, cast, Protocol
 import asyncpg
 import fastmssql
 
-from Pytre_Core.about import APP_NAME, APP_VERSION
+from Pytre_Core.about import APP_NAME, full_version
 from Pytre_Core.servers import ServerType, Server
 from Pytre_Core.utils import log as _log
 from Pytre_Core.sql_query.sql_browser import split_instance_host, resolve_instance_port
 
+APP_ID = f"{APP_NAME}_Server_{full_version()}"
 
 _PARAM_PATTERN = re.compile(r"%\((@[\d\w#_$@]+)\)s")
 
@@ -118,7 +119,7 @@ class FastMssqlDriver:
             password=password,
             pool_config=pool_config,
             ssl_config=fastmssql.SslConfig(trust_server_certificate=trust_certificate),
-            application_name=f"{APP_NAME}_Server_{APP_VERSION}",
+            application_name=APP_ID,
             application_intent=fastmssql.ApplicationIntent.READ_ONLY,
         )
 
@@ -238,7 +239,7 @@ class AsyncpgDriver:
                 max_size=self._max_pool_size,
                 timeout=self._login_timeout,
                 server_settings={
-                    "application_name": f"{APP_NAME}_Server_{APP_VERSION}",
+                    "application_name": APP_ID,
                     "default_transaction_read_only": "on",
                     "statement_timeout": str(self._statement_timeout_ms),
                 },

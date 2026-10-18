@@ -9,7 +9,7 @@ from pathlib import Path
 from datetime import datetime
 
 from Pytre_Core import old_files, utils
-from Pytre_Core.about import APP_NAME, APP_VERSION, APP_STATUS
+from Pytre_Core.about import APP_NAME, APP_VERSION, full_version
 from Pytre_Core.context import AppContext, AppMode, UserContext, detect_client_mode
 from Pytre_Core.credentials import secret_key_available
 from Pytre_Core.logs_central import ClientDriven as CentralLogs
@@ -245,7 +245,7 @@ class App(tk.Toplevel):
     # Définition de l'identité de l'appli et des styles / thème
     # ------------------------------------------------------------------------------------------
     def get_default_title(self) -> str:
-        app_version = APP_VERSION if not APP_STATUS else f"{APP_VERSION} ({APP_STATUS})"
+        app_version = full_version()
         return f"{APP_NAME} - V.{app_version}"
 
     def setup_app_identity(self):

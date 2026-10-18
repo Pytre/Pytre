@@ -106,3 +106,22 @@ def test_decode_token_rejects_admin_token_used_as_access_token():
 
     with pytest.raises(jwt.InvalidTokenError):
         decode_token(admin_token, secret, TokenType.ACCESS)
+
+
+@pytest.mark.unit
+def test_admin_token_lifetime_is_eight_hours():
+    """The absolute cap on an admin webui session - enforced natively by `exp`, independently of
+    the inactivity timeout below."""
+    assert TokenType.ADMIN.value == timedelta(hours=8)
+
+
+@pytest.mark.unit
+def test_admin_session_timeout_is_one_hour():
+    assert TokenType.ADMIN.session_timeout == timedelta(hours=1)
+
+
+@pytest.mark.unit
+def test_access_and_refresh_tokens_have_no_session_timeout():
+    """ACCESS/REFRESH have no notion of inactivity - only `exp` ever governs their validity."""
+    assert TokenType.ACCESS.session_timeout is None
+    assert TokenType.REFRESH.session_timeout is None

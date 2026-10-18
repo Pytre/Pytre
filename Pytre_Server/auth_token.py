@@ -10,7 +10,15 @@ JWT_ALGORITHM = "HS256"
 class TokenType(Enum):
     ACCESS = timedelta(minutes=30)
     REFRESH = timedelta(days=30)
-    ADMIN = timedelta(hours=1)
+    ADMIN = timedelta(hours=8)
+
+    @property
+    def session_timeout(self) -> timedelta | None:
+        """Inactivity timeout that should be applied to revoke token before its expiration.
+        It's up to the caller to enforce it."""
+        return {
+            TokenType.ADMIN: timedelta(hours=1),
+        }.get(self)
 
 
 def create_token(username: str, key: str, type: TokenType) -> str:

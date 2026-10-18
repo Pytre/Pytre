@@ -4,14 +4,15 @@ from datetime import datetime, timezone
 from urllib.parse import quote, quote_plus
 
 import jwt
-from fastapi import APIRouter, Depends, Form, Query, Request, status
+from fastapi import APIRouter, Depends, Form, Query, Request, Response, status
 from fastapi.responses import HTMLResponse, RedirectResponse
+from starlette.middleware.base import RequestResponseEndpoint
 
 from Pytre_Core.context import UserContext
 from Pytre_Core.users import AuthType, User, hash_password, verify_password
 from Pytre_Core.utils import log as _log
 
-from Pytre_Server.auth_token import TokenType, create_token, decode_token
+from Pytre_Server.auth_token import JWT_ALGORITHM, TokenType, create_token, decode_token
 from Pytre_Server.oidc import OidcLoginError, handle_callback, start_login
 from Pytre_Server.server_state import ServerResources, ServerState, get_server_state
 from Pytre_Server.templating import templates
@@ -84,12 +85,11 @@ def _next_path_for(request: Request) -> str:
     return request.url.path if request.method == "GET" else "/admin"
 
 
-def _issue_session_cookie(response: RedirectResponse, request: Request, state: ServerState, username: str) -> None:
-    token = create_token(username, state.app_ctx.settings.jwt_secret, TokenType.ADMIN)
+def _set_admin_cookie(response: Response, request: Request, token: str, max_age: int) -> None:
     response.set_cookie(
         COOKIE_NAME,
         token,
-        max_age=int(TokenType.ADMIN.value.total_seconds()),
+        max_age=max_age,
         path="/admin",
         httponly=True,
         samesite="lax",
@@ -97,10 +97,29 @@ def _issue_session_cookie(response: RedirectResponse, request: Request, state: S
     )
 
 
+def _issue_session_cookie(response: RedirectResponse, request: Request, state: ServerState, username: str) -> None:
+    token = create_token(username, state.app_ctx.settings.jwt_secret, TokenType.ADMIN)
+    max_age = int(TokenType.ADMIN.value.total_seconds())
+    _set_admin_cookie(response, request, token, max_age)
+
+
+def touch_admin_session(token: str, key: str) -> tuple[str, int]:
+    """Re-signs an already-validated admin session token with a fresh `last_activity` claim.
+    `iat`/`exp`/`sub`/`type` are carried over unchanged. Returns the new token and the number of
+    seconds remaining until its (unchanged) `exp`, so the cookie's max_age stays consistent with
+    the real server-side expiration."""
+    payload = decode_token(token, key, TokenType.ADMIN)
+    payload["last_activity"] = datetime.now(timezone.utc).timestamp()
+    new_token = jwt.encode(payload, key, algorithm=JWT_ALGORITHM)
+    remaining = int(payload["exp"] - datetime.now(timezone.utc).timestamp())
+    return new_token, remaining
+
+
 def require_admin_session(request: Request, state: ServerState = Depends(get_server_state)) -> str:
     """FastAPI dependency, applied at the router level to every protected /admin/* route.
-    Requires a valid admin_session cookie for a user that still exists, is still admin, and hasn't had
-    its password changed since the token was issued (same revocation check as the API's username_from_token)"""
+    Requires a valid admin_session cookie for a user that still exists, is still admin, hasn't had
+    its password changed since the token was issued (same revocation check as the API's username_from_token),
+    and hasn't been inactive for longer than TokenType.ADMIN.session_timeout."""
 
     token = request.cookies.get(COOKIE_NAME)
     if not token:
@@ -113,6 +132,8 @@ def require_admin_session(request: Request, state: ServerState = Depends(get_ser
 
     username = payload["sub"]
     issued_at = datetime.fromtimestamp(payload["iat"], tz=timezone.utc)
+    last_activity = datetime.fromtimestamp(payload.get("last_activity", payload["iat"]), tz=timezone.utc)
+    inactivity_max = TokenType.ADMIN.session_timeout
 
     user = UserContext(state.app_ctx.users, username=username).user
     if (
@@ -120,6 +141,7 @@ def require_admin_session(request: Request, state: ServerState = Depends(get_ser
         or not user.admin
         or user.auth_type is AuthType.NONE
         or (user.password_changed_at is not None and issued_at < user.password_changed_at)
+        or (inactivity_max is not None and (datetime.now(timezone.utc) - last_activity > inactivity_max))
     ):
         reason = ""
         if not user.exists:
@@ -136,6 +158,27 @@ def require_admin_session(request: Request, state: ServerState = Depends(get_ser
 
     request.state.admin_username = user.username
     return user.username
+
+
+async def admin_session_middleware(request: Request, call_next: RequestResponseEndpoint) -> Response:
+    """Registered at the app level (see app.py) - refreshes the admin_session cookie's `last_activity` claim
+    on every request that went through require_admin_session successfully, so a session doesn't expire on the
+    inactivity timeout. A no-op for every other request."""
+    response = await call_next(request)
+
+    admin_username = getattr(request.state, "admin_username", None)
+    if admin_username is None:
+        return response
+
+    token = request.cookies.get(COOKIE_NAME)
+    if not token:
+        return response
+
+    state = get_server_state(request)
+    new_token, remaining = touch_admin_session(token, state.app_ctx.settings.jwt_secret)
+    _set_admin_cookie(response, request, new_token, max_age=remaining)
+
+    return response
 
 
 # ------------------------------------------------------------------------------------------

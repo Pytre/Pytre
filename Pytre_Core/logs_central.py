@@ -347,7 +347,7 @@ class ClientDriven(CentralLogs):
             rows_id = [item[0] for item in unsynced]
             rows_values = [item[1:] for item in unsynced]
 
-            user_id_hash = hashlib.md5(self.user_id.encode()).hexdigest()[:16]
+            user_id_hash = hashlib.sha256(self.user_id.encode()).hexdigest()[:16]
             timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
             unique_id = str(uuid.uuid4())[:8]
             export_file = active_folder / f"{user_id_hash}_{timestamp}_{unique_id}.json"

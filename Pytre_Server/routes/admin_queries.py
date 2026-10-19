@@ -61,9 +61,9 @@ def _build_query_row(parser: FileParser, ignore_hash_until: dict[str, datetime])
 def _clear_hash_exemption(state: ServerState, file_id: str, admin_username: str) -> RedirectResponse:
     if state.resources.ignore_hash_until.pop(file_id, None) is not None:
         log(f"Hash-check exemption for '{file_id}' cleared by admin '{admin_username}'", logging.WARNING)
-    return RedirectResponse(
-        url=f"/admin/queries?msg=Hash+exemption+for+{file_id}+cleared", status_code=status.HTTP_303_SEE_OTHER
-    )
+
+    msg = quote_plus(f"Hash exemption for {file_id} cleared")
+    return RedirectResponse(url=f"/admin/queries?msg={msg}", status_code=status.HTTP_303_SEE_OTHER)
 
 
 # ------------------------------------------------------------------------------------------
@@ -102,7 +102,7 @@ def queries_reload(
     try:
         new_catalog = QueryCatalog.load(state.app_ctx.settings.queries_folder)
     except Exception as e:
-        msg = f"Reload failed: {quote_plus(str(e))}"
+        msg = quote_plus(f"Reload failed: {e}")
         return RedirectResponse(url=f"/admin/queries?error={msg}", status_code=status.HTTP_303_SEE_OTHER)
 
     admin_ctx = UserContext(state.app_ctx.users, username=admin_username)
@@ -121,7 +121,7 @@ def queries_reload(
     msg = f"Queries reloaded ({len(new_catalog.parsers)} loaded"
     msg += f", {len(total_errors)} error(s)" if total_errors else ""
     msg += ")"
-    return RedirectResponse(url=f"/admin/queries?msg={msg}", status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(url=f"/admin/queries?msg={quote_plus(msg)}", status_code=status.HTTP_303_SEE_OTHER)
 
 
 # ------------------------------------------------------------------------------------------
@@ -182,4 +182,4 @@ def query_ignore_hash_set(
     else:
         msg = f"Hash exemption for {file_id} unchanged"
 
-    return RedirectResponse(url=f"/admin/queries?msg={msg}", status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(url=f"/admin/queries?msg={quote_plus(msg)}", status_code=status.HTTP_303_SEE_OTHER)

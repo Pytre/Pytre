@@ -185,7 +185,7 @@ def test_ignore_hash_set_then_reflected_in_list_and_form(admin_client):
     )
 
     assert response.status_code == 303
-    assert response.headers["location"] == f"/admin/queries?msg=Hash%20check%20for%20{TEST_QUERY_ID}%20updated"
+    assert response.headers["location"] == f"/admin/queries?msg=Hash+check+for+{TEST_QUERY_ID}+updated"
 
     # the list/form don't render a human date themselves anymore - a browser converts data-ts /
     # data-until-ts to the viewer's local time client-side (see pytreFormatLocal in base.html)
@@ -230,7 +230,7 @@ def test_ignore_hash_set_same_timestamp_is_reported_unchanged(admin_client):
     )
 
     assert response.status_code == 303
-    assert response.headers["location"] == f"/admin/queries?msg=Hash%20exemption%20for%20{TEST_QUERY_ID}%20unchanged"
+    assert response.headers["location"] == f"/admin/queries?msg=Hash+exemption+for+{TEST_QUERY_ID}+unchanged"
 
 
 def test_ignore_hash_set_empty_clears_the_exemption(admin_client):

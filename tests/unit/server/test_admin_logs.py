@@ -9,11 +9,15 @@ HTTP-level tests (page rendering, auth gating, /before pagination) that don't ha
 
 import json
 import logging
+from types import SimpleNamespace
+from typing import cast
 
 import pytest
+from fastapi import Request
 
 from Pytre_Server.log_buffer import LogBufferHandler
 from Pytre_Server.routes import admin_logs
+from Pytre_Server.server_state import ServerState
 
 
 @pytest.fixture
@@ -42,11 +46,23 @@ def _make_record(msg: str) -> logging.LogRecord:
     )
 
 
+def _parse_event(chunk: str) -> dict:
+    """Parses one SSE event (`id: <seq>` then `data: <json>`) and checks that its id is the entry's
+    own seq - what the browser sends back as Last-Event-ID when EventSource reconnects."""
+    assert chunk.endswith("\n\n")
+    id_line, data_line = chunk[:-2].split("\n")
+    assert id_line.startswith("id: ") and data_line.startswith("data: ")
+    entry = json.loads(data_line[len("data: ") :])
+    assert int(id_line[len("id: ") :]) == entry["seq"]
+    return entry
+
+
 async def _collect(gen) -> list[dict]:
-    chunks = [chunk async for chunk in gen]
-    for chunk in chunks:
-        assert chunk.startswith("data: ") and chunk.endswith("\n\n")
-    return [json.loads(chunk[len("data: ") : -2]) for chunk in chunks]
+    return [_parse_event(chunk) async for chunk in gen]
+
+
+def _fake_state(log_buffer: LogBufferHandler) -> ServerState:
+    return cast(ServerState, SimpleNamespace(resources=SimpleNamespace(log_buffer=log_buffer)))
 
 
 @pytest.mark.unit
@@ -108,3 +124,39 @@ async def test_stream_events_advances_cursor_so_each_entry_is_sent_only_once(mon
     events = await _collect(admin_logs._stream_events(log_buffer, _FakeDisconnectRequest(disconnect_after=2), after=0))
 
     assert [e["message"] for e in events] == ["one"]
+
+
+@pytest.mark.unit
+@pytest.mark.anyio
+async def test_logs_stream_resumes_from_last_event_id_on_reconnect(monkeypatch):
+    """Regression: an EventSource reconnect requests the page's original URL (`?after=` from page
+    load) again - resuming from `after` replayed every entry already shown since then. The
+    Last-Event-ID header it sends along must take precedence."""
+    monkeypatch.setattr(admin_logs, "POLL_INTERVAL_SECS", 0.01)
+    log_buffer = LogBufferHandler(max_bytes=10_000)
+    log_buffer.emit(_make_record("already-shown"))
+    last_event_id = log_buffer.entries_since(0)[0].seq
+    log_buffer.emit(_make_record("new"))
+    request = cast(Request, _FakeDisconnectRequest(disconnect_after=1))
+
+    response = await admin_logs.logs_stream(request, after=0, last_event_id=last_event_id, state=_fake_state(log_buffer))
+    events = await _collect(response.body_iterator)
+
+    assert [e["message"] for e in events] == ["new"]
+
+
+@pytest.mark.unit
+@pytest.mark.anyio
+async def test_logs_stream_starts_from_after_without_last_event_id(monkeypatch):
+    """First connection of the page: no Last-Event-ID yet, `after` is the starting point."""
+    monkeypatch.setattr(admin_logs, "POLL_INTERVAL_SECS", 0.01)
+    log_buffer = LogBufferHandler(max_bytes=10_000)
+    log_buffer.emit(_make_record("rendered-with-page"))
+    after = log_buffer.entries_since(0)[0].seq
+    log_buffer.emit(_make_record("new"))
+    request = cast(Request, _FakeDisconnectRequest(disconnect_after=1))
+
+    response = await admin_logs.logs_stream(request, after=after, last_event_id=None, state=_fake_state(log_buffer))
+    events = await _collect(response.body_iterator)
+
+    assert [e["message"] for e in events] == ["new"]

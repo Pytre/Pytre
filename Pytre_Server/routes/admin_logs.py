@@ -7,7 +7,7 @@ Gated by require_admin_session (see admin_router.py).
 import asyncio
 from collections.abc import AsyncGenerator
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Header, Request
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 
 from Pytre_Server.log_buffer import LogBufferHandler
@@ -43,6 +43,8 @@ async def _stream_events(
 ) -> AsyncGenerator[str]:
     """SSE tail of new entries past `after`, oldest first - the client prepends each one in turn,
     which naturally keeps the newest-on-top order correct with no client-side sorting needed.
+    Each event carries its seq as SSE `id`, sent back by the browser as Last-Event-ID when
+    EventSource reconnects on its own - see logs_stream().
 
     A standalone function (not nested in the route) so it can be unit-tested directly with a fake
     DisconnectAware - Starlette's TestClient can't drive an HTTP request against a StreamingResponse
@@ -54,17 +56,24 @@ async def _stream_events(
             return
         if log_buffer is not None:
             for entry in log_buffer.entries_since(last_seq):
-                yield f"data: {entry.to_json()}\n\n"
+                yield f"id: {entry.seq}\ndata: {entry.to_json()}\n\n"
                 last_seq = entry.seq
         await asyncio.sleep(POLL_INTERVAL_SECS)
 
 
 @router.get("/stream")
 async def logs_stream(
-    request: Request, after: int = 0, state: ServerState = Depends(get_server_state)
+    request: Request,
+    after: int = 0,
+    last_event_id: int | None = Header(None),
+    state: ServerState = Depends(get_server_state),
 ) -> StreamingResponse:
+    """`after` is only the starting point of the page's first connection. On an automatic reconnect,
+    EventSource requests that same URL again but sends the last received seq as Last-Event-ID -
+    resuming from `after` instead would replay every entry already shown since the page loaded."""
+    start = last_event_id if last_event_id is not None else after
     return StreamingResponse(
-        _stream_events(state.resources.log_buffer, request, after),
+        _stream_events(state.resources.log_buffer, request, start),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

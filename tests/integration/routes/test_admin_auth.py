@@ -247,6 +247,33 @@ def test_expired_token_is_rejected_even_with_recent_activity(client):
     assert response.headers["location"].startswith("/admin/login")
 
 
+def test_rejected_session_ends_on_login_page_without_redirect_loop(client):
+    """Regression: a cookie rejected by require_admin_session() (here for inactivity) but still
+    within its signature/exp validity used to stay in place - GET /admin/login, which only checks
+    signature/exp, then bounced straight back to the protected route, endlessly."""
+    client.post("/admin/login", data={"username": TEST_USERNAME, "password": TEST_USER_PASSWORD})
+    server_cookie = next(cookie for cookie in client.cookies.jar if cookie.name == "admin_session")
+
+    app_ctx = client.app.state.server.app_ctx
+    now = datetime.now(timezone.utc)
+    stale_claims = {
+        "sub": TEST_USERNAME,
+        "iat": now,
+        "exp": now + timedelta(hours=8),
+        "type": TokenType.ADMIN.name,
+        "last_activity": (now - timedelta(hours=2)).timestamp(),
+    }
+    token = jwt.encode(stale_claims, app_ctx.settings.jwt_secret, algorithm=JWT_ALGORITHM)
+    # same domain/path as the cookie set by the server, so that its deletion applies to this one
+    client.cookies.set("admin_session", token, domain=server_cookie.domain, path=server_cookie.path)
+
+    response = client.get("/admin/users")
+
+    assert response.status_code == 200
+    assert response.url.path == "/admin/login"
+    assert client.cookies.get("admin_session") is None
+
+
 def test_admin_session_is_rejected_once_the_user_is_disabled(isolated_client, caplog):
     """Regression: require_admin_session() used to check only user.exists/user.admin - an admin
     switched to AuthType.NONE kept using an already-issued session cookie until it expired on its

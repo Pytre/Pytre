@@ -53,8 +53,14 @@ class AdminAuthRequired(Exception):
 
 
 def admin_auth_required_handler(request: Request, exc: Exception) -> RedirectResponse:
+    """Exception handler for AdminAuthRequired, raised by require_admin_session() whenever a protected
+    /admin/* route is reached without a valid admin session. Redirects to the login page and deletes
+    the cookie - a rejected cookie left in place would make GET /admin/login, which only checks its
+    signature/exp, bounce straight back here in an endless redirect loop."""
     assert isinstance(exc, AdminAuthRequired)
-    return RedirectResponse(f"/admin/login?next={quote(exc.next_path)}", status_code=status.HTTP_303_SEE_OTHER)
+    response = RedirectResponse(f"/admin/login?next={quote(exc.next_path)}", status_code=status.HTTP_303_SEE_OTHER)
+    response.delete_cookie(COOKIE_NAME, path="/admin")
+    return response
 
 
 def _is_loopback(request: Request) -> bool:

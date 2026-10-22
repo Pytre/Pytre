@@ -10,32 +10,20 @@ from PyInstaller.utils.win32.versioninfo import (
     VSVersionInfo,
 )
 
-from Pytre_Core.about import (
-    APP_BUILD,
-    APP_NAME,
-    APP_STATUS,
-    APP_VERSION,
-    AUTHOR,
-    COPYRIGHT_YEAR,
-    full_version,
-    LICENSE_NAME,
-)
+from Pytre_Core.about import APP_NAME, AppVersion, AUTHOR, COPYRIGHT_YEAR, LICENSE_NAME
 
 VS_FF_PRERELEASE = 0x2
 
 
 def version_info(description: str, original_filename: str) -> VSVersionInfo:
     """`description` is the name shown by Windows (task manager, file properties)"""
-    numbers = [int(n) for n in APP_VERSION.split(".")][:3]
-    numbers += [0] * (3 - len(numbers))
-    binary_version = (*numbers, int(APP_BUILD))
-    text_version = full_version()
+    version = AppVersion.current()
 
     return VSVersionInfo(
         ffi=FixedFileInfo(
-            filevers=binary_version,
-            prodvers=binary_version,
-            flags=VS_FF_PRERELEASE if APP_STATUS else 0x0,
+            filevers=version.binary_version,
+            prodvers=version.binary_version,
+            flags=VS_FF_PRERELEASE if version.is_prerelease else 0x0,
         ),
         kids=[
             StringFileInfo([
@@ -44,12 +32,12 @@ def version_info(description: str, original_filename: str) -> VSVersionInfo:
                     [
                         StringStruct("CompanyName", AUTHOR),
                         StringStruct("FileDescription", description),
-                        StringStruct("FileVersion", text_version),
+                        StringStruct("FileVersion", str(version)),
                         StringStruct("InternalName", original_filename.removesuffix(".exe")),
                         StringStruct("LegalCopyright", f"Copyright (C) {COPYRIGHT_YEAR} {AUTHOR}"),
                         StringStruct("OriginalFilename", original_filename),
                         StringStruct("ProductName", APP_NAME),
-                        StringStruct("ProductVersion", text_version),
+                        StringStruct("ProductVersion", str(version)),
                         StringStruct("Comments", LICENSE_NAME),
                     ],
                 )

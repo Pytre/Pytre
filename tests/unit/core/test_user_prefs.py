@@ -2,7 +2,7 @@
 Tests for Pytre/user_prefs.py
 
 REGRESSION TESTS:
-- Input validation in user preferences (folder paths, date format, decimal separator, csv format)
+- Input validation in user preferences (folder paths, date format, decimal separator, csv format, updates)
 """
 
 import dataclasses
@@ -10,6 +10,7 @@ import pytest
 import json
 from pathlib import Path
 
+from Pytre_Core.about import AppStage, AppVersion
 from Pytre_Core.user_prefs import (
     DEFAULT_CACHE_DAYS,
     DEFAULT_CSV_DELIMITER,
@@ -838,3 +839,139 @@ def test_load_invalid_csv_encoding_and_cache_expiration_use_defaults(isolated_pa
 
     assert prefs.get(PrefEnum.CSV_ENCODING) == DEFAULT_CSV_ENCODING
     assert prefs.get(PrefEnum.CACHE_DAYS) == DEFAULT_CACHE_DAYS
+
+
+# ================================================================================
+# UserPrefs - updates
+# ================================================================================
+
+
+@pytest.mark.unit
+@pytest.mark.usefixtures("isolated_paths")
+def test_update_prefs_defaults():
+    prefs = UserPrefs()
+
+    assert prefs.get(PrefEnum.UPDATE_CHECK) is True
+    assert prefs.get(PrefEnum.UPDATE_CHANNEL) is AppStage.RELEASE
+    assert prefs.get(PrefEnum.UPDATE_SKIPPED) == ""
+
+
+@pytest.mark.unit
+@pytest.mark.usefixtures("isolated_paths")
+@pytest.mark.parametrize(
+    "value, expected",
+    [(AppStage.BETA, AppStage.BETA), ("BETA", AppStage.BETA), ("rc", AppStage.RC), (1, AppStage.ALPHA)],
+)
+def test_set_update_channel_accepts_a_stage_its_name_or_its_number(value, expected):
+    prefs = UserPrefs()
+
+    prefs.set(PrefEnum.UPDATE_CHANNEL, value, save=False)
+
+    assert prefs.get(PrefEnum.UPDATE_CHANNEL) is expected
+
+
+@pytest.mark.unit
+@pytest.mark.usefixtures("isolated_paths")
+@pytest.mark.parametrize("value", ["gamma", "", 9])
+def test_set_invalid_update_channel_raises_and_keeps_previous_value(value):
+    prefs = UserPrefs()
+    prefs.set(PrefEnum.UPDATE_CHANNEL, AppStage.BETA, save=False)
+
+    with pytest.raises(ValueError):
+        prefs.set(PrefEnum.UPDATE_CHANNEL, value, save=False)
+
+    assert prefs.get(PrefEnum.UPDATE_CHANNEL) is AppStage.BETA
+
+
+@pytest.mark.unit
+@pytest.mark.usefixtures("isolated_paths")
+@pytest.mark.parametrize("value", [True, False])
+def test_set_update_check_accepts_booleans(value):
+    prefs = UserPrefs()
+
+    prefs.set(PrefEnum.UPDATE_CHECK, value, save=False)
+
+    assert prefs.get(PrefEnum.UPDATE_CHECK) is value
+
+
+@pytest.mark.unit
+@pytest.mark.usefixtures("isolated_paths")
+@pytest.mark.parametrize("value", ["false", "True", 0, 1, None])
+def test_set_update_check_rejects_non_booleans(value):
+    prefs = UserPrefs()
+
+    with pytest.raises(TypeError, match="Booléen attendu"):
+        prefs.set(PrefEnum.UPDATE_CHECK, value, save=False)
+
+    assert prefs.get(PrefEnum.UPDATE_CHECK) is True
+
+
+@pytest.mark.unit
+@pytest.mark.usefixtures("isolated_paths")
+@pytest.mark.parametrize(
+    "value, expected",
+    [("2.0.0-beta.3", "2.0.0-beta.3"), ("2.1.0", "2.1.0"), ("", ""), (None, "")],
+)
+def test_set_update_skipped_accepts_a_version_or_nothing(value, expected):
+    prefs = UserPrefs()
+
+    prefs.set(PrefEnum.UPDATE_SKIPPED, value, save=False)
+
+    assert prefs.get(PrefEnum.UPDATE_SKIPPED) == expected
+    if expected:
+        assert AppVersion.build_from_string(prefs.get(PrefEnum.UPDATE_SKIPPED)) == AppVersion.build_from_string(value)
+
+
+@pytest.mark.unit
+@pytest.mark.usefixtures("isolated_paths")
+@pytest.mark.parametrize("value", ["not a version", "2.0", "2.0.0_BETA.2"])
+def test_set_invalid_update_skipped_raises_and_keeps_previous_value(value):
+    prefs = UserPrefs()
+    prefs.set(PrefEnum.UPDATE_SKIPPED, "2.0.0", save=False)
+
+    with pytest.raises(ValueError):
+        prefs.set(PrefEnum.UPDATE_SKIPPED, value, save=False)
+
+    assert prefs.get(PrefEnum.UPDATE_SKIPPED) == "2.0.0"
+
+
+@pytest.mark.unit
+def test_update_prefs_saved_and_reloaded(isolated_paths):
+    """The channel is saved by name, never by its number"""
+    _config_folder, _cache_folder, setting_file = isolated_paths
+
+    prefs = UserPrefs()
+    prefs.set(PrefEnum.UPDATE_CHECK, False, save=False)
+    prefs.set(PrefEnum.UPDATE_CHANNEL, AppStage.BETA, save=False)
+    prefs.set(PrefEnum.UPDATE_SKIPPED, "2.0.0-beta.3", save=False)
+    assert prefs.save() is True
+
+    data = json.loads(setting_file.read_text(encoding="utf-8"))
+    assert data["update_check"] is False
+    assert data["update_channel"] == "BETA"
+    assert data["update_skipped"] == "2.0.0-beta.3"
+
+    reloaded = UserPrefs()
+    assert reloaded.get(PrefEnum.UPDATE_CHECK) is False
+    assert reloaded.get(PrefEnum.UPDATE_CHANNEL) is AppStage.BETA
+    assert reloaded.get(PrefEnum.UPDATE_SKIPPED) == "2.0.0-beta.3"
+
+
+@pytest.mark.unit
+def test_load_invalid_update_prefs_use_defaults(isolated_paths):
+    _config_folder, _cache_folder, setting_file = isolated_paths
+    invalid = {"update_check": "no", "update_channel": "nightly", "update_skipped": "v.2.0.0_BETA.2"}
+    setting_file.write_text(json.dumps(invalid), encoding="utf-8")
+
+    prefs = UserPrefs()
+
+    assert prefs.get(PrefEnum.UPDATE_CHECK) is True
+    assert prefs.get(PrefEnum.UPDATE_CHANNEL) is AppStage.RELEASE
+    assert prefs.get(PrefEnum.UPDATE_SKIPPED) == ""
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("pref", list(PrefEnum), ids=lambda pref: pref.name)
+def test_pref_enum_attribute_name_is_derived_from_json_name(pref):
+    assert pref.json_name == pref.value
+    assert pref.attr_name == f"_{pref.json_name}"

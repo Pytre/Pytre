@@ -10,6 +10,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+from Pytre_Core.about import AppStage, AppVersion
 from Pytre_Core.utils import log as _log, setup_standalone_logging
 
 CACHE_FOLDER: Path = Path.home() / "Pytre" / ".temp_cache"
@@ -29,21 +30,24 @@ def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__)
 
 
 class PrefEnum(Enum):
-    """Values are tuple with name for json and name for internal attribute name"""
+    """Values are the json names - the matching UserPrefs attribute is '_' + json name"""
 
-    DATE_FORMAT = ("date_format", "_date_format")
-    DECIMAL_SEPARATOR = ("decimal_separator", "_decimal_separator")
-    CSV_DELIMITER = ("csv_delimiter", "_csv_delimiter")
-    CSV_QUOTECHAR = ("csv_quotechar", "_csv_quotechar")
-    CSV_ENCODING = ("csv_encoding", "_csv_encoding")
-    CACHE_DAYS = ("cache_days", "_cache_days")
-    CACHE_FOLDER = ("cache_folder", "_cache_folder")
-    SAVE_AS_FOLDER = ("save_as_folder", "_save_as_folder")
-    LAST_SERVER = ("last_server", "_last_server")
+    DATE_FORMAT = "date_format"
+    DECIMAL_SEPARATOR = "decimal_separator"
+    CSV_DELIMITER = "csv_delimiter"
+    CSV_QUOTECHAR = "csv_quotechar"
+    CSV_ENCODING = "csv_encoding"
+    CACHE_DAYS = "cache_days"
+    CACHE_FOLDER = "cache_folder"
+    SAVE_AS_FOLDER = "save_as_folder"
+    LAST_SERVER = "last_server"
+    UPDATE_CHECK = "update_check"
+    UPDATE_CHANNEL = "update_channel"
+    UPDATE_SKIPPED = "update_skipped"
 
-    def __init__(self, json_name: str, attr_name: str):
+    def __init__(self, json_name: str):
         self.json_name: str = json_name
-        self.attr_name: str = attr_name
+        self.attr_name: str = f"_{json_name}"
 
     @classmethod
     def from_json_name(cls, json_name: str) -> PrefEnum:
@@ -155,13 +159,20 @@ class UserPrefs:
 
         self._date_format: str = DEFAULT_DATE_FORMAT
         self._decimal_separator: str = DEFAULT_DECIMAL_SEPARATOR
+
         self._csv_delimiter: str = DEFAULT_CSV_DELIMITER
         self._csv_quotechar: str = DEFAULT_CSV_QUOTECHAR
         self._csv_encoding: str = DEFAULT_CSV_ENCODING
+
         self._cache_days: int = DEFAULT_CACHE_DAYS
         self._cache_folder: Path = CACHE_FOLDER
         self._save_as_folder: Path = Path.home()
+
         self._last_server: str = ""
+
+        self._update_check: bool = True
+        self._update_channel: AppStage = AppStage.RELEASE
+        self._update_skipped: str = ""
 
         self._cache: dict[str, Any] = {}
 
@@ -286,6 +297,9 @@ class UserPrefs:
             PrefEnum.CACHE_FOLDER.json_name: str(self._cache_folder),
             PrefEnum.SAVE_AS_FOLDER.json_name: str(self._save_as_folder),
             PrefEnum.LAST_SERVER.json_name: self._last_server,
+            PrefEnum.UPDATE_CHECK.json_name: self._update_check,
+            PrefEnum.UPDATE_CHANNEL.json_name: self._update_channel.name,
+            PrefEnum.UPDATE_SKIPPED.json_name: self._update_skipped,
         }
 
     def set(self, key: PrefEnum, value: Any, save: bool = True, init_load: bool = False) -> str:
@@ -317,6 +331,16 @@ class UserPrefs:
             self._csv_encoding = value
         elif key is PrefEnum.CACHE_DAYS:
             self._cache_days = self.validate_cache_expiration_days(value)
+        elif key is PrefEnum.UPDATE_CHECK:
+            if not isinstance(value, bool):
+                raise TypeError(f"Booléen attendu pour '{key.json_name}' : {value!r}")
+            self._update_check = value
+        elif key is PrefEnum.UPDATE_CHANNEL:
+            self._update_channel = AppStage.from_value(value)
+        elif key is PrefEnum.UPDATE_SKIPPED:
+            if value:
+                AppVersion.build_from_string(value)  # raises ValueError on an invalid version
+            self._update_skipped = str(value or "")
         else:
             setattr(self, key.attr_name, value)
 

@@ -1,13 +1,37 @@
 """
-Tests for Pytre_Client/app.py app_start() - mode resolution only, App itself is replaced by a mock
+Tests for Pytre_Client/app.py app_start() and install_update() - App and Updater are replaced by mocks,
+so these tests never start a UI nor touch a real executable
 """
 
-from unittest.mock import Mock, patch
+from pathlib import Path
+from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
-from Pytre_Client.app import app_start
+from Pytre_Client.app import app_start, install_update
 from Pytre_Core.context import AppMode
+from Pytre_Core.updater import UpdateError
+
+CURRENT_EXE = Path("C:/Apps/Pytre.exe")
+NEW_EXE = Path("C:/Apps/Pytre.exe.new")
+
+
+@pytest.fixture(autouse=True)
+def mock_updater():
+    """Never let app_start() rename or restart the real sys.executable - not an official build by default"""
+    with patch("Pytre_Client.app.Updater") as updater:
+        updater.is_updatable.return_value = False
+        updater.current_exe.return_value = CURRENT_EXE
+        yield updater
+
+
+@pytest.fixture(autouse=True)
+def app_without_pending_update():
+    """App mock whose UI loop ends without any downloaded update - a bare Mock attribute would be truthy"""
+    with patch("Pytre_Client.app.App") as mock_app:
+        mock_app.return_value.pending_update = None
+        mock_app.return_value.restart_after_update = False
+        yield mock_app
 
 
 @pytest.mark.unit
@@ -77,3 +101,104 @@ def test_app_start_in_client_mode_does_not_need_the_secret_key():
 
     mock_show.assert_not_called()
     MockApp.assert_called_once_with(AppMode.CLIENT)
+
+
+# ================================================================================
+# Self-update
+# ================================================================================
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("updatable, cleaned", [(True, True), (False, False)])
+def test_app_start_deletes_the_previous_executable_of_an_official_build(mock_updater, updatable, cleaned):
+    mock_updater.is_updatable.return_value = updatable
+    with patch("Pytre_Client.app.detect_client_mode", return_value=AppMode.CLIENT):
+        app_start()
+
+    if cleaned:
+        mock_updater.cleanup_previous.assert_called_once_with(CURRENT_EXE)
+    else:
+        mock_updater.cleanup_previous.assert_not_called()
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("restart", [True, False])
+def test_app_start_installs_the_pending_update_once_the_ui_loop_has_ended(
+    mock_updater, app_without_pending_update, restart
+):
+    mock_updater.is_updatable.return_value = True
+    my_app = app_without_pending_update.return_value
+    my_app.pending_update = NEW_EXE
+    my_app.restart_after_update = restart
+    calls = MagicMock()
+    my_app.mainloop.side_effect = lambda: calls.mainloop()
+    mock_updater.install.side_effect = lambda current, new: calls.install(current, new)
+
+    with patch("Pytre_Client.app.detect_client_mode", return_value=AppMode.CLIENT):
+        app_start()
+
+    assert [call[0] for call in calls.mock_calls] == ["mainloop", "install"]
+    mock_updater.install.assert_called_once_with(CURRENT_EXE, NEW_EXE)
+    if restart:
+        mock_updater.restart.assert_called_once_with(CURRENT_EXE)
+    else:
+        mock_updater.restart.assert_not_called()
+
+
+@pytest.mark.unit
+def test_app_start_without_pending_update_installs_nothing(mock_updater):
+    mock_updater.is_updatable.return_value = True
+    with patch("Pytre_Client.app.detect_client_mode", return_value=AppMode.CLIENT):
+        app_start()
+
+    mock_updater.install.assert_not_called()
+    mock_updater.restart.assert_not_called()
+
+
+@pytest.mark.unit
+def test_app_start_never_installs_outside_an_official_build(mock_updater, app_without_pending_update):
+    """Run from sources or a build with the key: the running executable is the Python interpreter or an
+    administrator-managed build, it must never be renamed even if a pending update is somehow set"""
+    my_app = app_without_pending_update.return_value
+    my_app.pending_update = NEW_EXE
+    my_app.restart_after_update = True
+
+    with patch("Pytre_Client.app.detect_client_mode", return_value=AppMode.CLIENT):
+        app_start()
+
+    mock_updater.install.assert_not_called()
+    mock_updater.restart.assert_not_called()
+
+
+@pytest.mark.unit
+def test_app_start_exiting_during_init_installs_nothing(mock_updater, app_without_pending_update):
+    mock_updater.is_updatable.return_value = True
+    app_without_pending_update.side_effect = SystemExit
+    with patch("Pytre_Client.app.detect_client_mode", return_value=AppMode.CLIENT):
+        app_start()
+
+    mock_updater.install.assert_not_called()
+
+
+@pytest.mark.unit
+def test_install_update_swaps_and_restarts(mock_updater):
+    install_update(NEW_EXE, restart=True)
+
+    mock_updater.install.assert_called_once_with(CURRENT_EXE, NEW_EXE)
+    mock_updater.restart.assert_called_once_with(CURRENT_EXE)
+
+
+@pytest.mark.unit
+def test_install_update_failure_shows_an_error_and_does_not_restart(mock_updater):
+    mock_updater.install.side_effect = UpdateError("Pytre.exe is locked")
+
+    with (
+        patch("Pytre_Client.app.tk.Tk") as mock_tk,
+        patch("Pytre_Client.app.messagebox.showerror") as mock_showerror,
+    ):
+        install_update(NEW_EXE, restart=True)
+
+    mock_updater.restart.assert_not_called()
+    mock_showerror.assert_called_once()
+    assert "Pytre.exe is locked" in mock_showerror.call_args.args[1]
+    mock_tk.return_value.destroy.assert_called_once()

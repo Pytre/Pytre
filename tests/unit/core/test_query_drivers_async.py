@@ -141,7 +141,7 @@ def test_connection_forwards_trust_certificate_true():
 
 @pytest.mark.unit
 def test_connection_sets_application_name_and_read_only_intent():
-    """Mirrors the local pymssql path's appname=f"{APP_NAME}_{APP_VERSION}"/read_only=True -
+    """Mirrors the local pymssql path's appname=APP_ID/read_only=True -
     Pytre is a read-only extraction tool, and a distinct appname lets a DBA tell a Pytre_Server
     connection apart from a desktop client one in sys.dm_exec_sessions."""
     with patch("Pytre_Core.sql_query.query_drivers_async.fastmssql.Connection") as MockConnection:

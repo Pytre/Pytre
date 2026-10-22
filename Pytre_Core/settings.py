@@ -164,22 +164,16 @@ class Settings:
     def ctrl_version(self, curr_version: str, min_version: str) -> bool:
         """Compare current version vs version min and return True if it is greater or equal"""
         try:
-            curr_nums = list(map(lambda i: int(i), curr_version.split(".")))
-            min_nums = list(map(lambda i: int(i), min_version.split(".")))
+            curr_nums = [int(i) for i in curr_version.split(".")]
+            min_nums = [int(i) for i in min_version.split(".")]
         except ValueError:
-            return True  # si erreur format, ne pas bloquer
+            return True  # don't block on invalid format
 
         max_len = max(len(curr_nums), len(min_nums))
         curr_nums += [0] * (max_len - len(curr_nums))
         min_nums += [0] * (max_len - len(min_nums))
 
-        for i in range(max_len):
-            if curr_nums[i] > min_nums[i]:
-                return True
-            elif curr_nums[i] < min_nums[i]:
-                return False
-
-        return True  # égalité
+        return curr_nums >= min_nums
 
 
 if __name__ == "__main__":

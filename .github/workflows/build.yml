@@ -30,14 +30,14 @@ jobs:
         run: |
           python - <<'EOF'
           import os, sys
-          from Pytre_Core.about import APP_STATUS, expected_git_tag
+          from Pytre_Core.about import AppVersion, expected_git_tag
 
           tag = os.environ["GITHUB_REF_NAME"]
           if os.environ["GITHUB_REF_TYPE"] == "tag" and tag != expected_git_tag():
               print(f"::error::Tag {tag} does not match about.py, expected tag: {expected_git_tag()}")
               sys.exit(1)
           with open(os.environ["GITHUB_OUTPUT"], "a") as f:
-              f.write(f"prerelease={'true' if APP_STATUS else 'false'}\n")
+              f.write(f"prerelease={'true' if AppVersion.current().is_prerelease else 'false'}\n")
           EOF
 
   test:
@@ -80,10 +80,8 @@ jobs:
         include:
           - name: Pytre_Client
             spec: Pytre_Client.spec
-            exe: Pytre
           - name: Pytre_Server
             spec: Pytre_Server.spec
-            exe: Pytre_Server
     defaults:
       run:
         shell: bash
@@ -110,13 +108,13 @@ jobs:
         if: matrix.name == 'Pytre_Server'
         run: ./dist/Pytre_Server.exe --help
 
-      # Tag "v.2.0.0_ALPHA" -> Pytre_Client_2.0.0_ALPHA.exe ; manual run on a branch -> Pytre_Client_dev.exe
+      # Tag "v.2.0.0-alpha" -> Pytre_Client_2.0.0-alpha.exe ; manual run on a branch -> Pytre_Client_dev.exe
       - name: Add version to executable name
         run: |
           version="${GITHUB_REF_NAME#v}"
           version="${version#.}"
           version="${version//\//-}"
-          mv "dist/${{ matrix.exe }}.exe" "dist/${{ matrix.name }}_${version}.exe"
+          mv "dist/${{ matrix.name }}.exe" "dist/${{ matrix.name }}_${version}.exe"
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

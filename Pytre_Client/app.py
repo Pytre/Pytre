@@ -1,5 +1,6 @@
 import logging
 import tkinter as tk
+import webbrowser
 from threading import Thread
 from queue import Queue as ThreadQueue
 from tkinter import Event as tkEvent, ttk, messagebox, font
@@ -8,13 +9,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from datetime import datetime
 
-from Pytre_Core import old_files, utils
-from Pytre_Core.about import APP_NAME, APP_VERSION, full_version
+from Pytre_Core import utils
+from Pytre_Core.about import APP_NAME, CLIENT_BASENAME, AppVersion, full_version
 from Pytre_Core.context import AppContext, AppMode, UserContext, detect_client_mode
 from Pytre_Core.credentials import secret_key_available
 from Pytre_Core.logs_central import ClientDriven as CentralLogs
+from Pytre_Core.old_files import delete_files, list_old_files
 from Pytre_Core.remotes import RemoteServer, RemoteAuthError, RemoteSsoRequiredError
 from Pytre_Core.servers import Server
+from Pytre_Core.updater import Release, Updater, UpdateError
 from Pytre_Core.user_prefs import PrefEnum
 
 from Pytre_Core.sql_query.execution_runner import ExecutionRunner
@@ -88,7 +91,11 @@ class App(tk.Toplevel):
 
         self.setup_app_identity()
         self.check_database_access()
-        self.ensure_admin_exists()  # crée un admin si aucun n'existe
+        self.ensure_admin_exists()  # on hybrid mode create an admin if none exists
+
+        self.updatable: bool = Updater.is_updatable()
+        self.pending_update: Path | None = None  # downloaded executable, installed once the UI loop has ended
+        self.restart_after_update: bool = False
 
         self.process_running: bool = False
         self.exec_runner: ExecutionRunner = ExecutionRunner(self.app_ctx.mode)
@@ -210,11 +217,12 @@ class App(tk.Toplevel):
                 raise SystemExit
 
         # vérification version application
-        if not self.app_ctx.settings.ctrl_version(APP_VERSION, min_app):
+        current_version = AppVersion.current()
+        if not self.app_ctx.settings.ctrl_version(current_version.base_version, min_app):
             messagebox.showerror(
                 f"Version {APP_NAME}",
                 f"Votre version de {APP_NAME} n'est pas à jour :"
-                f"\n  - Version utilisée : {APP_VERSION}"
+                f"\n  - Version utilisée : {current_version.base_version}"
                 f"\n  - Version mini : {min_app}"
                 "\n\nMerci d'utiliser une version à jour",
                 parent=self,
@@ -237,9 +245,9 @@ class App(tk.Toplevel):
         cache_folder = self.user_ctx.user_prefs.get(PrefEnum.CACHE_FOLDER)
         cache_number_of_days = self.user_ctx.user_prefs.get(PrefEnum.CACHE_DAYS)
 
-        files = old_files.list_old_files(cache_folder, age_in_days=cache_number_of_days)
+        files = list_old_files(cache_folder, age_in_days=cache_number_of_days)
         if files:
-            old_files.delete_files(files)
+            delete_files(files)
 
     # ------------------------------------------------------------------------------------------
     # Définition de l'identité de l'appli et des styles / thème
@@ -308,7 +316,7 @@ class App(tk.Toplevel):
 
         menu_prefs = tk.Menu(menubar, tearoff=False)
         menu_prefs.add_command(label="Remotes...", command=self.manage_remotes)
-        menu_prefs.add_command(label="Préférences...", command=self.manage_user_prefs)
+        menu_prefs.add_command(label="Paramètres utilisateur...", command=self.manage_user_prefs)
         menubar.add_cascade(label="Préférences", menu=menu_prefs)
 
         menu_admin = None
@@ -334,6 +342,10 @@ class App(tk.Toplevel):
         menu_about = tk.Menu(menubar, tearoff=False)
         menu_about.add_command(label="Ouvrir la console...", command=self.console)
         menu_about.add_separator()
+        if self.updatable:
+            menu_about.add_command(
+                label="Rechercher mise à jour...", command=lambda: self.check_for_update(manual=True)
+            )
         menu_about.add_command(label=f"À propos de {APP_NAME}...", command=self.about_info)
         menubar.add_cascade(label="?", menu=menu_about)
 
@@ -915,6 +927,8 @@ class App(tk.Toplevel):
                 if not self.app_ctx.acts_as_server and not self.user_ctx.remotes.remotes_dict:
                     self.output_msg("Aucune remote, ajouter en une : Préférences -> Remotes...\n", "end")
 
+                self.after_idle(self.check_for_update_at_startup)
+
             # liste des erreurs si problèmes rencontrés
             errors_msg: list[str] = errors.get("local", []) + errors.get("remote", [])
 
@@ -1090,6 +1104,135 @@ class App(tk.Toplevel):
             self.output_msg("Liste des requêtes orphelines :\n")
             for orphan in orphans:
                 self.output_msg(f"{orphan.name}\n", "end")
+
+    # ------------------------------------------------------------------------------------------
+    # Mise à jour de l'application
+    # ------------------------------------------------------------------------------------------
+    def check_for_update_at_startup(self):
+        if self.updatable and self.user_ctx.user_prefs.get(PrefEnum.UPDATE_CHECK):
+            self.check_for_update(manual=False)
+
+    def check_for_update(self, manual: bool = False):
+        """Looks for a newer release in a background thread. The automatic check stays silent unless an
+        update is found and skips the version the user chose to ignore - the manual one reports every outcome."""
+        user_prefs = self.user_ctx.user_prefs
+
+        updater = Updater(CLIENT_BASENAME, AppVersion.current(), user_prefs.get(PrefEnum.UPDATE_CHANNEL))
+
+        skipped_txt: str = user_prefs.get(PrefEnum.UPDATE_SKIPPED)
+        skipped = AppVersion.build_from_string(skipped_txt) if skipped_txt and not manual else None
+
+        overlay = MsgOverlay.display(self, "Recherche mise à jour...", 500) if manual else None
+
+        def worker():
+            try:
+                update = updater.find_update(skipped)
+                result_queue.put((update, None))
+            except UpdateError as e:
+                result_queue.put((None, e))
+
+        def check_end(release: Release | None, error: UpdateError | None):
+            if overlay:
+                overlay.hide()
+
+            if error:
+                log(f"Update check failed: {error}", logging.WARNING)
+                if manual:
+                    msg = f"Impossible de vérifier les mises à jour :\n{error}"
+                    messagebox.showerror("Mise à jour", msg, parent=self)
+            elif release:
+                self.propose_update(release)
+            elif manual:
+                msg = f"Vous utilisez déjà la dernière version disponible ({full_version()})."
+                messagebox.showinfo("Mise à jour", msg, parent=self)
+
+        result_queue = ThreadQueue()
+        Thread(target=worker, daemon=True).start()
+        tk_call_when_ready(self, result_queue, check_end)
+
+    def propose_update(self, release: Release):
+        answer = MsgDialog.ask(
+            "Mise à jour",
+            f"Version {release.version} disponible.\nVersion utilisée : {full_version()}",
+            buttons_txt=("Mettre à jour", "Plus tard", "Ignorer cette version"),
+            parent=self,
+        )
+        if answer == "Ignorer cette version":
+            self.user_ctx.user_prefs.set(PrefEnum.UPDATE_SKIPPED, str(release.version))
+        elif answer == "Mettre à jour":
+            self.download_update(release)
+
+    def download_update(self, release: Release):
+        if self.process_running:
+            msg = "Une requête est en cours d'exécution, relancez la mise à jour une fois terminée."
+            messagebox.showwarning("Mise à jour", msg, parent=self)
+            return
+
+        # if update can be done automatically, do it and return
+        current_exe = Updater.current_exe()
+        if Updater.can_replace_exe(current_exe):
+            self._download_update(release, current_exe)
+            return
+
+        # if update can't be done automatically propose to open release webpage
+        msg = (
+            f"{current_exe.name} ne peut pas être remplacé dans son dossier.\n"
+            "Ouvrir la page de téléchargement pour faire l'installation manuellement ?"
+        )
+        answer = MsgDialog.ask("Mise à jour", msg, buttons_txt=("Oui", "Non"), parent=self)
+        if answer == "Oui":
+            webbrowser.open_new_tab(release.page_url)
+
+    def _download_update(self, release: Release, current_exe: Path):
+        title = f"Téléchargement de la version {release.version}..."
+        overlay = MsgOverlay.display(self, title)
+        self.lock_ui()
+        progress = {"received": 0, "done": False}
+
+        def on_progress(received: int, _total: int):
+            progress["received"] = received  # worker thread: no Tk call here, show_progress() displays it
+
+        def show_progress():
+            if progress["done"]:
+                return
+            percent = progress["received"] * 100 // max(release.exe_size, 1)
+            overlay.update_msg(f"{title} {percent} %")
+            self.after(250, show_progress)
+
+        def worker():
+            try:
+                dl_file: Path = release.download_exe(current_exe, on_progress=on_progress)
+                result_queue.put((dl_file, None))
+            except UpdateError as e:
+                result_queue.put((None, e))
+
+        def download_end(new_exe: Path | None, error: UpdateError | None):
+            progress["done"] = True
+            overlay.hide(callback=self.unlock_ui)
+
+            if error or new_exe is None:
+                log(f"Update download failed: {error}", logging.ERROR)
+                messagebox.showerror("Mise à jour", f"Le téléchargement a échoué :\n{error}", parent=self)
+                return
+
+            self.pending_update = new_exe
+            if self.process_running:
+                msg = f"La version {release.version} est prête, elle sera installée à la fermeture de l'application."
+                messagebox.showinfo("Mise à jour", msg, parent=self)
+                return
+
+            msg = (
+                f"La version {release.version} est prête.\n"
+                "Redémarrer maintenant pour l'installer ?\n\n(sinon, elle sera installée à la fermeture)"
+            )
+            if MsgDialog.ask("Mise à jour", msg, buttons_txt=("Oui", "Non"), parent=self) == "Oui":
+                self.restart_after_update = True
+                self.app_exit()
+
+        result_queue = ThreadQueue()
+        Thread(target=worker, daemon=True).start()
+        tk_call_when_ready(self, result_queue, download_end)
+        show_progress()
 
     # ------------------------------------------------------------------------------------------
     # Mise à jour de l'interface et des variables d'instances quand évènement
@@ -1301,7 +1444,7 @@ class App(tk.Toplevel):
         self.console_app.deiconify()
 
     def about_info(self):
-        AboutWindow(parent=self)
+        AboutWindow(parent=self, user_prefs=self.user_ctx.user_prefs)
 
 
 def app_start(mode: AppMode | None = None):
@@ -1310,11 +1453,40 @@ def app_start(mode: AppMode | None = None):
         show_hybrid_unavailable()
         return
 
+    updatable = Updater.is_updatable()
+    if updatable:
+        Updater.cleanup_previous(Updater.current_exe())
+
+    pending_update: Path | None = None
+    restart = False
     try:
         my_app = App(mode)
         my_app.mainloop()
+        pending_update = my_app.pending_update
+        restart = my_app.restart_after_update
     except SystemExit:
         pass
+
+    if updatable and pending_update:  # never rename the running executable outside a real updatable build
+        install_update(pending_update, restart)
+
+
+def install_update(new_exe: Path, restart: bool):
+    """Swaps in the downloaded executable once the UI loop has ended - the running one can only be renamed,
+    and no new execution process must start from the swapped path - then starts it if asked"""
+    current_exe = Updater.current_exe()
+    try:
+        Updater.install(current_exe, new_exe)
+    except UpdateError as e:
+        log(f"Update install failed: {e}", logging.ERROR)
+        root = tk.Tk()
+        root.withdraw()
+        messagebox.showerror(APP_NAME, f"La mise à jour n'a pas pu être installée :\n{e}", parent=root)
+        root.destroy()
+        return
+
+    if restart:
+        Updater.restart(current_exe)
 
 
 def show_hybrid_unavailable():

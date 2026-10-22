@@ -3,8 +3,10 @@ import sys
 
 from PyInstaller.utils.hooks import collect_all
 
+sys.path.insert(0, SPECPATH)
+from Pytre_Core.about import CLIENT_BASENAME
+
 if sys.platform == "win32":
-    sys.path.insert(0, SPECPATH)
     from version_info import version_info
 
 datas = [('Pytre_Core/res', 'res')]
@@ -41,7 +43,7 @@ exe = EXE(pyz,
           a.zipfiles,
           a.datas,
           [],
-          name='Pytre',
+          name=CLIENT_BASENAME,
           debug=False,
           bootloader_ignore_signals=False,
           strip=False,
@@ -50,4 +52,5 @@ exe = EXE(pyz,
           runtime_tmpdir=None,
           console=False,
           icon='Pytre_Core/res/app.ico',
-          version=version_info('Pytre', 'Pytre.exe'))
+          version=version_info('Pytre', f'{CLIENT_BASENAME}.exe') if sys.platform == "win32" else None
+        )

@@ -3,8 +3,10 @@ import sys
 
 from PyInstaller.utils.hooks import collect_all
 
+sys.path.insert(0, SPECPATH)
+from Pytre_Core.about import SERVER_BASENAME
+
 if sys.platform == "win32":
-    sys.path.insert(0, SPECPATH)
     from version_info import version_info
 
 datas = [('Pytre_Core/res', 'res'), ('Pytre_Server/templates', 'Pytre_Server/templates')]
@@ -40,7 +42,7 @@ exe = EXE(pyz,
           a.zipfiles,
           a.datas,
           [],
-          name='Pytre_Server',
+          name=SERVER_BASENAME,
           debug=False,
           bootloader_ignore_signals=False,
           strip=False,
@@ -49,4 +51,5 @@ exe = EXE(pyz,
           runtime_tmpdir=None,
           console=True,
           icon='Pytre_Core/res/app.ico',
-          version=version_info('Pytre Server', 'Pytre_Server.exe'))
+          version=version_info('Pytre Server', f'{SERVER_BASENAME}.exe') if sys.platform == "win32" else None
+        )

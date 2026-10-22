@@ -367,6 +367,8 @@ def test_ctrl_version_different_length(mock_kee):
 
     assert settings.ctrl_version("1.2", "1.2.3") is False
     assert settings.ctrl_version("1.2.3", "1.2") is True
+    assert settings.ctrl_version("1.2", "1.2.0") is True
+    assert settings.ctrl_version("1.2.0", "1.2") is True
 
 
 @pytest.mark.unit

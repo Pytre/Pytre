@@ -1,6 +1,6 @@
 import platform
 import tkinter as tk
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from tkinter import ttk, font
 
 
@@ -37,6 +37,30 @@ def ui_undisable_parent(tk_window: tk.Tk | tk.Toplevel, tk_parent: tk.Tk | tk.To
         tk_window.grab_release()
     elif tk_parent:
         tk_parent.wm_attributes("-disabled", False)
+
+
+def textbox_ctx_menu(textbox: tk.Text, extra_items: list[tuple[str, Callable[[], None]]] | None = None) -> tk.Menu:
+    """Adds a right-click menu to `textbox`: Copy, Select all, then `extra_items` as (label, command).
+    Returns the menu, so a caller can still add entries to it."""
+
+    def show_menu(event: tk.Event):
+        has_selection = bool(textbox.tag_ranges(tk.SEL))
+        menu.entryconfigure(0, state="normal" if has_selection else "disabled")
+        menu.tk_popup(event.x_root, event.y_root)
+
+    menu = tk.Menu(textbox, tearoff=0)
+    menu.add_command(label="Copier (Ctrl+C)", command=lambda: textbox.event_generate("<<Copy>>"))
+    menu.add_command(label="Tout sélectionner (Ctrl+A)", command=lambda: textbox.event_generate("<<SelectAll>>"))
+
+    if extra_items:
+        menu.add_separator()
+        for label, command in extra_items:
+            menu.add_command(label=label, command=command)
+
+    textbox.bind("<Button-3>", show_menu)
+    textbox.bind("<Control-a>", lambda _: (textbox.tag_add(tk.SEL, "1.0", tk.END), "break")[1])
+
+    return menu
 
 
 def listbox_add_sorted(listbox: tk.Listbox, new_value: str | None) -> bool:

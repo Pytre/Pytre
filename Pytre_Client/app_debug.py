@@ -5,7 +5,9 @@ from pathlib import Path
 
 from Pytre_Core.sql_query.query import Query
 from Pytre_Core.sql_query.sql_lexer import SqlLexer, TokenType
+
 from Pytre_Client.app_theme import set_theme
+from Pytre_Client.ui_utils import textbox_ctx_menu
 
 
 class DebugWindow(tk.Toplevel):
@@ -70,6 +72,7 @@ class DebugWindow(tk.Toplevel):
         curr_tab["frame"].grid_rowconfigure(0, weight=1)
 
         self.tabs[tab_id] = curr_tab
+        textbox_ctx_menu(curr_tab["textbox"])
 
     def _events_binds(self):
         self.protocol("WM_DELETE_WINDOW", self.app_exit)  # arrêter le programme quand fermeture de la fenêtre
@@ -88,7 +91,7 @@ class DebugWindow(tk.Toplevel):
         params_lst = []
         for key, param in self.query.parameters.params.items():
             value_cmd = param.value_cmd
-            value_cmd = str(value_cmd) if not isinstance(value_cmd, str) or param.is_inlined else "'" + value_cmd + "'"
+            value_cmd = str(value_cmd) if not isinstance(value_cmd, str) or param.is_inlined else f"'{value_cmd}'"
             params_lst.append(f"{key} : {value_cmd}")
 
         self.output_to_textbox(self.tabs["debug"]["textbox"], self.query.get_cmd_for_debug())

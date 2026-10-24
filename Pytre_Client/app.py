@@ -480,10 +480,13 @@ class App(tk.Toplevel):
         self.output_textbox.grid(row=0, column=0, padx=2, pady=0, sticky="nswe")
         self.output_textbox_scrollbar.grid(row=0, column=1, sticky="nse")
 
-        # paramètrage des poids des lignes et colonnes
+        # configure weight
         self.output_frame.rowconfigure(0, weight=1)
         self.output_frame.columnconfigure(0, weight=1)
         self.output_frame.columnconfigure(1, weight=0)
+
+        # add context menu
+        ui_utils.textbox_ctx_menu(self.output_textbox)
 
     def setup_ui_btn(self):
         self.btn_frame = ttk.Frame(self.output_and_btn_frame, borderwidth=2)

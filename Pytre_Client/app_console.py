@@ -8,7 +8,9 @@ from typing import TextIO
 
 from Pytre_Core.about import APP_NAME
 from Pytre_Core.utils import log, LOGGER_ROOT_NAME
+
 from Pytre_Client.app_theme import set_theme, get_system
+from Pytre_Client.ui_utils import textbox_ctx_menu
 
 
 DATE_FORMAT = "%H:%M:%S"
@@ -105,11 +107,7 @@ class ConsoleWindow(tk.Toplevel):
 
     def _setup_textbox_context_menu(self):
         """Configure textbox context menu (right click)"""
-        self.context_menu = tk.Menu(self.textbox, tearoff=0)
-        self.context_menu.add_command(label="Copier (Ctrl+C)", command=self.copy_selection)
-
-        self.textbox.bind("<Button-3>", lambda e: self.context_menu.tk_popup(e.x_root, e.y_root))
-        self.textbox.bind("<Control-c>", lambda _: self.copy_selection())
+        textbox_ctx_menu(self.textbox)
 
     def _setup_textbox_tags(self):
         self.textbox.tag_configure("stdout", foreground="#FFFFFF")
@@ -129,15 +127,6 @@ class ConsoleWindow(tk.Toplevel):
     # ----------------------------------------------
     def _toggle_filter(self, tag: str, var: tk.BooleanVar):
         self.textbox.tag_configure(tag, elide=not var.get())
-
-    def copy_selection(self):
-        """Copy text to clipboard"""
-        try:
-            text = self.textbox.get(tk.SEL_FIRST, tk.SEL_LAST)
-            self.clipboard_clear()
-            self.clipboard_append(text)
-        except tk.TclError:
-            pass  # no selection
 
     # ------------------------------------------------------------------------------------------
     # Output channels

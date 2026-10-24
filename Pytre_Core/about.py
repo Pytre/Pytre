@@ -37,7 +37,7 @@ HOMEPAGE_LINK: str = f"https://github.com/{REPO}"
 
 APP_VERSION: tuple[int, int, int] = (2, 0, 0)  # major, minor, patch numbers
 APP_STAGE: AppStage = AppStage.BETA  # build flagged as pre-release when different than RELEASE
-APP_STAGE_NUMBER: int = 2  # 0 when the stage has no number or for RELEASE
+APP_STAGE_NUMBER: int = 3  # 0 when the stage has no number or for RELEASE
 
 # release asset names: <basename>_<version>.exe
 CLIENT_BASENAME: str = "Pytre_Client"

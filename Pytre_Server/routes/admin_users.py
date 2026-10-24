@@ -38,6 +38,7 @@ class UserForm(BaseModel):
     auth_type: str
     password: str = ""
     groups: list[str] = Field(default_factory=list)
+    no_all_group: bool = False
 
     async def apply_to(self, user: User, attribs_cust: dict[str, str]) -> None:
         """Copies the submitted values onto `user`.
@@ -52,6 +53,7 @@ class UserForm(BaseModel):
         if self.password:
             user.password_hash = await asyncio.to_thread(hash_password, self.password)
         user.groups = self.groups
+        user.no_all_group = self.no_all_group
         user.attribs_cust.update(attribs_cust)
 
 

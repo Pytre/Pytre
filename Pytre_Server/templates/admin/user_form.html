@@ -77,6 +77,11 @@
                 {% endfor %}
             </div>
 
+            <label class="checkbox-item" for="no_all_group" style="margin-top: 8px;">
+                <input type="checkbox" id="no_all_group" name="no_all_group" value="1" {% if user.no_all_group %}checked{% endif %}>
+                Restrict queries to the selected groups
+            </label>
+
             {% if all_attribs %}
             <label style="margin-top: 20px;">Custom attributes</label>
             {% for attrib in all_attribs %}

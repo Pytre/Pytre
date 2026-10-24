@@ -36,8 +36,9 @@
                     <th class="sortable"><input type="checkbox" id="select-all" title="Select all" onclick="event.stopPropagation()"><span class="sort-indicator"></span></th>
                     <th class="sortable">Id<span class="sort-indicator"></span></th>
                     <th class="sortable">Title<span class="sort-indicator"></span></th>
-                    <th class="sortable">Admin<span class="sort-indicator"></span></th>
+                    <th class="sortable col-narrow">Admin<span class="sort-indicator"></span></th>
                     <th class="sortable">Groups<span class="sort-indicator"></span></th>
+                    <th class="sortable col-narrow" title="Restrict queries to the selected groups">Restrict<span class="sort-indicator"></span></th>
                     {% for attrib in attribs %}
                     <th class="sortable">{{ attrib }}<span class="sort-indicator"></span></th>
                     {% endfor %}
@@ -52,6 +53,7 @@
                     <td>{{ user.title }}</td>
                     <td>{{ "Yes" if user.admin else "" }}</td>
                     <td>{{ (user.groups | reject("equalto", "all") | list) | join(", ") }}</td>
+                    <td>{{ "Yes" if user.no_all_group else "" }}</td>
                     {% for attrib in attribs %}
                     <td>{{ user.attribs_cust.get(attrib, "") }}</td>
                     {% endfor %}

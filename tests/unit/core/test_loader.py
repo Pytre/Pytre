@@ -12,7 +12,9 @@ from Pytre_Core.remotes import Remote
 from Pytre_Core.remotes import RemoteServer
 from Pytre_Core.remotes import RemoteAddress
 from Pytre_Core.user_prefs import DisplayFormat
+from Pytre_Core.sql_query.query import Query
 from Pytre_Core.sql_query.loader import (
+    _is_query_authorized,
     get_queries,
     filter_queries,
     orphan_queries,
@@ -107,7 +109,7 @@ def test_get_queries_collects_errors_without_blocking(mock_app_ctx, mock_user_ct
 def test_filter_queries_returns_empty_if_server_unknown(mock_app_ctx):
     servers_obj = Mock()
     servers_obj.servers_dict = {}
-    user = Mock(admin=False, groups=["all"])
+    user = Mock(admin=False, groups=["all"], no_all_group=False)
 
     result = filter_queries(servers_obj, [], "UNKNOWN", user)
 
@@ -119,7 +121,7 @@ def test_filter_queries_denies_user_without_matching_server_group():
     servers_obj = Mock()
     server = Mock(grp_authorized=["restricted"])
     servers_obj.servers_dict = {"SRV1": server}
-    user = Mock(admin=False, groups=["all"])
+    user = Mock(admin=False, groups=["all"], no_all_group=False)
 
     result = filter_queries(servers_obj, [], "SRV1", user)
 
@@ -131,7 +133,7 @@ def test_filter_queries_admin_bypasses_group_checks():
     servers_obj = Mock()
     server = Mock(grp_authorized=["restricted"])
     servers_obj.servers_dict = {"SRV1": server}
-    user = Mock(admin=True, groups=["all"])
+    user = Mock(admin=True, groups=["all"], no_all_group=False)
 
     query = Mock(servers_id=["SRV1"], grp_authorized=["restricted"], hide=0)
 
@@ -145,7 +147,7 @@ def test_filter_queries_skips_query_not_for_server():
     servers_obj = Mock()
     server = Mock(grp_authorized=[])
     servers_obj.servers_dict = {"SRV1": server}
-    user = Mock(admin=False, groups=["all"])
+    user = Mock(admin=False, groups=["all"], no_all_group=False)
 
     query = Mock(servers_id=["OTHER_SERVER"], grp_authorized=[], hide=0)
 
@@ -159,7 +161,7 @@ def test_filter_queries_respects_hide_level_for_non_admin():
     servers_obj = Mock()
     server = Mock(grp_authorized=[])
     servers_obj.servers_dict = {"SRV1": server}
-    user = Mock(admin=False, groups=["all"])
+    user = Mock(admin=False, groups=["all"], no_all_group=False)
 
     hidden_query = Mock(servers_id=["SRV1"], grp_authorized=[], hide=1)
 
@@ -173,7 +175,7 @@ def test_filter_queries_admin_sees_hide_level_1_but_not_2():
     servers_obj = Mock()
     server = Mock(grp_authorized=[])
     servers_obj.servers_dict = {"SRV1": server}
-    user = Mock(admin=True, groups=["all"])
+    user = Mock(admin=True, groups=["all"], no_all_group=False)
 
     hide1 = Mock(servers_id=["SRV1"], grp_authorized=[], hide=1)
     hide2 = Mock(servers_id=["SRV1"], grp_authorized=[], hide=2)
@@ -181,6 +183,58 @@ def test_filter_queries_admin_sees_hide_level_1_but_not_2():
     result = filter_queries(servers_obj, [hide1, hide2], "SRV1", user)
 
     assert result == [hide1]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "query_groups, user_groups, no_all_group, admin, expected",
+    [
+        ([], ["all", "finance"], False, False, True),
+        ([], ["finance"], True, False, False),
+        (["all"], ["all", "finance"], False, False, True),
+        (["all"], ["finance"], True, False, False),
+        (["finance"], ["all", "finance"], False, False, True),
+        (["finance"], ["finance"], True, False, True),
+        (["hr"], ["all", "finance"], False, False, False),
+        (["hr"], ["finance"], True, False, False),
+        ([], [], True, True, True),
+        (["hr"], ["finance"], True, True, True),
+    ],
+    ids=[
+        "no-group-query/regular-user",
+        "no-group-query/groups-only-user",
+        "all-query/regular-user",
+        "all-query/groups-only-user",
+        "own-group/regular-user",
+        "own-group/groups-only-user",
+        "other-group/regular-user",
+        "other-group/groups-only-user",
+        "no-group-query/admin",
+        "other-group/admin",
+    ],
+)
+def test_is_query_authorized(query_groups, user_groups, no_all_group, admin, expected):
+    query = Mock(grp_authorized=query_groups)
+    user = Mock(admin=admin, groups=user_groups, no_all_group=no_all_group)
+
+    assert _is_query_authorized(query, user) is expected
+
+
+@pytest.mark.unit
+def test_filter_queries_hides_queries_without_groups_from_a_groups_only_user():
+    """A user excluded from the "all" group only gets queries shared with one of their own groups"""
+    servers_obj = Mock()
+    servers_obj.servers_dict = {"SRV1": Mock(grp_authorized=[])}
+    no_group = Mock(servers_id=["SRV1"], grp_authorized=[], hide=0)
+    for_all = Mock(servers_id=["SRV1"], grp_authorized=["all"], hide=0)
+    for_finance = Mock(servers_id=["SRV1"], grp_authorized=["finance"], hide=0)
+    queries: list[Query] = [no_group, for_all, for_finance]
+
+    regular_user = Mock(admin=False, groups=["all", "finance"], no_all_group=False)
+    groups_only_user = Mock(admin=False, groups=["finance"], no_all_group=True)
+
+    assert filter_queries(servers_obj, queries, "SRV1", regular_user) == queries
+    assert filter_queries(servers_obj, queries, "SRV1", groups_only_user) == [for_finance]
 
 
 @pytest.mark.unit

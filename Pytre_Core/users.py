@@ -83,6 +83,7 @@ class UserField(Enum):
     ADMIN = (_CsvStatus.REQUIRED, "admin", _DbKind.CUSTOM, "superuser")
     GROUPS = (_CsvStatus.REQUIRED, "groups", _DbKind.TAGS, "")
 
+    NO_ALL_GROUP = (_CsvStatus.OPTIONAL, "no all group", _DbKind.CUSTOM, "no_all_group")
     AUTH_TYPE = (_CsvStatus.OPTIONAL, "auth", _DbKind.CUSTOM, "auth_type")
     OIDC_LINK = (_CsvStatus.OPTIONAL, "oidc link", _DbKind.CUSTOM, "oidc_link")
 
@@ -367,15 +368,14 @@ class Users:
                 else:
                     u_entry = self.kee.db.add_entry(self.kee_grp, "", username, "")
 
-                # update standard infos
+                # update standard and optional infos
                 u_entry.title = row.get(UserField.DESCRIPTION.csv_header, "").strip()
 
-                if row[UserField.ADMIN.csv_header].strip() == "1":
-                    u_entry.set_custom_property(UserField.ADMIN.db_key, "true")
-                else:
-                    u_entry.set_custom_property(UserField.ADMIN.db_key, "false")
+                for user_field in (UserField.ADMIN, UserField.NO_ALL_GROUP):
+                    if user_field.csv_header in row:
+                        is_set = row[user_field.csv_header].strip() == "1"
+                        u_entry.set_custom_property(user_field.db_key, "true" if is_set else "false")
 
-                # update optional infos
                 auth_field = UserField.AUTH_TYPE
                 if auth_field.csv_header in row:
                     value = row[auth_field.csv_header].strip()
@@ -446,7 +446,7 @@ class Users:
         attr_cust = self.get_cust_attribs_list()
 
         if pwd_infos:
-            attr_optional[1:1] = [UserField.PWD_HASH]
+            attr_optional.append(UserField.PWD_HASH)
 
         attr_to_export = attr_std + attr_optional + attr_cust
 
@@ -461,7 +461,7 @@ class Users:
             row = []
 
             # Convert groups list to string using csv.writer (avoid problem for caracters similar to delimiter)
-            tags = u_entry.tags if u_entry.tags else []
+            tags = [tag for tag in u_entry.tags or [] if str(tag).lower() != "all"]
             if tags:
                 output = io.StringIO()
                 grp_writer = csv.writer(output, delimiter=delimiter, quotechar=quotechar, quoting=csv.QUOTE_MINIMAL)
@@ -475,7 +475,7 @@ class Users:
             for attr in attr_to_export:
                 if attr is UserField.GROUPS:
                     value = group
-                elif attr is UserField.ADMIN:
+                elif attr in (UserField.ADMIN, UserField.NO_ALL_GROUP):
                     value = u_entry.get_custom_property(attr.db_key) or ""
                     value = 1 if value.lower() == "true" else 0
                 elif isinstance(attr, UserField) and attr.db_kind is _DbKind.NATIVE:
@@ -574,6 +574,7 @@ class User:
         self.title: str = ""
         self.admin: bool = False
         self.groups: list[str] = ["all"]  # by default user belongs to "all" group
+        self.no_all_group: bool = False
         self.attribs_cust: dict[str, str] = {}  # dict of attributes not predefined
 
         if entry:
@@ -628,6 +629,7 @@ class User:
             "is_authorized": self.is_authorized,
             "title": self.title,
             "superuser": self.admin,
+            "no_all_group": self.no_all_group,
             "grp_authorized": self.groups,
         }
 
@@ -668,6 +670,8 @@ class User:
 
             if property == UserField.ADMIN.db_key:
                 self.admin = True if value and value.lower() == "true" else False
+            elif property == UserField.NO_ALL_GROUP.db_key:
+                self.no_all_group = True if value and value.lower() == "true" else False
             elif property == UserField.AUTH_TYPE.db_key:
                 auth_type = AuthType.from_value(value)
                 if auth_type is None:
@@ -685,10 +689,10 @@ class User:
                 self.attribs_cust[property] = value
 
         # Retrieve groups from keepass entry tags
-        tags = u_entry.tags if u_entry.tags else []
-        for tag in tags:
-            group = tag.lower().strip()
-            self.groups.append(group)
+        groups = {str(tag).lower().strip() for tag in u_entry.tags or []} - {"all"}
+        if not self.no_all_group:
+            groups.add("all")
+        self.groups = sorted(groups)
 
         return True
 
@@ -732,10 +736,12 @@ class User:
         u_entry.title = self.title
 
         admin_val = "true" if self.admin else "false"
+        no_all_group_val = "true" if self.no_all_group else "false"
         pwd_changed_at_val = self._pwd_changed_at.isoformat() if self._pwd_changed_at else ""
         oidc_link = json.dumps(self.oidc_link.to_dict()) if self.oidc_link else ""
 
         u_entry.set_custom_property(UserField.ADMIN.db_key, admin_val)
+        u_entry.set_custom_property(UserField.NO_ALL_GROUP.db_key, no_all_group_val)
         u_entry.set_custom_property(UserField.AUTH_TYPE.db_key, self.auth_type.value)
         u_entry.set_custom_property(UserField.PWD_CHANGED_AT.db_key, pwd_changed_at_val)
         u_entry.set_custom_property(UserField.OIDC_LINK.db_key, oidc_link, protect=True)

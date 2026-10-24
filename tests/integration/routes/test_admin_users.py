@@ -449,11 +449,12 @@ def _create_provider(client, issuer: str, **overrides) -> str:
     raise AssertionError(f"{issuer} not found in sso list page")
 
 
-def _create_user(client, username: str) -> str:
-    """Creates a blank user via /admin/users/new and returns its uuid."""
+def _create_user(client, username: str, **fields: str) -> str:
+    """Creates a blank user via /admin/users/new and returns its uuid - `fields` are extra form fields,
+    e.g. no_all_group="1" to tick a checkbox."""
     client.post(
         "/admin/users/new",
-        data={"username": username, "title": "", "auth_type": "none", "password": ""},
+        data={"username": username, "title": "", "auth_type": "none", "password": ""} | fields,
         follow_redirects=False,
     )
     list_page = client.get("/admin/users")
@@ -722,3 +723,66 @@ def test_edit_user_oidc_link_shows_the_issuer_even_if_its_provider_was_deleted(i
     edit_page = isolated_admin_client.get(f"/admin/users/{user_uuid}/edit").text
     assert "https://deleted-idp.example.com" in edit_page
     assert 'value="orphan-sub"' in edit_page
+
+
+# ================================================================================
+# "Restrict queries to the selected groups" option (User.no_all_group)
+# ================================================================================
+
+
+def _list_row_cells(html: str, username: str) -> list[str]:
+    """Text of each cell of the user's row in the list page: edit, select, id, title, admin, groups,
+    restriction, then the custom attributes"""
+    for row in html.split("<tr>"):
+        if f">{username}<" in row:
+            return [cell.strip() for cell in re.findall(r"<td[^>]*>(.*?)</td>", row, flags=re.DOTALL)]
+    raise AssertionError(f"{username} not found in list page")
+
+
+def test_create_user_with_groups_restriction_saves_it(isolated_admin_client):
+    uuid = _create_user(isolated_admin_client, "restricted_user", no_all_group="1")
+
+    edit_page = isolated_admin_client.get(f"/admin/users/{uuid}/edit").text
+    assert 'name="no_all_group" value="1" checked' in edit_page
+
+    user = isolated_admin_client.app.state.server.app_ctx.users.find_user_by_uuid(uuid)
+    assert user is not None
+    assert user.no_all_group is True
+    assert "all" not in user.groups
+
+
+def test_create_user_without_groups_restriction_checkbox_is_not_restricted(isolated_admin_client):
+    """An unchecked checkbox sends no field at all: UserForm.no_all_group must fall back to False"""
+    uuid = _create_user(isolated_admin_client, "open_user")
+
+    edit_page = isolated_admin_client.get(f"/admin/users/{uuid}/edit").text
+    assert 'name="no_all_group" value="1"' in edit_page  # the checkbox itself is rendered
+    assert 'name="no_all_group" value="1" checked' not in edit_page
+
+    user = isolated_admin_client.app.state.server.app_ctx.users.find_user_by_uuid(uuid)
+    assert user is not None
+    assert user.no_all_group is False
+    assert "all" in user.groups
+
+
+def test_edit_user_unchecking_groups_restriction_removes_it(isolated_admin_client):
+    uuid = _create_user(isolated_admin_client, "unrestrict_me", no_all_group="1")
+
+    isolated_admin_client.post(
+        f"/admin/users/{uuid}/edit",
+        data={"username": "unrestrict_me", "title": "", "auth_type": "none", "password": ""},
+        follow_redirects=False,
+    )
+
+    edit_page = isolated_admin_client.get(f"/admin/users/{uuid}/edit").text
+    assert 'name="no_all_group" value="1" checked' not in edit_page
+
+
+def test_users_list_shows_the_groups_restriction(isolated_admin_client):
+    _create_user(isolated_admin_client, "restricted_in_list", no_all_group="1")
+    _create_user(isolated_admin_client, "open_in_list")
+
+    list_page = isolated_admin_client.get("/admin/users").text
+
+    assert _list_row_cells(list_page, "restricted_in_list")[6] == "Yes"
+    assert _list_row_cells(list_page, "open_in_list")[6] == ""

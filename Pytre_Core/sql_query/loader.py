@@ -130,7 +130,7 @@ def filter_queries(servers: Servers, queries: list[Query], server_id: str, user:
             continue
 
         # ignore query if user not allowed to access it
-        if not user.admin and not query.grp_authorized == [] and not set(user.groups) & set(query.grp_authorized):
+        if not _is_query_authorized(query, user):
             continue
 
         # finally check hidden property to determine if query must be listed
@@ -138,6 +138,16 @@ def filter_queries(servers: Servers, queries: list[Query], server_id: str, user:
             filtered.append(query)
 
     return filtered
+
+
+def _is_query_authorized(query: Query, user: User) -> bool:
+    """Admins access every query. A query without groups is open to everyone, except users excluded
+    from the "all" group: they only access queries shared with one of their own groups."""
+    if user.admin:
+        return True
+    if not query.grp_authorized:
+        return not user.no_all_group
+    return bool(set(user.groups) & set(query.grp_authorized))
 
 
 def orphan_queries(app_ctx: AppContext, user_ctx: UserContext, folder: Path) -> list[Path]:

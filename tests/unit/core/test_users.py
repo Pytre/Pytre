@@ -1794,7 +1794,7 @@ def test_csv_export_includes_password_hash_when_requested(mock_kee, tmp_path):
     lines = output_file.read_text(encoding="utf-8-sig").splitlines()
     header = lines[0].split(";")
     row = lines[1].split(";")
-    assert header == ["Id", "Description", "Admin", "Groups", "Auth", "Password Hash", "Oidc Link"]
+    assert header == ["Id", "Description", "Admin", "Groups", "No All Group", "Auth", "Oidc Link", "Password Hash"]
     assert len(row) == len(header)  # regression: header/data column count used to drift apart
     assert dict(zip(header, row))["Password Hash"] == "the-hash"
     assert dict(zip(header, row))["Auth"] == "basic"
@@ -2180,7 +2180,7 @@ def test_user_field_csv_status_splits_standard_from_auth_password_columns():
         UserField.GROUPS,
     }
     assert password == {UserField.PWD, UserField.PWD_HASH}
-    assert optional == {UserField.AUTH_TYPE, UserField.OIDC_LINK}
+    assert optional == {UserField.NO_ALL_GROUP, UserField.AUTH_TYPE, UserField.OIDC_LINK}
 
 
 @pytest.mark.unit
@@ -2351,3 +2351,158 @@ def test_user_delete_raises_on_unexpected_type(mock_kee):
 
     with pytest.raises(TypeError, match="Unexpected type"):
         user.delete()
+
+
+# ================================================================================
+# "all" group opt-out (no_all_group)
+# ================================================================================
+
+
+def _entry_with(tags: list[str], properties: dict[str, str]) -> Mock:
+    from pykeepass.entry import Entry
+
+    entry = Mock(spec=Entry)
+    entry.uuid = "12345678-1234-1234-1234-123456789012"
+    entry.username = "jdoe"
+    entry.title = "John Doe"
+    entry.password = ""
+    entry.tags = tags
+    entry.custom_properties = list(properties)
+    entry.get_custom_property = Mock(side_effect=lambda name: properties.get(name, ""))
+    return entry
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "tags, properties, expected_groups, expected_flag",
+    [
+        (["Finance"], {}, ["all", "finance"], False),
+        (["Finance"], {"no_all_group": "false"}, ["all", "finance"], False),
+        (["Finance"], {"no_all_group": "true"}, ["finance"], True),
+        (["Finance"], {"no_all_group": "TRUE"}, ["finance"], True),
+        ([], {"no_all_group": "true"}, [], True),
+        (["Finance", " finance ", "Users"], {}, ["all", "finance", "users"], False),
+    ],
+    ids=["no-property", "false", "true", "true-uppercase", "no-group-at-all", "duplicates-merged"],
+)
+def test_user_load_from_entry_adds_the_all_group_unless_opted_out(
+    mock_kee, tags, properties, expected_groups, expected_flag
+):
+    user = User(Users(mock_kee), entry=_entry_with(tags, properties))
+
+    assert user.no_all_group is expected_flag
+    assert user.groups == expected_groups
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("stored_tag", ["all", "All", " ALL "])
+def test_user_load_from_entry_ignores_a_stored_all_tag_when_opted_out(mock_kee, stored_tag):
+    user = User(Users(mock_kee), entry=_entry_with([stored_tag, "finance"], {"no_all_group": "true"}))
+
+    assert user.groups == ["finance"]
+
+
+@pytest.mark.unit
+def test_user_not_loaded_from_keepass_keeps_the_all_group():
+    user = User(None, detect_user=False)
+
+    assert user.groups == ["all"]
+    assert user.no_all_group is False
+
+
+@pytest.mark.unit
+def test_user_to_dict_includes_no_all_group(mock_kee):
+    user = User(Users(mock_kee), entry=_entry_with([], {"no_all_group": "true"}))
+
+    assert user.to_dict()["no_all_group"] is True
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("no_all_group, expected", [(True, "true"), (False, "false")])
+def test_user_save_writes_no_all_group_and_never_stores_the_all_tag(mock_kee, no_all_group, expected):
+    user = User(Users(mock_kee), detect_user=False)
+    user.username = "jdoe"
+    user.groups = ["all", "finance"]
+    user.no_all_group = no_all_group
+
+    new_entry = Mock()
+    new_entry.uuid = "new-uuid"
+    mock_kee.db.add_entry = Mock(return_value=new_entry)
+
+    user.save()
+
+    new_entry.set_custom_property.assert_any_call("no_all_group", expected)
+    assert new_entry.tags == ["finance"]
+
+
+def _import_one_user(tmp_path, mock_kee, header: str, row: str) -> Mock:
+    """Imports a single new user from a csv and returns the created entry mock"""
+    users = Users(mock_kee)
+    new_entry = Mock()
+    new_entry.set_custom_property = Mock()
+    mock_kee.db.add_entry = Mock(return_value=new_entry)
+
+    csv_file = tmp_path / "users.csv"
+    csv_file.write_text(f"{header}\n{row}\n", encoding="latin-1")
+    users.csv_import(csv_file)
+
+    return new_entry
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("value, expected", [("1", "true"), ("0", "false"), ("", "false"), (" 1 ", "true")])
+def test_csv_import_writes_no_all_group_when_the_column_is_present(tmp_path, mock_kee, value, expected):
+    new_entry = _import_one_user(
+        tmp_path, mock_kee, "id;description;admin;groups;no all group", f"newuser;New User;0;;{value}"
+    )
+
+    new_entry.set_custom_property.assert_any_call("no_all_group", expected)
+
+
+@pytest.mark.unit
+def test_csv_import_without_the_column_leaves_no_all_group_untouched(tmp_path, mock_kee):
+    """An older import file without the column must not reset the option of existing users"""
+    new_entry = _import_one_user(tmp_path, mock_kee, "id;description;admin;groups", "newuser;New User;0;")
+
+    written_keys = [c.args[0] for c in new_entry.set_custom_property.call_args_list]
+    assert "no_all_group" not in written_keys
+    assert "superuser" in written_keys
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("stored, expected", [("true", "1"), ("false", "0"), ("", "0")])
+def test_csv_export_writes_no_all_group(mock_kee, tmp_path, stored, expected):
+    entry = _entry_with(["finance"], {"no_all_group": stored} if stored else {})
+    mock_kee.grp_users.entries = [entry]
+    output_file = tmp_path / "export.csv"
+
+    Users(mock_kee).csv_export(output_file)
+
+    header, row = (line.split(";") for line in output_file.read_text(encoding="utf-8-sig").splitlines()[:2])
+    assert dict(zip(header, row))["No All Group"] == expected
+
+
+@pytest.mark.unit
+def test_csv_export_never_writes_the_all_group(mock_kee, tmp_path):
+    mock_kee.grp_users.entries = [_entry_with(["all", "finance"], {})]
+    output_file = tmp_path / "export.csv"
+
+    Users(mock_kee).csv_export(output_file)
+
+    header, row = (line.split(";") for line in output_file.read_text(encoding="utf-8-sig").splitlines()[:2])
+    assert dict(zip(header, row))["Groups"] == "finance"
+
+
+@pytest.mark.unit
+def test_csv_export_import_round_trips_no_all_group(mock_kee, tmp_path):
+    mock_kee.grp_users.entries = [_entry_with(["finance"], {"no_all_group": "true"})]
+    output_file = tmp_path / "export.csv"
+    Users(mock_kee).csv_export(output_file)
+
+    mock_kee.grp_users.entries = []
+    new_entry = Mock()
+    new_entry.set_custom_property = Mock()
+    mock_kee.db.add_entry = Mock(return_value=new_entry)
+    Users(mock_kee).csv_import(output_file)
+
+    new_entry.set_custom_property.assert_any_call("no_all_group", "true")

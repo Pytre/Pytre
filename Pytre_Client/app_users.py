@@ -1,6 +1,5 @@
 import logging
 import tkinter as tk
-from dataclasses import dataclass
 from tkinter import ttk, Event, font, messagebox, filedialog
 from threading import Thread
 from queue import Queue
@@ -21,14 +20,6 @@ from Pytre_Client.ui_utils_csv import CsvTaskConfig, csv_process_async
 
 def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__) -> None:
     utils.log(msg, level=level, sublogger=sublogger)
-
-
-@dataclass(frozen=True)
-class WidgetGroup:
-    caption: str
-    w_label: ttk.Label
-    w_entry: ttk.Widget
-    var: tk.Variable
 
 
 class UsersWindow(tk.Toplevel):
@@ -567,7 +558,7 @@ class UserDialog(tk.Toplevel):
             "admin": "Admin",
         }
 
-        self.entries: dict[str, WidgetGroup] = {}
+        self.entries: dict[str, tk.Variable] = {}
         for attr in self.users.attribs_cust:
             entries_caption[attr] = attr
 
@@ -579,7 +570,7 @@ class UserDialog(tk.Toplevel):
 
         num_row = 0
         for key, caption in entries_caption.items():
-            my_label = ttk.Label(self.entries_frame, text=caption + " : ")
+            my_label = ttk.Label(self.entries_frame, text=f"{caption} : ")
 
             if key == "admin":
                 my_tk_var = tk.BooleanVar()
@@ -592,7 +583,7 @@ class UserDialog(tk.Toplevel):
                 my_tk_var = tk.StringVar()
                 my_entry = ttk.Entry(self.entries_frame, textvariable=my_tk_var)
 
-            self.entries[key] = WidgetGroup(caption=caption, w_label=my_label, w_entry=my_entry, var=my_tk_var)
+            self.entries[key] = my_tk_var
 
             my_label.grid(row=num_row, column=0, padx=2, pady=2, sticky="nswe")
             my_entry.grid(row=num_row, column=1, padx=2, pady=2, sticky="nswe")
@@ -611,10 +602,16 @@ class UserDialog(tk.Toplevel):
         ybar = ttk.Scrollbar(self.groups_frame, orient="vertical", command=self.listbox.yview)
         self.listbox.configure(yscrollcommand=ybar.set)
 
+        no_all_caption = "Requêtes restreintes aux groupes sélectionnés"
+        no_all_var = tk.BooleanVar()
+        no_all_entry = ttk.Checkbutton(self.groups_frame, variable=no_all_var, text=no_all_caption)
+        self.entries["no_all_group"] = no_all_var
+
         title_label.grid(row=0, column=0, padx=2, pady=2, sticky="nswe")
         self.new_grp.grid(row=0, column=1, padx=2, pady=2, sticky="nswe")
         self.listbox.grid(row=1, column=0, columnspan=2, padx=2, pady=2, sticky="nswe")
         ybar.grid(row=1, column=1, sticky="nse")
+        no_all_entry.grid(row=2, column=0, columnspan=2, padx=2, pady=2, sticky="nswe")
 
     def _setup_buttons(self):
         self.buttons_frame.columnconfigure(0, weight=1)
@@ -638,7 +635,7 @@ class UserDialog(tk.Toplevel):
         if self.user is None:
             raise RuntimeError("No user selected !")
 
-        for key, w_group in self.entries.items():
+        for key, tk_var in self.entries.items():
             if key in self.users.attribs_cust:
                 val = self.user.attribs_cust.get(key, "")
             else:
@@ -647,7 +644,7 @@ class UserDialog(tk.Toplevel):
             if key == "auth_type":  # User attr is an AuthType not a string
                 val = str(val)
 
-            w_group.var.set(val)
+            tk_var.set(val)
 
     def groups_set(self):
         for group in sorted(self.parent.groups):
@@ -671,8 +668,8 @@ class UserDialog(tk.Toplevel):
         overlay = MsgOverlay.display(self, "Enregistrement en cours...", 0)
 
         # mise à jour des infos de l'utilisateur
-        for key, w_group in self.entries.items():
-            val = w_group.var.get()
+        for key, tk_var in self.entries.items():
+            val = tk_var.get()
             if key == "auth_type":
                 user.auth_type = AuthType.from_value(val) or AuthType.NONE
             elif key in self.users.attribs_cust:

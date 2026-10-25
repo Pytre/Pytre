@@ -36,11 +36,12 @@
                     <th class="sortable"><input type="checkbox" id="select-all" title="Select all" onclick="event.stopPropagation()"><span class="sort-indicator"></span></th>
                     <th class="sortable">Id<span class="sort-indicator"></span></th>
                     <th class="sortable">Title<span class="sort-indicator"></span></th>
+                    <th class="sortable col-narrow">Auth<span class="sort-indicator"></span></th>
                     <th class="sortable col-narrow">Admin<span class="sort-indicator"></span></th>
                     <th class="sortable">Groups<span class="sort-indicator"></span></th>
                     <th class="sortable col-narrow" title="Restrict queries to the selected groups">Restrict<span class="sort-indicator"></span></th>
                     {% for attrib in attribs %}
-                    <th class="sortable">{{ attrib }}<span class="sort-indicator"></span></th>
+                    <th class="sortable col-narrow">{{ attrib }}<span class="sort-indicator"></span></th>
                     {% endfor %}
                 </tr>
             </thead>
@@ -51,6 +52,13 @@
                     <td><input type="checkbox" name="uuids" value="{{ user.uuid }}"><span class="sort-indicator"></span></td>
                     <td>{{ user.username }}</td>
                     <td>{{ user.title }}</td>
+                    <td>
+                        {%- if user.auth_type.value == "oidc" -%}
+                            OIDC: {{ provider_labels.get(user.oidc_link.issuer, "unknown") if user.oidc_link else "Any" }}
+                        {%- else -%}
+                            {{ user.auth_type }}
+                        {%- endif -%}
+                    </td>
                     <td>{{ "Yes" if user.admin else "" }}</td>
                     <td>{{ (user.groups | reject("equalto", "all") | list) | join(", ") }}</td>
                     <td>{{ "Yes" if user.no_all_group else "" }}</td>

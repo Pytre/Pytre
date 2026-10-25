@@ -571,6 +571,59 @@ def test_link_user_rejects_a_second_different_provider_once_already_linked(users
     assert reloaded.sub == "sub-a"
 
 
+def test_link_user_with_a_pre_assigned_provider_links_the_sub_on_first_login_through_it(users):
+    """An admin may reserve an account to a provider without knowing its sub (set at first login)"""
+    _oidc_user(users, "sso_user", oidc_link=OidcLink(issuer=ISSUER, sub=""))
+
+    linked = link_user(users, _provider(), {"sub": "sub-123", "preferred_username": "sso_user"})
+
+    assert linked.oidc_link is not None
+    assert (linked.oidc_link.issuer, linked.oidc_link.sub) == (ISSUER, "sub-123")
+    reloaded = _reloaded_user("sso_user").oidc_link
+    assert reloaded is not None
+    assert reloaded.sub == "sub-123"
+
+
+def test_link_user_with_a_pre_assigned_provider_rejects_another_provider(users, caplog):
+    """Before its first login, an account reserved to a provider can't be claimed through another one -
+    otherwise any configured identity provider issuing the same username would take it over"""
+    other_issuer = "https://other-idp.example.com"
+    _oidc_user(users, "sso_user", oidc_link=OidcLink(issuer=ISSUER, sub=""))
+
+    with caplog.at_level(logging.INFO), pytest.raises(OidcLoginError, match="linked to a different"):
+        link_user(users, _provider(issuer=other_issuer), {"sub": "sub-x", "preferred_username": "sso_user"})
+
+    reloaded = _reloaded_user("sso_user").oidc_link
+    assert reloaded is not None
+    assert (reloaded.issuer, reloaded.sub) == (ISSUER, "")  # still waiting for its own provider
+    assert any(f"linked to another identity provider ({ISSUER})" in r.message for r in caplog.records)
+
+
+def test_link_user_without_any_link_accepts_any_provider(users):
+    """"Any" provider in the admin form: the first login through whichever provider links the account"""
+    other_issuer = "https://other-idp.example.com"
+    _oidc_user(users, "sso_user")
+
+    linked = link_user(users, _provider(issuer=other_issuer), {"sub": "sub-o", "preferred_username": "sso_user"})
+
+    assert linked.oidc_link is not None
+    assert (linked.oidc_link.issuer, linked.oidc_link.sub) == (other_issuer, "sub-o")
+
+
+def test_link_user_after_a_provider_issuer_change_finds_the_user_by_its_sub(users):
+    """Users.replace_oidc_issuer() keeps the sub: the next login through the moved provider still matches it,
+    even if the username claim changed meanwhile"""
+    new_issuer = "https://idp-moved.example.com"
+    _oidc_user(users, "sso_user", oidc_link=OidcLink(issuer=ISSUER, sub="sub-123", refresh_token="rt-old"))
+    users.replace_oidc_issuer(ISSUER, new_issuer)
+
+    linked = link_user(users, _provider(issuer=new_issuer), {"sub": "sub-123", "preferred_username": "renamed"})
+
+    assert linked.username == "sso_user"
+    assert linked.oidc_link is not None
+    assert (linked.oidc_link.issuer, linked.oidc_link.sub) == (new_issuer, "sub-123")
+
+
 def test_link_user_logs_and_rejects_on_an_unknown_user(users, caplog):
     with caplog.at_level(logging.INFO):
         with pytest.raises(OidcLoginError):

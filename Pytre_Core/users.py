@@ -537,6 +537,35 @@ class Users:
 
         return None
 
+    def find_users_by_oidc_issuer(self, issuer: str) -> list[User]:
+        """Users whose OIDC link is with `issuer`"""
+        if self.kee_grp is None:
+            raise ValueError("No KeePass group selected, cannot find users from oidc issuer")
+
+        db_key = UserField.OIDC_LINK.db_key
+        users: list[User] = []
+        for entry in self.kee_grp.entries:
+            link = load_oidc_link(entry.get_custom_property(db_key) or "")
+            if link is not None and link.issuer == issuer:
+                users.append(User(self, entry=entry))
+
+        return users
+
+    def replace_oidc_issuer(self, old_issuer: str, new_issuer: str | None) -> int:
+        """Moves the OIDC links with `old_issuer` to `new_issuer`, keeping their sub - the refresh token and last
+        verification are reset, they were issued by the old issuer. With `new_issuer` None the links are removed.
+        Saves the database once. Returns the number of users changed."""
+        users = self.find_users_by_oidc_issuer(old_issuer) if old_issuer else []
+        for user in users:
+            assert user.oidc_link is not None
+            user.oidc_link = OidcLink(new_issuer, user.oidc_link.sub) if new_issuer else None
+            user.save(save_db=False)
+
+        if users:
+            self.kee.save_db()
+
+        return len(users)
+
 
 class AuthType(Enum):
     """Authentication types to identify how to interpret User.password_hash."""

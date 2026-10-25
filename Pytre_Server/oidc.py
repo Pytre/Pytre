@@ -151,7 +151,11 @@ def link_user(users: Users, provider: OidcProvider, claims: dict, refresh_token:
         raise OidcLoginError(f"No OIDC-enabled account matches '{claimed_username}'.")
 
     link = user.oidc_link
-    if link is None or link.sub == "" or (link.issuer == provider.issuer and link.sub == sub):
+    if link is not None and link.issuer != provider.issuer:
+        log(f"SSO rejected: '{user.username}' is linked to another identity provider ({link.issuer})", logging.INFO)
+        raise OidcLoginError(f"'{claimed_username}' is linked to a different identity provider account.")
+
+    if link is None or link.sub in ("", sub):
         not_already_linked = link is None or link.sub == ""
         user.oidc_link = OidcLink(
             issuer=provider.issuer, sub=sub, refresh_token=refresh_token, last_verified=datetime.now(timezone.utc)

@@ -12,6 +12,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
 
 from Pytre_Core.oidc_providers import OidcProvider
+from Pytre_Core.users import Users
 from Pytre_Core.utils import log as _log
 from Pytre_Server.routes.admin_auth import require_admin_session
 from Pytre_Server.server_state import ServerState, get_server_state
@@ -49,8 +50,16 @@ class OidcProviderForm(BaseModel):
         provider.enabled = self.enabled
 
 
-def _form_context(provider: OidcProvider) -> dict:
-    return {"provider": provider}
+def _form_context(provider: OidcProvider, users: Users, saved_issuer: str | None = None) -> dict:
+    """`saved_issuer`: the issuer stored in the database, when the form is redisplayed after a failed save -
+    `provider` then already holds the submitted, unsaved one"""
+    issuer = provider.issuer if saved_issuer is None else saved_issuer
+    linked_users = users.find_users_by_oidc_issuer(issuer) if issuer else []
+    return {
+        "provider": provider,
+        "saved_issuer": issuer,
+        "linked_users": sorted(user.username for user in linked_users),
+    }
 
 
 # ------------------------------------------------------------------------------------------
@@ -64,7 +73,9 @@ def sso_list(
     error: str | None = None,
 ) -> HTMLResponse:
     providers = state.app_ctx.oidc_providers.get_all_providers(reload=False)
-    context = {"providers": providers, "msg": msg, "error": error}
+    users = state.app_ctx.users
+    linked_counts = {p.uuid: len(users.find_users_by_oidc_issuer(p.issuer)) for p in providers.values()}
+    context = {"providers": providers, "linked_counts": linked_counts, "msg": msg, "error": error}
     return templates.TemplateResponse(request, "admin/oidc_providers_list.html", context)
 
 
@@ -86,7 +97,8 @@ def sso_reload(state: ServerState = Depends(get_server_state)) -> RedirectRespon
 @router.get("/new", response_class=HTMLResponse)
 def sso_new_form(request: Request, state: ServerState = Depends(get_server_state)) -> HTMLResponse:
     provider = OidcProvider(state.app_ctx.oidc_providers)
-    return templates.TemplateResponse(request, "admin/oidc_provider_form.html", _form_context(provider))
+    context = _form_context(provider, state.app_ctx.users)
+    return templates.TemplateResponse(request, "admin/oidc_provider_form.html", context)
 
 
 @router.post("/new", response_class=HTMLResponse, response_model=None)
@@ -97,7 +109,7 @@ def sso_new_submit(
     admin_username: str = Depends(require_admin_session),
 ) -> HTMLResponse | RedirectResponse:
     provider = OidcProvider(state.app_ctx.oidc_providers)
-    return _save_provider(request, provider, provider_form, admin_username)
+    return _save_provider(request, provider, provider_form, state.app_ctx.users, admin_username)
 
 
 @router.get("/{uuid}/edit", response_class=HTMLResponse, response_model=None)
@@ -107,7 +119,8 @@ def sso_edit_form(
     provider = state.app_ctx.oidc_providers.find_provider_by_uuid(uuid)
     if provider is None:
         return RedirectResponse(url="/admin/sso?error=Provider+not+found", status_code=status.HTTP_303_SEE_OTHER)
-    return templates.TemplateResponse(request, "admin/oidc_provider_form.html", _form_context(provider))
+    context = _form_context(provider, state.app_ctx.users)
+    return templates.TemplateResponse(request, "admin/oidc_provider_form.html", context)
 
 
 @router.post("/{uuid}/edit", response_class=HTMLResponse, response_model=None)
@@ -121,25 +134,29 @@ def sso_edit_submit(
     provider = state.app_ctx.oidc_providers.find_provider_by_uuid(uuid)
     if provider is None:
         return RedirectResponse(url="/admin/sso?error=Provider+not+found", status_code=status.HTTP_303_SEE_OTHER)
-    return _save_provider(request, provider, provider_form, admin_username)
+    return _save_provider(request, provider, provider_form, state.app_ctx.users, admin_username)
 
 
 def _save_provider(
-    request: Request, provider: OidcProvider, provider_form: OidcProviderForm, admin_username: str
+    request: Request, provider: OidcProvider, provider_form: OidcProviderForm, users: Users, admin_username: str
 ) -> HTMLResponse | RedirectResponse:
+    saved_issuer = provider.issuer  # empty for a new provider
     provider_form.apply_to(provider)
 
     try:
         provider.save()
     except ValueError as e:
-        context = _form_context(provider)
+        context = _form_context(provider, users, saved_issuer=saved_issuer)
         context["error"] = str(e)
         return templates.TemplateResponse(request, "admin/oidc_provider_form.html", context)
 
-    log(
-        f"OIDC provider '{provider.issuer}' saved by admin '{admin_username}' (enabled={provider.enabled})",
-        logging.WARNING,
-    )
+    msg = f"OIDC provider '{provider.issuer}' saved by admin '{admin_username}' (enabled={provider.enabled})"
+    if saved_issuer and saved_issuer != provider.issuer:
+        nb_moved = users.replace_oidc_issuer(saved_issuer, provider.issuer)
+        msg += f", {nb_moved} user link(s) moved from '{saved_issuer}'"
+
+    log(msg, logging.WARNING)
+
     return RedirectResponse(url="/admin/sso?msg=Provider+saved", status_code=status.HTTP_303_SEE_OTHER)
 
 
@@ -155,11 +172,13 @@ def sso_delete(
         return RedirectResponse(url="/admin/sso?error=Provider+not+found", status_code=status.HTTP_303_SEE_OTHER)
 
     try:
+        nb_unlinked = state.app_ctx.users.replace_oidc_issuer(provider.issuer, None)
         provider.delete()
     except LookupError as e:
         return RedirectResponse(url=f"/admin/sso?error={e}", status_code=status.HTTP_303_SEE_OTHER)
 
-    log(f"OIDC provider '{provider.issuer}' deleted by admin '{admin_username}'", logging.WARNING)
+    msg = f"OIDC provider '{provider.issuer}' deleted by admin '{admin_username}', {nb_unlinked} user link(s) removed"
+    log(msg, logging.WARNING)
     return RedirectResponse(url="/admin/sso?msg=Provider+deleted", status_code=status.HTTP_303_SEE_OTHER)
 
 
@@ -171,17 +190,25 @@ def sso_delete_bulk(
 ) -> RedirectResponse:
     nb_ok = 0
     nb_errors = 0
+    nb_unlinked = 0
     for uuid in uuids:
         provider = state.app_ctx.oidc_providers.find_provider_by_uuid(uuid)
         if provider is None:
             nb_errors += 1
             continue
         try:
+            nb_links = state.app_ctx.users.replace_oidc_issuer(provider.issuer, None)
             provider.delete()
-            log(f"OIDC provider '{provider.issuer}' deleted by admin '{admin_username}' (bulk)", logging.WARNING)
+
+            msg = f"OIDC provider '{provider.issuer}' deleted by admin '{admin_username}' (bulk), "
+            msg += f"{nb_links} user link(s) removed"
+            log(msg, logging.WARNING)
+
+            nb_unlinked += nb_links
             nb_ok += 1
         except LookupError:
             nb_errors += 1
 
     msg = f"{nb_ok}+provider(s)+deleted" + (f",+{nb_errors}+error(s)" if nb_errors else "")
+    msg += f",+{nb_unlinked}+user+link(s)+removed" if nb_unlinked else ""
     return RedirectResponse(url=f"/admin/sso?msg={msg}", status_code=status.HTTP_303_SEE_OTHER)

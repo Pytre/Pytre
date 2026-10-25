@@ -30,6 +30,7 @@
                     <th class="sortable">Label<span class="sort-indicator"></span></th>
                     <th class="sortable">Issuer<span class="sort-indicator"></span></th>
                     <th class="sortable">Client id<span class="sort-indicator"></span></th>
+                    <th class="sortable col-narrow">Users<span class="sort-indicator"></span></th>
                     <th class="sortable col-narrow">Enabled<span class="sort-indicator"></span></th>
                     <th class="sortable col-narrow">Usable<span class="sort-indicator"></span></th>
                 </tr>
@@ -38,10 +39,11 @@
                 {% for provider in providers.values() | sort(attribute="label") %}
                 <tr>
                     <td><a href="#" class="edit-icon" title="Edit" onclick="openFormModal('/admin/sso/{{ provider.uuid }}/edit'); return false;"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M11.5 20A.5.5 0 1011.5 21 .5.5 0 1011.5 20zM14.5 20A.5.5 0 1014.5 21 .5.5 0 1014.5 20zM17.5 20A.5.5 0 1017.5 21 .5.5 0 1017.5 20zM12.586 4.838L4.256 16.998c-.052.075-.082.164-.087.256L4 20.474c-.009.176.075.343.22.441C4.305 20.972 4.402 21 4.5 21c.072 0 .145-.016.212-.047l2.92-1.366c.081-.038.15-.097.201-.171L16.168 7.25 12.586 4.838zM16.733 6.424l1.222-1.784c.086-.125.11-.283.065-.429-.013-.041-.32-1.017-1.266-1.654-.945-.636-1.963-.553-2.008-.551-.149.013-.284.092-.369.216l-1.227 1.79L16.733 6.424z"></path></svg></a></td>
-                    <td><input type="checkbox" name="uuids" value="{{ provider.uuid }}"><span class="sort-indicator"></span></td>
+                    <td><input type="checkbox" name="uuids" value="{{ provider.uuid }}" data-linked="{{ linked_counts[provider.uuid] }}"><span class="sort-indicator"></span></td>
                     <td>{{ provider.label }}</td>
                     <td>{{ provider.issuer }}</td>
                     <td>{{ provider.client_id }}</td>
+                    <td class="col-narrow">{{ linked_counts[provider.uuid] }}</td>
                     <td>{{ "Yes" if provider.enabled else "No" }}</td>
                     <td>{{ "Yes" if provider.is_usable else "No" }}</td>
                 </tr>
@@ -218,15 +220,23 @@ function showSsoClientError(message) {
 }
 
 function confirmBulkDeleteSso(event) {
-    var n = document.querySelectorAll('input[name="uuids"]:checked').length;
+    var checked = document.querySelectorAll('input[name="uuids"]:checked');
+    var n = checked.length;
     if (n === 0) {
         showSsoClientError("No provider selected");
         return false;
     }
 
+    var linked = 0;
+    checked.forEach(function (box) { linked += parseInt(box.dataset.linked, 10) || 0; });
+    var message = "Delete " + n + " selected provider(s)?";
+    if (linked > 0) {
+        message += "\n\n" + linked + " linked user(s) will lose their SSO link: those signing in only through SSO won't be able to sign in anymore.";
+    }
+
     event.preventDefault();
     var button = event.target;
-    pytreConfirm("Delete " + n + " selected provider(s)?").then(function (ok) {
+    pytreConfirm(message).then(function (ok) {
         if (ok) {
             button.form.requestSubmit(button); // keeps this button's formaction/formmethod
         }

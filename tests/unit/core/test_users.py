@@ -9,14 +9,20 @@ REGRESSION TESTS:
 import pytest
 import csv
 import json
+import shutil
 from datetime import datetime, timezone
+from pathlib import Path
 from unittest.mock import Mock, call, patch
 from uuid import UUID
 
 from pykeepass.entry import Entry
 
+import Pytre_Core.kee as kee_module
+from Pytre_Core.kee import Kee
+
 from Pytre_Core.users import (
     AuthType,
+    OidcLink,
     Users,
     User,
     _CsvStatus,
@@ -2506,3 +2512,106 @@ def test_csv_export_import_round_trips_no_all_group(mock_kee, tmp_path):
     Users(mock_kee).csv_import(output_file)
 
     new_entry.set_custom_property.assert_any_call("no_all_group", "true")
+
+
+# ================================================================================
+# OIDC links of a provider (find_users_by_oidc_issuer / replace_oidc_issuer)
+# ================================================================================
+
+
+TEST_DB_PATH = Path(__file__).parent.parent.parent / "resources" / "Pytre_test.db"
+TEST_DB_PASSWORD = "password"
+
+
+@pytest.fixture
+def real_users(monkeypatch, tmp_path) -> Users:
+    """Users over a per-test copy of the test KeePass database - the links must really be persisted"""
+    db_copy = tmp_path / "Pytre_test.db"
+    shutil.copy(TEST_DB_PATH, db_copy)
+    monkeypatch.setattr(kee_module, "KEE_FILE", db_copy)
+    return Users(Kee(password=TEST_DB_PASSWORD))
+
+
+def _save_linked_user(users: Users, username: str, issuer: str, sub: str) -> None:
+    user = User(users, detect_user=False)
+    user.username = username
+    user.auth_type = AuthType.OIDC
+    user.oidc_link = OidcLink(
+        issuer=issuer, sub=sub, refresh_token=f"rt-{sub}", last_verified=datetime(2026, 1, 1, tzinfo=timezone.utc)
+    )
+    user.save()
+
+
+def _reloaded_link(username: str) -> OidcLink | None:
+    return User(Users(Kee(password=TEST_DB_PASSWORD)), username=username).oidc_link
+
+
+ISSUER_A = "https://idp-a.example.com"
+ISSUER_B = "https://idp-b.example.com"
+
+
+@pytest.mark.unit
+def test_find_users_by_oidc_issuer_returns_only_the_users_of_that_issuer(real_users):
+    _save_linked_user(real_users, "user_a1", ISSUER_A, "sub-1")
+    _save_linked_user(real_users, "user_a2", ISSUER_A, "sub-2")
+    _save_linked_user(real_users, "user_b1", ISSUER_B, "sub-3")
+
+    found = real_users.find_users_by_oidc_issuer(ISSUER_A)
+
+    assert sorted(user.username for user in found) == ["user_a1", "user_a2"]
+    assert real_users.find_users_by_oidc_issuer("https://unknown.example.com") == []
+
+
+@pytest.mark.unit
+def test_replace_oidc_issuer_moves_the_links_keeping_the_sub(real_users):
+    _save_linked_user(real_users, "user_a1", ISSUER_A, "sub-1")
+    _save_linked_user(real_users, "user_b1", ISSUER_B, "sub-3")
+    new_issuer = "https://idp-a-moved.example.com"
+
+    changed = real_users.replace_oidc_issuer(ISSUER_A, new_issuer)
+
+    assert changed == 1
+    # sub kept, refresh token and verification reset: they were issued by the old issuer
+    assert _reloaded_link("user_a1") == OidcLink(issuer=new_issuer, sub="sub-1")
+    untouched = _reloaded_link("user_b1")
+    assert untouched is not None
+    assert (untouched.issuer, untouched.sub, untouched.refresh_token) == (ISSUER_B, "sub-3", "rt-sub-3")
+
+
+@pytest.mark.unit
+def test_replace_oidc_issuer_with_none_removes_the_links(real_users):
+    _save_linked_user(real_users, "user_a1", ISSUER_A, "sub-1")
+    _save_linked_user(real_users, "user_a2", ISSUER_A, "sub-2")
+    _save_linked_user(real_users, "user_b1", ISSUER_B, "sub-3")
+
+    changed = real_users.replace_oidc_issuer(ISSUER_A, None)
+
+    assert changed == 2
+    assert _reloaded_link("user_a1") is None
+    assert _reloaded_link("user_a2") is None
+    assert _reloaded_link("user_b1") is not None
+
+
+@pytest.mark.unit
+def test_replace_oidc_issuer_saves_the_database_once(real_users, monkeypatch):
+    _save_linked_user(real_users, "user_a1", ISSUER_A, "sub-1")
+    _save_linked_user(real_users, "user_a2", ISSUER_A, "sub-2")
+    save_db = Mock(wraps=real_users.kee.save_db)
+    monkeypatch.setattr(real_users.kee, "save_db", save_db)
+
+    real_users.replace_oidc_issuer(ISSUER_A, None)
+
+    save_db.assert_called_once()
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("old_issuer", ["https://unknown.example.com", ""])
+def test_replace_oidc_issuer_without_linked_users_changes_and_saves_nothing(real_users, monkeypatch, old_issuer):
+    _save_linked_user(real_users, "user_a1", ISSUER_A, "sub-1")
+    save_db = Mock(wraps=real_users.kee.save_db)
+    monkeypatch.setattr(real_users.kee, "save_db", save_db)
+
+    assert real_users.replace_oidc_issuer(old_issuer, None) == 0
+
+    save_db.assert_not_called()
+    assert _reloaded_link("user_a1") is not None

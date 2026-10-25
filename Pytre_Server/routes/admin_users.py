@@ -69,14 +69,17 @@ def _form_context(state: ServerState, user: User) -> dict:
 
 def _apply_oidc_link(user: User, form_data: FormData) -> None:
     """Applies the submitted provider and sub for the user OIDC link - read directly from the raw form.
-    Either field blank -> no link; unchanged issuer+sub -> refresh_token/last_verified preserved;
-    any other value (new or different) replaces with a fresh, unverified link."""
+    No provider -> no link. A provider without sub -> the sub is set on the first login through that provider.
+    Unchanged issuer+sub -> refresh_token/last_verified preserved; any other value -> a fresh, unverified link.
+    Raises ValueError for a sub without a provider."""
     issuer = str(form_data.get("oidc_issuer", "")).strip()
     sub = str(form_data.get("oidc_sub", "")).strip()
 
     existing = user.oidc_link
 
-    if not issuer or not sub:
+    if not issuer:
+        if sub:
+            raise ValueError("Select a provider for the sub")
         user.oidc_link = None
     elif existing is None or existing.issuer != issuer or existing.sub != sub:
         user.oidc_link = OidcLink(issuer=issuer, sub=sub)
@@ -100,9 +103,9 @@ async def _save_user(
 
     # update user with form submitted values
     await user_form.apply_to(user, attribs_cust)
-    _apply_oidc_link(user, form_data)
 
     try:
+        _apply_oidc_link(user, form_data)
         await asyncio.to_thread(user.save)
     except ValueError as e:
         context = _form_context(state, user)
@@ -134,6 +137,9 @@ def users_list(
     context = {
         "users": users,
         "attribs": sorted(state.app_ctx.users.attribs_cust),
+        "provider_labels": {
+            issuer: provider.label for issuer, provider in state.app_ctx.oidc_providers.get_all_providers().items()
+        },
         "msg": msg,
         "error": error,
     }

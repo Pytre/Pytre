@@ -29,7 +29,7 @@
             </label>
 
             <div class="form-row">
-                <div class="form-col" id="auth-type-col" style="flex: 0 0 150px;">
+                <div class="form-col" id="auth-type-col" style="flex: 0 0 100px;">
                     <label for="auth_type">Auth type</label>
                     <select id="auth_type" name="auth_type">
                         {% for at in auth_types %}
@@ -48,7 +48,7 @@
                     <div class="form-col" style="flex: 1.5;">
                         <label for="oidc_issuer">Provider</label>
                         <select id="oidc_issuer" name="oidc_issuer">
-                            <option value=""></option>
+                            <option value="">Any</option>
                             {% for provider in oidc_providers %}
                             <option value="{{ provider.issuer }}" {% if user.oidc_link and user.oidc_link.issuer == provider.issuer %}selected{% endif %}>{{ provider.label }}</option>
                             {% endfor %}
@@ -59,7 +59,7 @@
                     </div>
                     <div class="form-col" style="flex: 2;">
                         <label for="oidc_sub">Sub</label>
-                        <input type="text" id="oidc_sub" name="oidc_sub" value="{{ user.oidc_link.sub if user.oidc_link else '' }}" placeholder="sub">
+                        <input type="text" id="oidc_sub" name="oidc_sub" value="{{ user.oidc_link.sub if user.oidc_link else '' }}">
                     </div>
                 </div>
                 {% endif %}
@@ -139,6 +139,23 @@
 
             authTypeSelect.addEventListener("change", updateAuthTypeVisibility);
             updateAuthTypeVisibility();
+
+            // "Any" provider: the first login through any provider sets both - a sub alone is meaningless, so it's
+            // cleared and disabled (a disabled field isn't sent)
+            var oidcIssuerSelect = document.getElementById("oidc_issuer");
+            var oidcSubInput = document.getElementById("oidc_sub");
+            if (oidcIssuerSelect && oidcSubInput) {
+                function syncOidcSub() {
+                    var hasProvider = Boolean(oidcIssuerSelect.value);
+                    oidcSubInput.disabled = !hasProvider;
+                    oidcSubInput.placeholder = hasProvider ? "when empty set on first login" : "set on first login";
+                    if (!hasProvider) {
+                        oidcSubInput.value = "";
+                     }
+                }
+                oidcIssuerSelect.addEventListener("change", syncOidcSub);
+                syncOidcSub();
+            }
         })();
         </script>
     </div>

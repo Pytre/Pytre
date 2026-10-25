@@ -331,3 +331,174 @@ def test_reload_providers_picks_up_a_change_made_outside_the_webui(isolated_admi
 
     fresh_page = isolated_admin_client.get("/admin/sso")
     assert "Changed outside the webui" in fresh_page.text
+
+
+# ------------------------------------------------------------------------------------------
+# Users OIDC links follow their provider (issuer change, deletion)
+# ------------------------------------------------------------------------------------------
+
+
+def _create_provider(client, issuer: str, **overrides) -> str:
+    client.post("/admin/sso/new", data=_new_provider_data(issuer, **overrides), follow_redirects=False)
+    return _find_uuid(client.get("/admin/sso").text, issuer)
+
+
+def _link_user(client, username: str, issuer: str, sub: str) -> None:
+    """Creates an OIDC user linked to `issuer`, through the server's own Users - no reload needed"""
+    from datetime import datetime, timezone
+
+    from Pytre_Core.users import AuthType, OidcLink, User
+
+    user = User(client.app.state.server.app_ctx.users, detect_user=False)
+    user.username = username
+    user.auth_type = AuthType.OIDC
+    user.oidc_link = OidcLink(
+        issuer=issuer, sub=sub, refresh_token=f"rt-{sub}", last_verified=datetime(2026, 1, 1, tzinfo=timezone.utc)
+    )
+    user.save()
+
+
+def _link_of(client, username: str):
+    from Pytre_Core.users import User
+
+    return User(client.app.state.server.app_ctx.users, username=username).oidc_link
+
+
+def _list_row_cells(html: str, marker: str) -> list[str]:
+    """Text of each cell of a provider's row: edit, select, label, issuer, client id, users, enabled, usable"""
+    for row in html.split("<tr>"):
+        if f">{marker}<" in row:
+            return [cell.strip() for cell in re.findall(r"<td[^>]*>(.*?)</td>", row, flags=re.DOTALL)]
+    raise AssertionError(f"{marker} not found in list page")
+
+
+def test_edit_provider_issuer_moves_the_links_of_its_users(isolated_admin_client, caplog):
+    old_issuer, new_issuer = "https://idp-old.example.com", "https://idp-new.example.com"
+    uuid = _create_provider(isolated_admin_client, old_issuer)
+    _link_user(isolated_admin_client, "moved_a", old_issuer, "sub-a")
+    _link_user(isolated_admin_client, "moved_b", old_issuer, "sub-b")
+
+    with caplog.at_level(logging.INFO):
+        response = isolated_admin_client.post(
+            f"/admin/sso/{uuid}/edit", data=_new_provider_data(new_issuer, client_secret=""), follow_redirects=False
+        )
+
+    assert response.status_code == 303
+    for username, sub in (("moved_a", "sub-a"), ("moved_b", "sub-b")):
+        link = _link_of(isolated_admin_client, username)
+        assert link is not None
+        assert (link.issuer, link.sub) == (new_issuer, sub)
+        assert link.refresh_token == ""  # issued by the old issuer
+        assert link.last_verified is None
+    assert any(f"2 user link(s) moved from '{old_issuer}'" in r.message for r in caplog.records)
+
+    # a later SSO login through the provider, now reporting the new issuer, finds the user by its sub
+    found = isolated_admin_client.app.state.server.app_ctx.users.find_user_by_oidc_link(new_issuer, "sub-a")
+    assert found is not None
+    assert found.username == "moved_a"
+
+
+def test_edit_provider_label_only_keeps_the_links_untouched(isolated_admin_client):
+    issuer = "https://idp-relabel.example.com"
+    uuid = _create_provider(isolated_admin_client, issuer, label="Before")
+    _link_user(isolated_admin_client, "relabel_user", issuer, "sub-r")
+
+    isolated_admin_client.post(
+        f"/admin/sso/{uuid}/edit", data=_new_provider_data(issuer, label="After", client_secret="")
+    )
+
+    link = _link_of(isolated_admin_client, "relabel_user")
+    assert link is not None
+    assert (link.issuer, link.sub, link.refresh_token) == (issuer, "sub-r", "rt-sub-r")
+
+
+def test_edit_provider_refused_keeps_the_links_untouched(isolated_admin_client):
+    """An issuer already used by another provider is refused: nothing is saved, no link moves"""
+    issuer_a, issuer_b = "https://idp-refused-a.example.com", "https://idp-refused-b.example.com"
+    uuid_a = _create_provider(isolated_admin_client, issuer_a)
+    _create_provider(isolated_admin_client, issuer_b)
+    _link_user(isolated_admin_client, "refused_user", issuer_a, "sub-x")
+
+    response = isolated_admin_client.post(
+        f"/admin/sso/{uuid_a}/edit", data=_new_provider_data(issuer_b, client_secret=""), follow_redirects=False
+    )
+
+    assert response.status_code == 200  # form redisplayed with the error
+    link = _link_of(isolated_admin_client, "refused_user")
+    assert link is not None
+    assert link.issuer == issuer_a
+    # the redisplayed form still counts the users of the saved issuer, not of the refused one
+    assert 'data-saved-issuer="' + issuer_a + '"' in response.text
+    assert 'data-linked-count="1"' in response.text
+
+
+def test_delete_provider_removes_the_links_of_its_users_only(isolated_admin_client, caplog):
+    issuer, other_issuer = "https://idp-deleted.example.com", "https://idp-kept.example.com"
+    uuid = _create_provider(isolated_admin_client, issuer)
+    _create_provider(isolated_admin_client, other_issuer)
+    _link_user(isolated_admin_client, "unlinked_user", issuer, "sub-d")
+    _link_user(isolated_admin_client, "kept_user", other_issuer, "sub-k")
+
+    with caplog.at_level(logging.INFO):
+        isolated_admin_client.post(f"/admin/sso/{uuid}/delete")
+
+    assert _link_of(isolated_admin_client, "unlinked_user") is None
+    kept = _link_of(isolated_admin_client, "kept_user")
+    assert kept is not None
+    assert kept.issuer == other_issuer
+    assert any(f"'{issuer}' deleted by admin '{TEST_USERNAME}', 1 user link(s) removed" in r.message for r in caplog.records)
+
+
+def test_bulk_delete_removes_the_links_and_reports_them(isolated_admin_client):
+    issuer_a, issuer_b = "https://idp-bulk-links-a.example.com", "https://idp-bulk-links-b.example.com"
+    uuid_a = _create_provider(isolated_admin_client, issuer_a)
+    uuid_b = _create_provider(isolated_admin_client, issuer_b)
+    _link_user(isolated_admin_client, "bulk_a1", issuer_a, "sub-a1")
+    _link_user(isolated_admin_client, "bulk_a2", issuer_a, "sub-a2")
+    _link_user(isolated_admin_client, "bulk_b1", issuer_b, "sub-b1")
+
+    response = isolated_admin_client.post(
+        "/admin/sso/delete", data={"uuids": [uuid_a, uuid_b]}, follow_redirects=False
+    )
+
+    assert response.headers["location"] == "/admin/sso?msg=2+provider(s)+deleted,+3+user+link(s)+removed"
+    for username in ("bulk_a1", "bulk_a2", "bulk_b1"):
+        assert _link_of(isolated_admin_client, username) is None
+
+
+def test_provider_form_shows_the_number_of_linked_users(isolated_admin_client):
+    issuer = "https://idp-counted.example.com"
+    uuid = _create_provider(isolated_admin_client, issuer)
+    _link_user(isolated_admin_client, "counted_b", issuer, "sub-b")
+    _link_user(isolated_admin_client, "counted_a", issuer, "sub-a")
+
+    form = isolated_admin_client.get(f"/admin/sso/{uuid}/edit").text
+
+    assert "2 linked user(s)" in form
+    assert 'title="counted_a, counted_b"' in form  # sorted usernames, shown on hover
+    assert 'data-linked-count="2"' in form
+    assert "linked user(s) will lose their SSO link" in form  # delete confirmation warns about them
+
+
+def test_provider_form_shows_zero_linked_users_for_an_existing_provider_only(isolated_admin_client):
+    uuid = _create_provider(isolated_admin_client, "https://idp-unused.example.com")
+
+    edit_form = isolated_admin_client.get(f"/admin/sso/{uuid}/edit").text
+    new_form = isolated_admin_client.get("/admin/sso/new").text
+
+    assert "0 linked user(s)" in edit_form
+    assert "will lose their SSO link" not in edit_form  # nobody to warn about
+    assert "linked user(s)" not in new_form
+
+
+def test_providers_list_shows_the_number_of_linked_users(isolated_admin_client):
+    issuer, unused_issuer = "https://idp-list-count.example.com", "https://idp-list-unused.example.com"
+    _create_provider(isolated_admin_client, issuer)
+    _create_provider(isolated_admin_client, unused_issuer)
+    _link_user(isolated_admin_client, "list_count_user", issuer, "sub-l")
+
+    list_page = isolated_admin_client.get("/admin/sso").text
+
+    assert _list_row_cells(list_page, issuer)[5] == "1"
+    assert _list_row_cells(list_page, unused_issuer)[5] == "0"
+    assert 'data-linked="1"' in list_page  # used by the bulk delete confirmation

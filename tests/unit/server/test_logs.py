@@ -11,23 +11,7 @@ from Pytre_Core.utils import LOGGER_ROOT_NAME, log as pytre_log
 from Pytre_Server.logs import BACKUP_COUNT, MAX_BYTES, setup_file_logging, setup_terminal_logging
 
 
-@pytest.fixture(autouse=True)
-def _restore_logger_state():
-    """setup_file_logging()/setup_terminal_logging() mutate the shared "Pytre" logger (add a
-    handler, adjust its level) - save/restore around every test so handlers/levels from one
-    test never leak into another, and close any handler added during the test to release its
-    file handle."""
-    logger = logging.getLogger(LOGGER_ROOT_NAME)
-    original_handlers = list(logger.handlers)
-    original_level = logger.level
-
-    yield
-
-    for handler in list(logger.handlers):
-        if handler not in original_handlers:
-            logger.removeHandler(handler)
-            handler.close()
-    logger.setLevel(original_level)
+pytestmark = pytest.mark.usefixtures("pristine_pytre_logger")  # see tests/conftest.py
 
 
 @pytest.mark.unit

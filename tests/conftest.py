@@ -1,9 +1,13 @@
+import logging
+
 import keyring
 import keyring.errors
 import pytest
 from pathlib import Path
 from unittest.mock import Mock, MagicMock
 from cryptography.fernet import Fernet
+
+from Pytre_Core.utils import LOGGER_ROOT_NAME
 
 
 # ================================================================================
@@ -44,6 +48,38 @@ def fake_keyring(monkeypatch):
     monkeypatch.setattr(keyring, "delete_password", fake_delete_password)
 
     return store
+
+
+# ================================================================================
+# Shared "Pytre" logger isolation
+# ================================================================================
+
+
+@pytest.fixture
+def pristine_pytre_logger():
+    """Runs the test with the shared "Pytre" logger as in a fresh process - no handler, NOTSET level -
+    then puts back the original state and closes any handler the test added.
+
+    Restoring only after the test isn't enough: the logger is process-global, and any earlier test of the
+    same pytest-xdist worker may already have changed it - every create_app() call attaches a LogBufferHandler
+    and lowers the level to DEBUG for the whole process. Which tests share a worker depends on the number of
+    workers, so a test relying on the logger's initial state would pass or fail from one machine to another."""
+    logger = logging.getLogger(LOGGER_ROOT_NAME)
+    original_handlers = list(logger.handlers)
+    original_level = logger.level
+
+    for handler in original_handlers:
+        logger.removeHandler(handler)
+    logger.setLevel(logging.NOTSET)
+
+    yield logger
+
+    for handler in list(logger.handlers):
+        logger.removeHandler(handler)
+        handler.close()
+    for handler in original_handlers:
+        logger.addHandler(handler)
+    logger.setLevel(original_level)
 
 
 # ================================================================================

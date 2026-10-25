@@ -10,22 +10,7 @@ from Pytre_Core.utils import LOGGER_ROOT_NAME
 from Pytre_Server.log_buffer import LogBufferHandler, setup_log_buffer
 
 
-@pytest.fixture(autouse=True)
-def _restore_logger_state():
-    """setup_log_buffer() mutates the shared "Pytre" logger (adds a handler, adjusts its level) -
-    save/restore around every test so handlers/levels from one test never leak into another, and
-    close any handler added during the test (same pattern as test_logs.py's own fixture)."""
-    logger = logging.getLogger(LOGGER_ROOT_NAME)
-    original_handlers = list(logger.handlers)
-    original_level = logger.level
-
-    yield
-
-    for handler in list(logger.handlers):
-        if handler not in original_handlers:
-            logger.removeHandler(handler)
-            handler.close()
-    logger.setLevel(original_level)
+pytestmark = pytest.mark.usefixtures("pristine_pytre_logger")  # see tests/conftest.py
 
 
 def _make_record(msg: str = "hello", level: int = logging.INFO, logger_name: str = "Pytre.test") -> logging.LogRecord:

@@ -525,6 +525,29 @@
         button.secondary, a.btn.secondary { background: var(--btn-secondary-bg); color: var(--btn-secondary-text); }
         button.secondary:hover, a.btn.secondary:hover { background: var(--btn-secondary-hover-bg); }
 
+        /* Shown while the server handles a submission (saves go through the KeePass database) -
+        above the form modal and the dialogs. */
+        .pytre-busy-overlay { z-index: 1100; cursor: progress; }
+        .pytre-busy-box {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 16px 20px;
+            background: var(--surface);
+            border-radius: 8px;
+            box-shadow: 0 4px 24px rgba(0, 0, 0, 0.2);
+            font-size: 14px;
+        }
+        .pytre-busy-spinner {
+            width: 20px;
+            height: 20px;
+            border: 3px solid var(--border);
+            border-top-color: var(--accent);
+            border-radius: 50%;
+            animation: pytre-spin 0.8s linear infinite;
+        }
+        @keyframes pytre-spin { to { transform: rotate(360deg); } }
+
         .pytre-modal-overlay {
             position: fixed;
             inset: 0;
@@ -659,6 +682,13 @@
         <div class="pytre-modal-box">
             <button type="button" class="pytre-modal-close" onclick="closeFormModal()">&times;</button>
             <div id="pytre-modal-content"></div>
+        </div>
+    </div>
+
+    <div id="pytre-busy-overlay" class="pytre-confirm-overlay pytre-busy-overlay" hidden>
+        <div class="pytre-busy-box" role="status">
+            <div class="pytre-busy-spinner"></div>
+            <span>Please wait…</span>
         </div>
     </div>
 
@@ -860,6 +890,34 @@
             document.getElementById("pytre-modal-content").innerHTML = "";
         }
 
+        // Busy overlay while the server handles a submission - only shown after a short delay,
+        // so fast responses don't flash it.
+        var _pytreBusyTimer = null;
+
+        function pytreBusyShow() {
+            clearTimeout(_pytreBusyTimer);
+            _pytreBusyTimer = setTimeout(function () {
+                document.getElementById("pytre-busy-overlay").hidden = false;
+            }, 300);
+        }
+
+        function pytreBusyHide() {
+            clearTimeout(_pytreBusyTimer);
+            document.getElementById("pytre-busy-overlay").hidden = true;
+        }
+
+        // Native submissions (standalone pages, list actions, login...) keep the overlay until the
+        // next page replaces this one. Handlers cancelling the submission (pytreConfirmSubmit asking
+        // first, a fetch submission from the modal) already ran: a document listener sees the event
+        // after the form's own onsubmit.
+        document.addEventListener("submit", function (e) {
+            if (!e.defaultPrevented) pytreBusyShow();
+        });
+
+        // The browser's Back button can restore a page from the back-forward cache with the overlay
+        // still shown.
+        window.addEventListener("pageshow", pytreBusyHide);
+
         // True while the current document is the modal's injected fragment rather than a real
         // standalone page - #modal-root only exists in the latter (openFormModal only lifts its
         // innerHTML into the modal, never the element itself).
@@ -874,12 +932,19 @@
         // page navigation breaking out of the modal to show it as a standalone page.
         function submitFormInModal(form) {
             var formData = new FormData(form);
+            pytreBusyShow();
             fetch(form.action, { method: form.method, body: formData }).then(function (response) {
                 if (response.redirected) {
                     window.location.href = response.url;
                     return;
                 }
-                return response.text().then(_renderIntoModal);
+                return response.text().then(function (html) {
+                    pytreBusyHide();
+                    _renderIntoModal(html);
+                });
+            }).catch(function (error) {
+                pytreBusyHide();
+                pytreAlert("The request failed: " + error.message);
             });
         }
 

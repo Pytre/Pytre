@@ -26,6 +26,23 @@ def _find_uuid(html: str, server_id: str) -> str:
     raise AssertionError(f"{server_id} not found in list page")
 
 
+def _type_options(html: str) -> dict[str, str]:
+    """Attributes of each option of the server type <select>, by option value."""
+    select = re.search(r'<select id="type"[^>]*>(.*?)</select>', html, re.S)
+    assert select is not None, "type select not found"
+    options = {}
+    for attrs in re.findall(r"<option(.*?)>", select.group(1), re.S):
+        value = re.search(r'value="([^"]*)"', attrs)
+        assert value is not None
+        options[value.group(1)] = attrs
+    return options
+
+
+def _selected_type(html: str) -> str:
+    [selected] = [value for value, attrs in _type_options(html).items() if re.search(r"\bselected\b", attrs)]
+    return selected
+
+
 def test_servers_list_renders_empty(admin_client):
     response = admin_client.get("/admin/servers")
     assert response.status_code == 200
@@ -117,7 +134,7 @@ def test_create_server_round_trip_keeps_each_field_distinct(isolated_admin_clien
         match = re.search(rf'id="{field}"[^>]*value="([^"]*)"', edit_page)
         assert match is not None, f"{field} input not found"
         assert match.group(1) == data[field], f"{field} did not round-trip correctly: got {match.group(1)!r}"
-    assert '<option value="PostgreSQL" selected>' in edit_page
+    assert _selected_type(edit_page) == "PostgreSQL"
 
 
 def test_create_server_trust_certificate_checkbox_round_trips(isolated_admin_client):
@@ -213,7 +230,46 @@ def test_edit_server_updates_fields(isolated_admin_client):
     edit_page = isolated_admin_client.get(f"/admin/servers/{uuid}/edit")
     assert 'value="After"' in edit_page.text
     assert 'value="newhost"' in edit_page.text
-    assert '<option value="PostgreSQL" selected>' in edit_page.text
+    assert _selected_type(edit_page.text) == "PostgreSQL"
+
+
+def test_server_form_tells_which_types_verify_the_certificate(admin_client):
+    """The form disables the certificate checkbox, with a "not supported" note, for a type that can't
+    verify it (pymssql)."""
+    html = admin_client.get("/admin/servers/new").text
+
+    options = _type_options(html)
+    assert 'data-verifies-certificate="false"' in options["SQL Server"]
+    assert 'data-verifies-certificate="true"' in options["SQL Server (fastmssql)"]
+    assert 'data-verifies-certificate="true"' in options["PostgreSQL"]
+    assert re.search(r'<span id="trust-unsupported"[^>]*\bhidden\b[^>]*>[^<]*not supported', html)
+
+
+def test_server_form_keeps_the_trust_value_while_its_checkbox_is_disabled(admin_client):
+    """A disabled checkbox isn't sent: a hidden field of the same name sends the saved value instead,
+    enabled by the form's script only then - disabled when the page loads."""
+    html = admin_client.get("/admin/servers/new").text
+
+    kept = re.search(r'<input[^>]*id="trust-kept"[^>]*>', html)
+    assert kept is not None
+    assert 'type="hidden"' in kept.group(0)
+    assert 'name="trust_server_certificate"' in kept.group(0)
+    assert 'value="1"' in kept.group(0)
+    assert re.search(r"\bdisabled\b", kept.group(0))
+
+
+def test_create_fastmssql_server_round_trips(isolated_admin_client):
+    response = isolated_admin_client.post(
+        "/admin/servers/new",
+        data={"id": "fast_srv", "type": "SQL Server (fastmssql)", "login_timeout": "60", "timeout": "300"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+
+    uuid = _find_uuid(isolated_admin_client.get("/admin/servers").text, "fast_srv")
+    edit_page = isolated_admin_client.get(f"/admin/servers/{uuid}/edit").text
+
+    assert _selected_type(edit_page) == "SQL Server (fastmssql)"
 
 
 def test_edit_server_preserves_password_when_field_left_blank(isolated_admin_client):

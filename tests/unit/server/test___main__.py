@@ -187,9 +187,27 @@ def test_start_server_runs_uvicorn_with_resolved_master_key(monkeypatch):
     start_server(args)
 
     create_app_mock.assert_called_once_with(
-        master_key="s3cret", chunk_size=2000, max_concurrency_per_user=4, heartbeat_secs=30, log_buffer_mb=10
+        master_key="s3cret",
+        chunk_size=2000,
+        db_pool_size=30,
+        max_concurrency_per_user=4,
+        heartbeat_secs=30,
+        log_buffer_mb=10,
     )
     run.assert_called_once_with("app", host="0.0.0.0", port=9000, forwarded_allow_ips=None)
+
+
+@pytest.mark.unit
+def test_start_server_forwards_db_pool_size_to_create_app(monkeypatch):
+    monkeypatch.setattr("Pytre_Server.__main__.get_master_key_interactive", Mock(return_value="s3cret"))
+    create_app_mock = Mock(return_value="app")
+    monkeypatch.setattr("Pytre_Server.__main__.create_app", create_app_mock)
+    monkeypatch.setattr("Pytre_Server.__main__.uvicorn.run", Mock())
+    args = create_parser().parse_args(["--db-pool-size", "8"])
+
+    start_server(args)
+
+    assert create_app_mock.call_args.kwargs["db_pool_size"] == 8
 
 
 @pytest.mark.unit

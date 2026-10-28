@@ -1,20 +1,25 @@
 """Async SQL drivers and the protocol definitions they implement,
 plus get_driver() to pick the right driver for a Server.type"""
 
+import asyncio
+import copy
 import logging
 import re
 import uuid
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, cast, Protocol
 
 import asyncpg
 import fastmssql
+import pymssql
 
 from Pytre_Core.about import APP_NAME, full_version
 from Pytre_Core.servers import ServerType, Server
 from Pytre_Core.utils import log as _log
+from Pytre_Core.sql_query.query_driver_mssql import CONN_PROPERTIES, connect_mssql, error_msg as mssql_error_msg
 from Pytre_Core.sql_query.sql_browser import split_instance_host, resolve_instance_port
 
 APP_ID = f"{APP_NAME}_Server_{full_version()}"
@@ -26,11 +31,13 @@ def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__)
     _log(msg, level=level, sublogger=sublogger)
 
 
-async def get_driver(server: Server) -> AsyncSqlDriver:
+async def get_driver(server: Server, pool_size: int) -> AsyncSqlDriver:
     if server.type == ServerType.mssql.name:
-        return await FastMssqlDriver._driver(server)
+        return PyMssqlDriver(server, pool_size)
+    elif server.type == ServerType.fastmssql.name:
+        return await FastMssqlDriver._driver(server, pool_size)
     elif server.type == ServerType.postgre.name:
-        return AsyncpgDriver._driver(server)
+        return AsyncpgDriver._driver(server, pool_size)
     else:
         raise ValueError("Unknown server type, getting a connection is not possible")
 
@@ -44,16 +51,6 @@ class AsyncSqlExecutionError(Exception):
 
 class AsyncSqlConnectionError(Exception):
     """Raised when a driver fails to connect, or loses its connection mid-query."""
-
-
-class AsyncSqlResult(Protocol):
-    """Result from a SELECT query, read batch by batch with fetch(). Keeps what reading needs (connection,
-    cursor...) until close(), which must always be called - it can be called several times, and while a
-    fetch() is still running."""
-
-    def columns(self) -> list[str]: ...
-    async def fetch(self, n: int) -> list[tuple[Any, ...]]: ...
-    async def close(self) -> None: ...
 
 
 class AsyncSqlDriver(Protocol):
@@ -76,24 +73,153 @@ class AsyncSqlDriver(Protocol):
         ...
 
 
+class AsyncSqlResult(Protocol):
+    """Result from a SELECT query, read batch by batch with fetch(). Keeps what reading needs (connection,
+    cursor...) until close(), which must always be called - it can be called several times, and while a
+    fetch() is still running."""
+
+    def columns(self) -> list[str]: ...
+    async def fetch(self, n: int) -> list[tuple[Any, ...]]: ...
+    async def close(self) -> None: ...
+
+
+# ------------------------------------------------------------------------------------------
+# pymssql driver implementation
+# ------------------------------------------------------------------------------------------
+class PyMssqlDriver:
+    """AsyncSqlDriver implementation using pymssql, which reads rows from the network as they are fetched.
+
+    pymssql is synchronous: each query opens its own connection, used from the driver's own threads.
+    pymssql releases the GIL while waiting for the network.
+    pymssql's timeout and login_timeout are process-wide: the last connection opened sets them for every query.
+
+    At most `pool_size` queries run at once, a query waiting longer than _acquire_timeout_secs for its turn fails."""
+
+    _acquire_timeout_secs = 10.0
+
+    def __init__(self, server: Server, pool_size: int = 30) -> None:
+        self._server = copy.copy(server)  # parameters as they are now, edits apply once connections are reset
+        self._slots = asyncio.Semaphore(pool_size)
+        self._executor = ThreadPoolExecutor(max_workers=pool_size, thread_name_prefix=f"pymssql_{server.id}")
+
+    async def connect(self) -> None:
+        pass  # no pool to open, each query opens its own connection
+
+    async def disconnect(self) -> None:
+        self._executor.shutdown(wait=False)
+
+    async def execute(self, template: str, params: dict[str, Any]) -> AsyncSqlResult:
+        try:
+            await asyncio.wait_for(self._slots.acquire(), timeout=self._acquire_timeout_secs)
+        except TimeoutError as e:
+            msg = f"No slot available within {self._acquire_timeout_secs:g} s."
+            raise AsyncSqlConnectionError(msg) from e
+
+        result = _PymssqlResult(self._executor, self._slots.release)
+        try:
+            await result.open(self._server, template, params)
+        except BaseException:
+            await result.close()  # waits for the thread to be done before closing its connection
+            raise
+        return result
+
+
+class _PymssqlResult:
+    """A query on its own pymssql connection, used by one driver thread at a time. Can't be interrupted
+    from another thread, so close() waits for the running call before cancelling the query in turn."""
+
+    def __init__(self, executor: ThreadPoolExecutor, release_slot: Callable[[], None]) -> None:
+        self._executor = executor
+        self._release_slot = release_slot
+
+        self._conn: pymssql.Connection | None = None
+        self._cursor: pymssql.Cursor | None = None
+        self._columns: list[str] = []
+        self._exhausted = False
+
+        self._running: asyncio.Future | None = None
+        self._closing: asyncio.Task | None = None
+
+    def columns(self) -> list[str]:
+        return list(self._columns)
+
+    async def open(self, server: Server, template: str, params: dict[str, Any]) -> None:
+        await self._run(self._worker_open, server, template, params)
+
+    async def fetch(self, n: int) -> list[tuple[Any, ...]]:
+        if self._exhausted or self._closing is not None:
+            return []
+        return await self._run(self._worker_fetch, n)
+
+    async def close(self) -> None:
+        if self._closing is None:
+            self._closing = asyncio.create_task(self._close())
+        await asyncio.shield(self._closing)  # a cancelled caller doesn't stop the closing
+
+    async def _close(self) -> None:
+        try:
+            if self._running is not None:
+                await asyncio.wait({self._running})  # whatever its outcome
+            await asyncio.get_running_loop().run_in_executor(self._executor, self._worker_close)
+        finally:
+            self._release_slot()
+
+    async def _run(self, func: Callable[..., Any], *args: Any) -> Any:
+        """Runs `func` in a driver thread. Shielded: cancelling the caller can't stop the thread, and
+        `_running` must keep tracking it until it's really done."""
+        self._running = asyncio.get_running_loop().run_in_executor(self._executor, func, *args)
+        return await asyncio.shield(self._running)
+
+    # ------------------------------------------------------------------------------------------
+    # worker task run from a thread
+    # ------------------------------------------------------------------------------------------
+    def _worker_open(self, server: Server, template: str, params: dict[str, Any]) -> None:
+        try:
+            self._conn = connect_mssql(server, APP_ID)
+        except pymssql.Error as e:
+            raise AsyncSqlConnectionError(mssql_error_msg(e)) from e
+
+        try:
+            self._cursor = self._conn.cursor()
+            self._cursor.execute(template, params)
+        except pymssql.Error as e:
+            raise AsyncSqlExecutionError(mssql_error_msg(e)) from e
+
+        description = self._cursor.description or ()  # None without any result set
+        self._columns = [column[0] for column in description]
+        self._exhausted = not description
+
+    def _worker_fetch(self, n: int) -> list[tuple[Any, ...]]:
+        if self._cursor is None:
+            return []
+        try:
+            rows = self._cursor.fetchmany(n)
+        except pymssql.Error as e:
+            raise AsyncSqlExecutionError(mssql_error_msg(e)) from e
+        self._exhausted = len(rows or []) < n
+        return [tuple(_json_safe(value) for value in row) for row in rows or []]
+
+    def _worker_close(self) -> None:
+        if self._conn is None:
+            return
+        try:
+            if not self._exhausted:
+                self._conn._conn.cancel()  # stops the query on SQL Server - pymssql only exposes it on _conn
+        except (pymssql.Error, pymssql._mssql.MSSQLException):  # _conn raises _mssql errors, not pymssql ones
+            pass  # closing anyway
+        finally:
+            self._conn.close()
+            self._conn = None
+            self._cursor = None
+
+
 # ------------------------------------------------------------------------------------------
 # fastmssql driver implementation
 # ------------------------------------------------------------------------------------------
 class FastMssqlDriver:
     """AsyncSqlDriver implementation using fastmssql."""
 
-    _conn_properties = """
-        SET ARITHABORT ON;
-        SET CONCAT_NULL_YIELDS_NULL ON;
-        SET ANSI_NULLS ON;
-        SET ANSI_NULL_DFLT_ON ON;
-        SET ANSI_PADDING ON;
-        SET ANSI_WARNINGS ON;
-        SET CURSOR_CLOSE_ON_COMMIT ON;
-        SET QUOTED_IDENTIFIER ON;
-        SET TEXTSIZE 2147483647;
-        SET DATEFORMAT ymd;
-    """
+    _conn_properties = CONN_PROPERTIES
     _recompile_option = "\nOPTION (RECOMPILE);"
 
     def __init__(
@@ -143,8 +269,9 @@ class FastMssqlDriver:
             raise AsyncSqlExecutionError(str(e)) from e
 
     @classmethod
-    async def _driver(cls, server: Server) -> FastMssqlDriver:
-        """Returns an mssql driver. Resolve host/port connection target."""
+    async def _driver(cls, server: Server, pool_size: int) -> FastMssqlDriver:
+        """Returns an mssql driver. Resolve host/port connection target.
+        Values other than the pool size are those of fastmssql's performance()."""
         hostname, port = await cls._resolve_conn_host(server.host, int(server.port))
 
         return FastMssqlDriver(
@@ -154,7 +281,13 @@ class FastMssqlDriver:
             username=server.user,
             password=server.password,
             trust_certificate=server.trust_server_certificate,
-            pool_config=fastmssql.PoolConfig.performance(),
+            pool_config=fastmssql.PoolConfig(
+                max_size=pool_size,
+                min_idle=min(10, pool_size),
+                max_lifetime_secs=7200,
+                idle_timeout_secs=1800,
+                connection_timeout_secs=10,
+            ),
         )
 
     @classmethod
@@ -191,7 +324,7 @@ class _FastMssqlResult:
             return []  # fastmssql can't tell the column names if no line is returned
 
     async def fetch(self, n: int) -> list[tuple[Any, ...]]:
-        return [tuple(row.values()) for row in self._stream.fetch(n)]
+        return [tuple(_json_safe(value) for value in row.values()) for row in self._stream.fetch(n)]
 
     async def close(self) -> None:
         pass
@@ -204,7 +337,6 @@ class AsyncpgDriver:
     """AsyncSqlDriver implementation using asyncpg."""
 
     _min_pool_size = 2
-    _max_pool_size = 30
     _acquire_timeout_secs = 10.0
 
     _connection_errors = (
@@ -226,6 +358,7 @@ class AsyncpgDriver:
         trust_certificate: bool = False,
         login_timeout: int = 60,
         statement_timeout_secs: int = 300,
+        pool_size: int = 30,
     ) -> None:
 
         self._host = host
@@ -235,6 +368,7 @@ class AsyncpgDriver:
         self._password = password
         self._login_timeout = login_timeout
         self._statement_timeout_ms = int(statement_timeout_secs) * 1000
+        self._pool_size = pool_size
         self._pool: asyncpg.Pool | None = None
 
         # secure by default (certificate chain and host name verified). Trusting the server means accepting
@@ -250,8 +384,8 @@ class AsyncpgDriver:
                 user=self._username,
                 password=self._password,
                 ssl=self._ssl,
-                min_size=self._min_pool_size,
-                max_size=self._max_pool_size,
+                min_size=min(self._min_pool_size, self._pool_size),
+                max_size=self._pool_size,
                 timeout=self._login_timeout,
                 server_settings={
                     "application_name": APP_ID,
@@ -324,7 +458,7 @@ class AsyncpgDriver:
         return str(error) or type(error).__name__  # e.g. TimeoutError has an empty message
 
     @classmethod
-    def _driver(cls, server: Server) -> AsyncpgDriver:
+    def _driver(cls, server: Server, pool_size: int) -> AsyncpgDriver:
         """Returns a postgre driver built from server's parameters."""
         return AsyncpgDriver(
             host=server.host,
@@ -335,6 +469,7 @@ class AsyncpgDriver:
             trust_certificate=server.trust_server_certificate,
             login_timeout=server.login_timeout,
             statement_timeout_secs=server.timeout,
+            pool_size=pool_size,
         )
 
 

@@ -10,10 +10,14 @@ from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from fastapi.testclient import TestClient
 
+import Pytre_Core.kee as kee_module
 from Pytre_Core.sql_query.file_parser import FileParser
+from Pytre_Server.app import create_app
 from Pytre_Server.query_catalog import QueryCatalog
-from tests.integration.conftest import TEST_USERNAME
+from tests.integration.conftest import TEST_DB_PASSWORD, TEST_DB_PATH, TEST_USERNAME
+from tests.resources.build_test_keepass import TEST_USER_PASSWORD
 
 pytestmark = pytest.mark.integration
 
@@ -91,6 +95,18 @@ def test_reload_queries_redirects_to_the_list(admin_client):
     response = admin_client.get(response.headers["location"])
     assert "Queries reloaded" in response.text
     assert TEST_QUERY_ID in response.text  # rebuilt from the real folder, not emptied
+
+
+def test_reload_queries_keeps_the_db_pool_size(monkeypatch):
+    """--db-pool-size lives in ServerResources, which a reload hands over to the new ServerState."""
+    monkeypatch.setattr(kee_module, "KEE_FILE", TEST_DB_PATH)
+    client = TestClient(create_app(master_key=TEST_DB_PASSWORD, db_pool_size=7))
+    client.post("/admin/login", data={"username": TEST_USERNAME, "password": TEST_USER_PASSWORD})
+    assert client.app.state.server.resources.db_pool_size == 7
+
+    client.post("/admin/queries/reload")
+
+    assert client.app.state.server.resources.db_pool_size == 7
 
 
 def test_reload_queries_reports_a_failed_reload(admin_client, monkeypatch):

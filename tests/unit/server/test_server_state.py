@@ -13,6 +13,7 @@ import pytest
 from Pytre_Server.server_state import (
     LOGIN_THROTTLE_WINDOW_MINUTES,
     MAX_LOGIN_ATTEMPTS,
+    ServerResources,
     ServerState,
     _DriverEntry,
 )
@@ -160,8 +161,8 @@ def _make_fake_driver_factory(monkeypatch) -> list[Mock]:
     tests/unit/core/test_query_drivers_async.py, not here."""
     created: list[Mock] = []
 
-    async def fake_get_driver(server):
-        driver = Mock()
+    async def fake_get_driver(server, pool_size):
+        driver = Mock(pool_size=pool_size)
         driver.connect = AsyncMock()
         driver.disconnect = AsyncMock()
         driver.execute = AsyncMock()
@@ -193,6 +194,21 @@ async def test_get_driver_entry_connects_and_caches(server_state, monkeypatch):
     assert entry.driver is created[0]
     created[0].connect.assert_awaited_once()
     assert server_state.resources.driver_entries["srv1"] is entry
+
+
+@pytest.mark.unit
+def test_resources_db_pool_size_defaults_to_30():
+    assert ServerResources().db_pool_size == 30
+
+
+@pytest.mark.anyio
+async def test_get_driver_entry_builds_the_driver_with_db_pool_size(monkeypatch):
+    created = _make_fake_driver_factory(monkeypatch)
+    resources = ServerResources(db_pool_size=7)
+
+    await resources._get_driver_entry(_make_server("srv1"))
+
+    assert created[0].pool_size == 7
 
 
 @pytest.mark.anyio

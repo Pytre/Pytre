@@ -28,8 +28,16 @@ def create_parser() -> argparse.ArgumentParser:
 
     parser.add_argument("--host", default="127.0.0.1", help="Address to bind the server to (0.0.0.0 for any)")
     parser.add_argument("--port", type=int, default=8000, help="Port to run the server on (default %(default)s)")
-    parser.add_argument("--chunk-size", type=int, default=2000, help="Rows to stream to clients per NDJSON chunk")
-    parser.add_argument("--max-concurrency-per-user", type=int, default=4, help="Max concurrent requests per user")
+    parser.add_argument("--chunk-size", type=int, default=2000, help="Rows to stream per chunk (default %(default)s)")
+    parser.add_argument(
+        "--db-pool-size", type=int, default=30, help="Max concurrent queries per SQL server (default %(default)s)"
+    )
+    parser.add_argument(
+        "--max-concurrency-per-user",
+        type=int,
+        default=4,
+        help="Max concurrent requests per user (default %(default)s)",
+    )
     parser.add_argument(
         "--heartbeat-secs",
         type=int,
@@ -104,6 +112,7 @@ def start_server(args: argparse.Namespace):
         create_app(
             master_key=master_key,
             chunk_size=args.chunk_size,
+            db_pool_size=args.db_pool_size,
             max_concurrency_per_user=args.max_concurrency_per_user,
             heartbeat_secs=args.heartbeat_secs,
             log_buffer_mb=args.log_buffer_mb,

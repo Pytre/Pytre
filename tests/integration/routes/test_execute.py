@@ -234,17 +234,17 @@ def test_execute_reports_pool_saturated_as_ndjson_error(client, auth_headers, mo
     response has already started (200) by the time this is known, since _run_query may have
     already sent "__ping__" lines while waiting for the query. Must not leak the caller's
     concurrency slot either way (the per-user semaphore must be released, not left locked).
-    The driver itself is monkeypatched, so no real docker connection is attempted - the
-    fastmssql -> AsyncSqlConnectionError translation itself is unit-tested separately in
+    The driver itself is monkeypatched, so no real docker connection is attempted - each driver's
+    translation to AsyncSqlConnectionError is unit-tested separately in
     tests/unit/core/test_query_drivers_async.py."""
     import hashlib
 
-    from Pytre_Core.sql_query.query_drivers_async import AsyncSqlConnectionError, FastMssqlDriver
+    from Pytre_Core.sql_query.query_drivers_async import AsyncSqlConnectionError, PyMssqlDriver
 
     async def _raise_pool_timeout(self, template, params):
         raise AsyncSqlConnectionError("Connection pool timeout - all connections are busy.")
 
-    monkeypatch.setattr(FastMssqlDriver, "execute", _raise_pool_timeout)
+    monkeypatch.setattr(PyMssqlDriver, "execute", _raise_pool_timeout)
 
     template = _get_real_hash(client, auth_headers, TEST_SERVER_ID, TEST_QUERY_ID)
     template_hash = hashlib.sha256(template.encode("utf-8")).hexdigest()
@@ -274,12 +274,12 @@ def test_execute_reports_server_unreachable_as_ndjson_error(client, auth_headers
     as above. The driver itself is monkeypatched, so no real docker connection is attempted."""
     import hashlib
 
-    from Pytre_Core.sql_query.query_drivers_async import AsyncSqlConnectionError, FastMssqlDriver
+    from Pytre_Core.sql_query.query_drivers_async import AsyncSqlConnectionError, PyMssqlDriver
 
     async def _raise_unreachable(self):
         raise AsyncSqlConnectionError("Failed to connect: connection refused.")
 
-    monkeypatch.setattr(FastMssqlDriver, "connect", _raise_unreachable)
+    monkeypatch.setattr(PyMssqlDriver, "connect", _raise_unreachable)
 
     template = _get_real_hash(client, auth_headers, TEST_SERVER_ID, TEST_QUERY_ID)
     template_hash = hashlib.sha256(template.encode("utf-8")).hexdigest()
@@ -353,7 +353,7 @@ def test_execute_rejects_invalid_parameter_value(client, auth_headers):
 def _capture_sent_params(monkeypatch) -> dict:
     """Patches the SQL driver so /execute stops right before the database, capturing the
     SQL parameters it would have sent - no docker container needed."""
-    from Pytre_Core.sql_query.query_drivers_async import AsyncSqlConnectionError, FastMssqlDriver
+    from Pytre_Core.sql_query.query_drivers_async import AsyncSqlConnectionError, PyMssqlDriver
 
     captured = {}
 
@@ -361,7 +361,7 @@ def _capture_sent_params(monkeypatch) -> dict:
         captured.update(params)
         raise AsyncSqlConnectionError("stopped by test")
 
-    monkeypatch.setattr(FastMssqlDriver, "execute", _capture)
+    monkeypatch.setattr(PyMssqlDriver, "execute", _capture)
     return captured
 
 

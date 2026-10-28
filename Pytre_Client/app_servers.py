@@ -44,7 +44,7 @@ class ServersWindow(tk.Toplevel):
 
         self.servers = servers
         self.servers.get_all_servers()
-        self.type_server: tuple[str, ...] = tuple([type.value for type in ServerType])
+        self.type_server: tuple[str, ...] = tuple([type.value for type in ServerType if not type.server_only])
         self.groups: set[str] = set()
 
         self.server: Server | None = None

@@ -290,7 +290,16 @@ class Servers:
 
 class ServerType(Enum):
     mssql = "SQL Server"
+    fastmssql = "SQL Server (fastmssql)"
     postgre = "PostgreSQL"
+
+    @property
+    def server_only(self) -> bool:
+        return self is ServerType.fastmssql
+
+    @property
+    def verifies_certificate(self) -> bool:
+        return self is not ServerType.mssql
 
 
 class Server:
@@ -374,7 +383,7 @@ class Server:
         # modify charset if not set, depending on server type
         if self.charset:
             pass
-        elif self.type == ServerType.mssql.name:
+        elif self.type in (ServerType.mssql.name, ServerType.fastmssql.name):
             self.charset: str = "UTF-8"
         elif self.type == ServerType.postgre.name:
             self.charset: str = "UTF8"

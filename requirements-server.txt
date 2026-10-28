@@ -3,12 +3,13 @@ asyncpg>=0.30.0    # async PostgreSQL driver (Pytre_Server)
 authlib>=1.8       # OpenID Connect client flows (SSO)
 cryptography>=46.0.3
 fastapi>=0.140.0
-fastmssql>=0.7.7   # mssql driver (Pytre_Server)
+fastmssql>=0.7.7   # mssql driver for the "SQL Server (fastmssql)" type (Pytre_Server)
 httpx2>=2.9.1      # pour TestClient (tests de routes)
 jinja2>=3.1.6      # server-rendered admin pages
 keyring>=25.7.0
 pyjwt>=2.10.1
 pykeepass>=4.0.6
+pymssql>=2.3.8     # mssql driver for the "SQL Server" type (Pytre_Server)
 python-multipart>=0.0.20  # required by FastAPI to parse the hash-password form
 uvicorn>=0.51.0
 

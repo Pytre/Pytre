@@ -83,6 +83,15 @@ def test_server_form_apply_to_keeps_the_existing_password_when_blank():
     assert server.password == "changed"
 
 
+@pytest.mark.parametrize("server_type", list(ServerType))
+def test_server_form_apply_to_stores_the_name_of_every_type(server_type):
+    server = Server(Mock())
+
+    _server_form(type=server_type.value).apply_to(server)
+
+    assert server.type == server_type.name
+
+
 def test_server_form_apply_to_falls_back_on_mssql_for_an_unknown_type():
     server = Server(Mock())
     server.type = ServerType.postgre.name

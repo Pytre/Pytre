@@ -221,9 +221,7 @@ async def test_statement_timeout_is_enforced_by_the_server(driver):
 @requires_postgre_docker
 @pytest.mark.anyio
 async def test_saturated_pool_is_a_connection_error():
-    driver = AsyncpgDriver(**_CONNECTION, trust_certificate=True)
-    driver._min_pool_size = 1
-    driver._max_pool_size = 1
+    driver = AsyncpgDriver(**_CONNECTION, trust_certificate=True, pool_size=1)
     driver._acquire_timeout_secs = 0.5
     await driver.connect()
     try:

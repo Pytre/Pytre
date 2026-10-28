@@ -9,7 +9,7 @@ import psycopg2
 import pytest
 
 from Pytre_Core.servers import Server, ServerType
-from Pytre_Core.sql_query.query_drivers import ServerConnectionError, get_connection
+from Pytre_Core.sql_query.query_drivers import APP_ID, ServerConnectionError, get_connection
 
 
 # ================================================================================
@@ -36,6 +36,28 @@ def test_get_connection_mssql_calls_pymssql_connect():
     assert mock_connect.call_args.kwargs["user"] == "sa"
     assert mock_connect.call_args.kwargs["database"] == "db"
     assert mock_connect.call_args.kwargs["read_only"] is True
+
+
+@pytest.mark.unit
+def test_get_connection_fastmssql_falls_back_to_pymssql():
+    """fastmssql is a server-only type: the client connects to such a server with pymssql."""
+    server = Server(Mock())
+    server.type = ServerType.fastmssql.name
+
+    fake_conn = Mock()
+    with patch("Pytre_Core.sql_query.query_drivers.pymssql.connect", return_value=fake_conn):
+        assert get_connection(server) is fake_conn
+
+
+@pytest.mark.unit
+def test_conn_mssql_names_the_client_application():
+    server = Server(Mock())
+    server.type = ServerType.mssql.name
+
+    with patch("Pytre_Core.sql_query.query_drivers.pymssql.connect", return_value=Mock()) as mock_connect:
+        get_connection(server)
+
+    assert mock_connect.call_args.kwargs["appname"] == APP_ID
 
 
 @pytest.mark.unit

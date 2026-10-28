@@ -4,6 +4,7 @@ import psycopg2.extensions
 
 from Pytre_Core.about import APP_NAME, full_version
 from Pytre_Core.servers import ServerType, Server
+from Pytre_Core.sql_query.query_driver_mssql import connect_mssql, error_msg as mssql_error_msg
 
 APP_ID = f"{APP_NAME}_{full_version()}"
 
@@ -22,7 +23,7 @@ class ServerConnectionError(Exception):
 
 
 def get_connection(server: Server) -> Connection:
-    if server.type == ServerType.mssql.name:
+    if server.type in (ServerType.mssql.name, ServerType.fastmssql.name):
         return _conn_mssql(server)
     elif server.type == ServerType.postgre.name:
         return _conn_postgre(server)
@@ -31,41 +32,10 @@ def get_connection(server: Server) -> Connection:
 
 
 def _conn_mssql(server: Server) -> pymssql.Connection:
-    # Standard recommended set for connection properties plus an explicit DATEFORMAT
-    conn_properties = """
-        SET ARITHABORT ON;
-        SET CONCAT_NULL_YIELDS_NULL ON;
-        SET ANSI_NULLS ON;
-        SET ANSI_NULL_DFLT_ON ON;
-        SET ANSI_PADDING ON;
-        SET ANSI_WARNINGS ON;
-        SET CURSOR_CLOSE_ON_COMMIT ON;
-        SET QUOTED_IDENTIFIER ON;
-        SET TEXTSIZE 2147483647;
-        SET DATEFORMAT ymd;
-    """
-
     try:
-        conn: pymssql.Connection = pymssql.connect(
-            server=server.server,
-            host=server.host,
-            user=server.user,
-            password=server.password,
-            database=server.database,
-            timeout=server.timeout,
-            login_timeout=server.login_timeout,
-            charset=server.charset,
-            as_dict=False,
-            port=server.port,
-            read_only=True,
-            appname=APP_ID,
-            conn_properties=conn_properties,
-        )
+        return connect_mssql(server, APP_ID)
     except pymssql._pymssql.OperationalError as err:
-        err_msg = err.args[0][1].decode("utf-8", errors="replace")
-        raise ServerConnectionError(err_msg) from err
-
-    return conn
+        raise ServerConnectionError(mssql_error_msg(err)) from err
 
 
 def _conn_postgre(server: Server) -> psycopg2.extensions.connection:

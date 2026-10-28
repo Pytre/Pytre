@@ -18,6 +18,12 @@ hiddenimports = [
     'asyncpg', 'asyncpg.pgproto.pgproto',
 ]
 
+for pkg in ['pymssql']:
+    tmp_datas, tmp_binaries, tmp_hidden = collect_all(pkg)
+    datas += tmp_datas
+    binaries += tmp_binaries
+    hiddenimports += tmp_hidden
+
 block_cipher = None
 
 a = Analysis(['Pytre_Server/__main__.py'],

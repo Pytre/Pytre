@@ -38,6 +38,7 @@ async def _lifespan(app: FastAPI):
 def create_app(
     master_key: str,
     chunk_size: int = 2000,
+    db_pool_size: int = 30,
     max_concurrency_per_user: int = 4,
     heartbeat_secs: int = 30,
     log_buffer_mb: int = MAX_LOG_SIZE_MB,
@@ -61,7 +62,7 @@ def create_app(
         chunk_size=chunk_size,
         max_concurrency_per_user=max_concurrency_per_user,
         heartbeat_secs=heartbeat_secs,
-        resources=ServerResources(execution_logs=execution_logs, log_buffer=log_buffer),
+        resources=ServerResources(execution_logs=execution_logs, log_buffer=log_buffer, db_pool_size=db_pool_size),
     )
 
     # add middleware (to allow for admin webui timeout on inactivity)

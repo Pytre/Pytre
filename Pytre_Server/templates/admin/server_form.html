@@ -26,7 +26,10 @@
             <label for="type">Type</label>
             <select id="type" name="type">
                 {% for st in server_types %}
-                <option value="{{ st.value }}" {% if server.type == st.name %}selected{% endif %}>{{ st.value }}</option>
+                <option
+                    value="{{ st.value }}" data-verifies-certificate="{{ 'true' if st.verifies_certificate else 'false' }}"
+                    {% if server.type == st.name %}selected{% endif %}
+                >{{ st.value }}</option>
                 {% endfor %}
             </select>
 
@@ -70,8 +73,10 @@
             <label for="trust_server_certificate">Server certificate (skip TLS validation)</label>
             <label class="checkbox-item">
                 <input type="checkbox" id="trust_server_certificate" name="trust_server_certificate" value="1" {% if server.trust_server_certificate %}checked{% endif %} style="margin-top: 4px;">
-                <span id="trust-state-text">{{ "trusted" if server.trust_server_certificate else "untrusted" }}</span>
+                <span id="trust-state-text" style="margin-top: 4px;">{{ "trusted" if server.trust_server_certificate else "untrusted" }}</span>
+                <span id="trust-unsupported" style="margin-top: 4px;" hidden> (not supported by this server type)</span>
             </label>
+            <input type="hidden" id="trust-kept" name="trust_server_certificate" value="1" disabled>
 
             <div class="form-row">
                 <div class="form-col">
@@ -127,6 +132,21 @@
                 trustStateText.textContent = trustCheckbox.checked ? "trusted" : "untrusted";
             }
             trustCheckbox.addEventListener("change", syncTrustState);
+
+            // a disabled checkbox isn't sent: trust-kept sends the saved value instead, for a type that doesn't use it
+            var typeSelect = document.getElementById("type");
+            var trustKept = document.getElementById("trust-kept");
+            var trustUnsupported = document.getElementById("trust-unsupported");
+
+            function updateTrustSupport() {
+                var option = typeSelect.options[typeSelect.selectedIndex];
+                var supported = Boolean(option) && option.dataset.verifiesCertificate === "true";
+                trustCheckbox.disabled = !supported;
+                trustKept.disabled = supported || !trustCheckbox.checked;
+                trustUnsupported.hidden = supported;
+            }
+            typeSelect.addEventListener("change", updateTrustSupport);
+            updateTrustSupport();
 
             var serverForm = document.getElementById("server-form");
 

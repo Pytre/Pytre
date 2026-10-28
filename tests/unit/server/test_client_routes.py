@@ -130,27 +130,30 @@ def test_apply_parameters_raises_400_on_invalid_value():
 # ================================================================================
 
 
-class _FakeRow:
-    def __init__(self, data: dict):
-        self._data = data
-
-    def to_dict(self) -> dict:
-        return self._data
-
-
 class _FakeResult:
     """Minimal stand-in for AsyncSqlResult - just enough for stream_result_ndjson to work.
     Row conversion/serialization and column handling are already thoroughly covered in
-    tests/unit/server/test_result_streaming.py - only "id"/[rows] matters here."""
+    tests/unit/server/test_result_streaming.py - only "id"/[rows] matters here.
+    Records "close" in `events` (shared with the fake use_driver) to check the ordering."""
 
-    def __init__(self, rows: list):
+    def __init__(self, rows: list[tuple], events: list[str] | None = None, fetch_error: Exception | None = None):
         self._rows = rows
+        self._events = events if events is not None else []
+        self._fetch_error = fetch_error
+        self.close_calls = 0
 
     def columns(self) -> list[str]:
         return ["id"]
 
-    def __iter__(self):
-        return iter(self._rows)
+    async def fetch(self, n: int) -> list[tuple]:
+        if self._fetch_error is not None:
+            raise self._fetch_error
+        batch, self._rows = self._rows[:n], self._rows[n:]
+        return batch
+
+    async def close(self) -> None:
+        self.close_calls += 1
+        self._events.append("close")
 
 
 class _FakeDriver:
@@ -164,17 +167,27 @@ class _FakeDriver:
         return await self._execute_impl()
 
 
-def _make_resources(driver: _FakeDriver) -> Mock:
+def _make_resources(
+    driver: _FakeDriver, events: list[str] | None = None, use_driver_error: Exception | None = None
+) -> Mock:
     """Minimal stand-in for ServerResources - _run_query only uses use_driver() and
     execution_logs. Mock() rather than a bespoke class so it type-checks against the
     concrete ServerResources parameter the same way _make_query()/_make_request() already
-    stand in for their own concretely-typed parameters elsewhere in this file."""
+    stand in for their own concretely-typed parameters elsewhere in this file.
+    use_driver() records "enter"/"exit" in `events`, or raises `use_driver_error` like a failing connect."""
     resources = Mock()
     resources.execution_logs = None
+    events = events if events is not None else []
 
     @asynccontextmanager
     async def use_driver(server):
-        yield driver
+        if use_driver_error is not None:
+            raise use_driver_error
+        events.append("enter")
+        try:
+            yield driver
+        finally:
+            events.append("exit")
 
     resources.use_driver = use_driver
     return resources
@@ -217,10 +230,13 @@ async def _collect(chunks) -> list[dict]:
 @pytest.mark.unit
 @pytest.mark.anyio
 async def test_run_query_streams_result_on_success():
-    async def execute_impl():
-        return _FakeResult([_FakeRow({"id": "1"})])
+    events: list[str] = []
+    result = _FakeResult([("1",)], events)
 
-    resources = _make_resources(_FakeDriver(execute_impl))
+    async def execute_impl():
+        return result
+
+    resources = _make_resources(_FakeDriver(execute_impl), events)
     semaphore = asyncio.Semaphore(1)
     await semaphore.acquire()
 
@@ -238,6 +254,39 @@ async def test_run_query_streams_result_on_success():
     )
 
     assert records == [{"__columns__": ["id"]}, {"__row__": ["1"]}]
+    assert events == ["enter", "close", "exit"]  # the driver stays in use until the result is closed
+    assert result.close_calls == 1
+    assert not semaphore.locked()
+
+
+@pytest.mark.unit
+@pytest.mark.anyio
+async def test_run_query_closes_result_when_streaming_fails():
+    events: list[str] = []
+    result = _FakeResult([], events, fetch_error=ValueError("boom"))
+
+    async def execute_impl():
+        return result
+
+    resources = _make_resources(_FakeDriver(execute_impl), events)
+    semaphore = asyncio.Semaphore(1)
+    await semaphore.acquire()
+
+    records = await _collect(
+        _run_query(
+            _make_state(heartbeat_secs=30),
+            resources,
+            _make_request({}),
+            _make_user_ctx(),
+            "template",
+            {},
+            semaphore,
+            _FakeDisconnectRequest(),
+        )
+    )
+
+    assert records == [{"__columns__": ["id"]}, {"__error__": {"type": "ValueError", "message": "boom"}}]
+    assert events == ["enter", "close", "exit"]
     assert not semaphore.locked()
 
 
@@ -302,19 +351,20 @@ async def test_run_query_heartbeat_disabled_when_interval_is_zero():
 @pytest.mark.unit
 @pytest.mark.anyio
 async def test_run_query_detects_client_disconnect_during_execution():
-    """Previously invisible: a client that disconnects while the query is still running used
-    to go completely unnoticed (fastmssql's execute() has no hook point during it). Must stop
-    yielding (no columns/rows ever reached) but still let the query finish in the background
-    rather than abandoning it mid-flight (the pooled connection must come back cleanly)."""
+    """A client disconnecting while the query is still running must stop the yielding (no
+    columns/rows ever reached) but still let the query finish rather than abandoning it
+    mid-flight, then close its result while the driver is still in use."""
     finished = False
+    events: list[str] = []
+    result = _FakeResult([], events)
 
     async def execute_impl():
         nonlocal finished
         await asyncio.sleep(0.2)
         finished = True
-        return _FakeResult([])
+        return result
 
-    resources = _make_resources(_FakeDriver(execute_impl))
+    resources = _make_resources(_FakeDriver(execute_impl), events)
     semaphore = asyncio.Semaphore(1)
     await semaphore.acquire()
 
@@ -334,6 +384,65 @@ async def test_run_query_detects_client_disconnect_during_execution():
     assert records  # at least one ping happened before the disconnect was noticed
     assert all("__ping__" in r for r in records)  # __columns__/rows never reached
     assert finished  # the background task was awaited to completion, not abandoned
+    assert events == ["enter", "close", "exit"]
+    assert not semaphore.locked()
+
+
+@pytest.mark.unit
+@pytest.mark.anyio
+async def test_run_query_disconnect_during_failing_execution_has_nothing_to_close():
+    events: list[str] = []
+
+    async def execute_impl():
+        await asyncio.sleep(0.2)
+        raise AsyncSqlExecutionError("boom")
+
+    resources = _make_resources(_FakeDriver(execute_impl), events)
+    semaphore = asyncio.Semaphore(1)
+    await semaphore.acquire()
+
+    records = await _collect(
+        _run_query(
+            _make_state(heartbeat_secs=0.02),
+            resources,
+            _make_request({}),
+            _make_user_ctx(),
+            "template",
+            {},
+            semaphore,
+            _FakeDisconnectRequest(disconnect_after=1),
+        )
+    )
+
+    assert all("__ping__" in r for r in records)  # the client is gone, the error isn't sent
+    assert events == ["enter", "exit"]
+    assert not semaphore.locked()
+
+
+@pytest.mark.unit
+@pytest.mark.anyio
+async def test_run_query_yields_error_line_when_driver_cannot_connect():
+    async def execute_impl():
+        raise AssertionError("execute() must not be reached")
+
+    resources = _make_resources(_FakeDriver(execute_impl), use_driver_error=AsyncSqlConnectionError("refused"))
+    semaphore = asyncio.Semaphore(1)
+    await semaphore.acquire()
+
+    records = await _collect(
+        _run_query(
+            _make_state(heartbeat_secs=30),
+            resources,
+            _make_request({}),
+            _make_user_ctx(),
+            "template",
+            {},
+            semaphore,
+            _FakeDisconnectRequest(),
+        )
+    )
+
+    assert records == [{"__error__": {"type": "AsyncSqlConnectionError", "message": "Server unavailable: refused"}}]
     assert not semaphore.locked()
 
 
@@ -424,10 +533,12 @@ async def test_run_query_releases_semaphore_when_closed_early():
     """Simulates Starlette calling .aclose() on the generator before it's done (e.g. it
     stops consuming for its own reasons) - the finally must still run via GeneratorExit."""
 
-    async def execute_impl():
-        return _FakeResult([_FakeRow({"id": "1"})])
+    events: list[str] = []
 
-    resources = _make_resources(_FakeDriver(execute_impl))
+    async def execute_impl():
+        return _FakeResult([("1",)], events)
+
+    resources = _make_resources(_FakeDriver(execute_impl), events)
     semaphore = asyncio.Semaphore(1)
     await semaphore.acquire()
 
@@ -444,4 +555,5 @@ async def test_run_query_releases_semaphore_when_closed_early():
     await gen.__anext__()  # consume only the columns chunk
     await gen.aclose()
 
+    assert events == ["enter", "close", "exit"]
     assert not semaphore.locked()

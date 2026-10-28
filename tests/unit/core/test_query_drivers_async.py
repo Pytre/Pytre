@@ -21,8 +21,9 @@ from Pytre_Core.sql_query.query_drivers_async import (
     AsyncSqlExecutionError,
     FastMssqlDriver,
     _AsyncpgResult,
-    _AsyncpgRow,
+    _FastMssqlResult,
     get_driver,
+    _json_safe,
     _to_positional_style,
 )
 
@@ -191,6 +192,83 @@ async def test_execute_strips_trailing_semicolon_before_appending_recompile():
     sql, _params = fake_connection.query.call_args[0]
     assert ";\nOPTION (RECOMPILE);" not in sql
     assert sql.rstrip().endswith("OPTION (RECOMPILE);")
+
+
+@pytest.mark.anyio
+async def test_execute_wraps_the_query_stream_in_a_result():
+    stream = _FakeQueryStream(["n"], [(1,)])
+    fake_connection = Mock()
+    fake_connection.query = AsyncMock(return_value=stream)
+
+    with patch("Pytre_Core.sql_query.query_drivers_async.fastmssql.Connection", return_value=fake_connection):
+        driver = FastMssqlDriver(host="h", port=1433, database="db", username="u", password="p")
+        result = await driver.execute("SELECT 1 AS n", {})
+
+    assert isinstance(result, _FastMssqlResult)
+    assert result.columns() == ["n"]
+    assert await result.fetch(10) == [(1,)]
+
+
+# ================================================================================
+# _FastMssqlResult - fakes standing in for fastmssql's QueryStream / FastRow
+# ================================================================================
+
+
+class _FakeFastRow:
+    def __init__(self, values: tuple) -> None:
+        self._values = values
+
+    def values(self) -> list:
+        return list(self._values)
+
+
+class _FakeQueryStream:
+    """fetch(n) pops the next n rows, like QueryStream; columns() raises ValueError without rows."""
+
+    def __init__(self, columns: list[str] | None, rows: list[tuple]) -> None:
+        self._columns = columns
+        self._rows = [_FakeFastRow(row) for row in rows]
+        self.fetch_sizes: list[int] = []
+
+    def columns(self) -> list[str]:
+        if self._columns is None:
+            raise ValueError("No column information available")
+        return self._columns
+
+    def fetch(self, n: int) -> list[_FakeFastRow]:
+        self.fetch_sizes.append(n)
+        batch, self._rows = self._rows[:n], self._rows[n:]
+        return batch
+
+
+@pytest.mark.unit
+def test_fastmssql_result_columns():
+    assert _FastMssqlResult(_FakeQueryStream(["a", "b"], [])).columns() == ["a", "b"]  # type: ignore
+
+
+@pytest.mark.unit
+def test_fastmssql_result_columns_falls_back_to_empty_when_no_row_is_returned():
+    """fastmssql's columns() raises ValueError when the result has 0 rows (confirmed against the real driver)."""
+    assert _FastMssqlResult(_FakeQueryStream(None, [])).columns() == []  # type: ignore
+
+
+@pytest.mark.anyio
+async def test_fastmssql_result_fetches_tuples_batch_by_batch():
+    stream = _FakeQueryStream(["id", "label"], [(i, f"r{i}") for i in range(5)])
+    result = _FastMssqlResult(stream)  # type: ignore
+
+    batches = [await result.fetch(2) for _ in range(4)]
+
+    assert batches == [[(0, "r0"), (1, "r1")], [(2, "r2"), (3, "r3")], [(4, "r4")], []]
+    assert stream.fetch_sizes == [2, 2, 2, 2]
+
+
+@pytest.mark.anyio
+async def test_fastmssql_result_close_can_be_called_several_times():
+    result = _FastMssqlResult(_FakeQueryStream(["id"], [(1,)]))  # type: ignore
+
+    await result.close()
+    await result.close()
 
 
 # ================================================================================
@@ -544,17 +622,17 @@ async def test_pg_execute_returns_columns_even_without_rows():
     result = await driver.execute("SELECT a, b FROM t WHERE false", {})
 
     assert result.columns() == ["a", "b"]
-    assert list(result) == []
+    assert await result.fetch(10) == []
 
 
 @pytest.mark.anyio
-async def test_pg_execute_returns_rows_as_dicts():
+async def test_pg_execute_returns_rows_as_tuples():
     statement = _FakeStatement(columns=["id", "label"], records=[_FakeRecord(id=1, label="x"), _FakeRecord(id=2, label="y")])
     driver = _make_pg_driver(statement)
 
     result = await driver.execute("SELECT id, label FROM t", {})
 
-    assert [row.to_dict() for row in result] == [{"id": 1, "label": "x"}, {"id": 2, "label": "y"}]
+    assert await result.fetch(10) == [(1, "x"), (2, "y")]
 
 
 @pytest.mark.anyio
@@ -650,63 +728,85 @@ def test_pg_coerce_args_reports_the_invalid_parameter():
 
 
 @pytest.mark.unit
-def test_pg_row_keeps_values_encode_row_value_handles():
-    now = datetime(2024, 1, 2, 3, 4, 5)
-    record = _FakeRecord(i=1, s="x", b=True, n=None, f=1.5, dec=Decimal("1.50"), ts=now, d=date(2024, 1, 2))
-
-    assert _AsyncpgRow(record).to_dict() == dict(record)  # type: ignore
-
-
-@pytest.mark.unit
-def test_pg_row_makes_json_unsafe_values_strings():
-    record = _FakeRecord(
-        u=uuid.UUID("9836f28d-cbdb-4d34-95d2-d4110f4d37ff"),
-        t=time(13, 5, 9),
-        iv=timedelta(days=1),
-        ip=ipaddress.ip_address("10.0.0.1"),
-        raw=b"\xde\xad",
-    )
-
-    row = _AsyncpgRow(record).to_dict()  # type: ignore
-
-    assert row == {
-        "u": "9836f28d-cbdb-4d34-95d2-d4110f4d37ff",
-        "t": "13:05:09",
-        "iv": "1 day, 0:00:00",
-        "ip": "10.0.0.1",
-        "raw": "\\xdead",
-    }
-
-
-@pytest.mark.unit
-def test_pg_row_converts_array_elements_which_encode_row_value_would_not_reach():
-    """encode_row_value only handles top-level values - a Decimal/date inside an array would break json.dumps."""
-    record = _FakeRecord(arr=[Decimal("1.5"), Decimal("2")], dates=[date(2024, 1, 2)], nums=[1, 2], nested=[[uuid.UUID(int=1)]])
-
-    row = _AsyncpgRow(record).to_dict()  # type: ignore
-
-    assert row["arr"] == ["1.5", "2"]
-    assert row["dates"] == ["2024-01-02"]
-    assert row["nums"] == [1, 2]
-    assert row["nested"] == [["00000000-0000-0000-0000-000000000001"]]
-
-
-@pytest.mark.unit
-def test_pg_row_is_always_json_serializable_after_encode_row_value():
-    record = _FakeRecord(
-        u=uuid.uuid4(), t=time(1, 2, 3), iv=timedelta(hours=1), ip=ipaddress.ip_address("::1"), raw=b"\x00",
-        dec=Decimal("3.14"), ts=datetime(2024, 1, 2), d=date(2024, 1, 2), arr=[Decimal("1"), None], none=None,
-    )
-
-    row = _AsyncpgRow(record).to_dict()  # type: ignore
-
-    json.dumps({key: encode_row_value(value) for key, value in row.items()})  # must not raise
-
-
-@pytest.mark.unit
 def test_pg_result_columns_returns_a_copy():
     result = _AsyncpgResult(["a"], [])
 
     result.columns().append("b")
 
     assert result.columns() == ["a"]
+
+
+@pytest.mark.anyio
+async def test_pg_result_fetches_tuples_batch_by_batch():
+    records = [_FakeRecord(id=i, label=f"r{i}") for i in range(5)]
+    result = _AsyncpgResult(["id", "label"], records)  # type: ignore
+
+    batches = [await result.fetch(2) for _ in range(4)]
+
+    assert batches == [[(0, "r0"), (1, "r1")], [(2, "r2"), (3, "r3")], [(4, "r4")], []]
+
+
+@pytest.mark.anyio
+async def test_pg_result_makes_values_json_safe():
+    record = _FakeRecord(u=uuid.UUID(int=1), raw=b"\xde\xad", n=1)
+    result = _AsyncpgResult(["u", "raw", "n"], [record])  # type: ignore
+
+    assert await result.fetch(10) == [("00000000-0000-0000-0000-000000000001", "\\xdead", 1)]
+
+
+@pytest.mark.anyio
+async def test_pg_result_close_releases_records_and_can_be_called_several_times():
+    result = _AsyncpgResult(["id"], [_FakeRecord(id=1), _FakeRecord(id=2)])  # type: ignore
+
+    await result.close()
+    await result.close()
+
+    assert await result.fetch(10) == []
+
+
+# ================================================================================
+# _json_safe
+# ================================================================================
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "value",
+    [1, "x", True, None, 1.5, Decimal("1.50"), datetime(2024, 1, 2, 3, 4, 5), date(2024, 1, 2)],
+)
+def test_json_safe_keeps_values_encode_row_value_handles(value):
+    assert _json_safe(value) is value
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        (uuid.UUID("9836f28d-cbdb-4d34-95d2-d4110f4d37ff"), "9836f28d-cbdb-4d34-95d2-d4110f4d37ff"),
+        (time(13, 5, 9), "13:05:09"),
+        (timedelta(days=1), "1 day, 0:00:00"),
+        (ipaddress.ip_address("10.0.0.1"), "10.0.0.1"),
+        (b"\xde\xad", "\\xdead"),
+    ],
+)
+def test_json_safe_makes_json_unsafe_values_strings(value, expected):
+    assert _json_safe(value) == expected
+
+
+@pytest.mark.unit
+def test_json_safe_converts_array_elements_which_encode_row_value_would_not_reach():
+    """encode_row_value only handles top-level values - a Decimal/date inside an array would break json.dumps."""
+    assert _json_safe([Decimal("1.5"), Decimal("2")]) == ["1.5", "2"]
+    assert _json_safe([date(2024, 1, 2)]) == ["2024-01-02"]
+    assert _json_safe([1, 2]) == [1, 2]
+    assert _json_safe([[uuid.UUID(int=1)]]) == [["00000000-0000-0000-0000-000000000001"]]
+
+
+@pytest.mark.unit
+def test_json_safe_values_are_always_json_serializable_after_encode_row_value():
+    values = [
+        uuid.uuid4(), time(1, 2, 3), timedelta(hours=1), ipaddress.ip_address("::1"), b"\x00",
+        Decimal("3.14"), datetime(2024, 1, 2), date(2024, 1, 2), [Decimal("1"), None], None,
+    ]
+
+    json.dumps([encode_row_value(_json_safe(value)) for value in values])  # must not raise

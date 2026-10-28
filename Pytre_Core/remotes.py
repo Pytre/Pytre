@@ -768,6 +768,8 @@ class RemoteServer:
                 continue
 
             record = json.loads(line)
+            if "__ping__" in record:
+                continue
             self._raise_if_error(record)
 
             yield tuple(decode_row_value(v) for v in record["__row__"])

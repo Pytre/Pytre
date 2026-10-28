@@ -3,12 +3,12 @@ Integration tests characterizing event loop responsiveness with fastmssql, indep
 of how Pytre_Server/app.py actually copes with it today.
 
 Confirms: await driver.execute(...) stays responsive on its own (fastmssql's PyO3
-binding yields control during the network wait), but the subsequent `for row in
-result` iteration has no await point (QueryStream is sync-only) and starves the
-loop for its whole duration. Wrapping that iteration in loop.run_in_executor() is
+binding yields control during the network wait), but the subsequent row conversion
+has no await point (result.fetch() wraps the sync-only QueryStream.fetch()) and starves
+the loop for its whole duration. Running that conversion in loop.run_in_executor() is
 one way to restore responsiveness (tested below) - but it is not what /execute
-actually does: it streams NDJSON in chunks instead (Pytre_Server/app.py's
-_stream_result_ndjson), where the chunk boundaries themselves provide the yield points,
+actually does: it streams NDJSON in chunks instead (Pytre_Server/result_streaming.py's
+stream_result_ndjson), where the chunk boundaries themselves provide the yield points,
 with no executor involved.
 
 Requires the local mssql-test docker container (see tests/resources/build_test_keepass.py for
@@ -29,6 +29,7 @@ pytestmark = pytest.mark.integration
 _HEARTBEAT_INTERVAL = 0.01
 
 # No persisted table needed - TOP bounds the synthetic cross join to ~500 000 rows.
+_BIG_QUERY_ROWS = 500_000
 _BIG_QUERY = """
 SELECT TOP (500000) ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS n
 FROM sys.all_columns a CROSS JOIN sys.all_columns b
@@ -73,11 +74,10 @@ def _max_gap_in_window(timestamps: list[float], start: float, end: float) -> flo
     return max(b - a for a, b in zip(edges, edges[1:]))
 
 
-async def _to_list_sync(result) -> list:
-    """Wraps the raw synchronous iteration in a coroutine so it can be passed to
-    _measure() - it still blocks the loop for its whole duration, there is no
-    await point inside the for loop itself."""
-    return [row.to_dict() for row in result]
+async def _fetch_all(result) -> list:
+    """Fetches every row in one call - despite being a coroutine, it blocks the loop
+    for its whole duration, there is no await point inside the conversion itself."""
+    return await result.fetch(_BIG_QUERY_ROWS + 1)
 
 
 async def _measure(coro_awaitable) -> tuple[list, float, float]:
@@ -100,8 +100,8 @@ async def _measure(coro_awaitable) -> tuple[list, float, float]:
 @pytest.mark.anyio
 async def test_query_call_does_not_block_event_loop(driver):
     """await driver.execute(...) itself must stay responsive - fastmssql's PyO3 binding
-    is expected to release control during the network wait, unlike the row iteration
-    below (see test_raw_iteration_blocks_event_loop)."""
+    is expected to release control during the network wait, unlike the row conversion
+    below (see test_raw_fetch_blocks_event_loop)."""
     _result, elapsed, max_gap = await _measure(driver.execute(_BIG_QUERY, {}))
 
     print(f"\nquery() elapsed: {elapsed:.3f}s, max heartbeat gap: {max_gap:.3f}s")
@@ -114,38 +114,38 @@ async def test_query_call_does_not_block_event_loop(driver):
 
 @requires_docker
 @pytest.mark.anyio
-async def test_raw_iteration_blocks_event_loop(driver):
-    """Characterization test: `for row in result` has no await point (QueryStream is
+async def test_raw_fetch_blocks_event_loop(driver):
+    """Characterization test: result.fetch() has no await point (QueryStream is
     sync-only), so it starves the loop for its whole duration. If this ever starts
-    failing because fastmssql grows a real async iterator, that's good news - the
-    chunked streaming in Pytre_Server/app.py's _stream_result_ndjson (and the executor-based
-    alternative characterized below) would no longer be needed."""
+    failing because fastmssql grows a real async fetch, that's good news - the
+    chunked streaming in Pytre_Server/result_streaming.py's stream_result_ndjson (and the
+    executor-based alternative characterized below) would no longer be needed."""
     result = await driver.execute(_BIG_QUERY, {})
 
-    rows, elapsed, max_gap = await _measure(_to_list_sync(result))
+    rows, elapsed, max_gap = await _measure(_fetch_all(result))
 
-    assert len(rows) == 500_000
-    print(f"\nraw iteration elapsed: {elapsed:.3f}s, max heartbeat gap: {max_gap:.3f}s")
+    assert len(rows) == _BIG_QUERY_ROWS
+    print(f"\nraw fetch elapsed: {elapsed:.3f}s, max heartbeat gap: {max_gap:.3f}s")
     assert max_gap > elapsed * 0.9  # essentially the whole window, i.e. fully blocked
 
 
 @requires_docker
 @pytest.mark.anyio
-async def test_iteration_wrapped_in_executor_does_not_block_event_loop(driver):
+async def test_fetch_wrapped_in_executor_does_not_block_event_loop(driver):
     """Characterization test, not a regression test tied to /execute's current
-    implementation: wrapping row materialization in loop.run_in_executor() is one way
-    to keep the event loop responsive while iterating a large result. Pytre_Server/app.py's
-    /execute route actually uses a different technique (chunked NDJSON streaming via
-    _stream_result_ndjson, where each yield between chunks hands control back to the loop) -
-    this test documents that the executor approach also works, as a lower-level fact
-    about fastmssql/asyncio, independent of which technique /execute happens to use."""
+    implementation: running row conversion in loop.run_in_executor() is one way
+    to keep the event loop responsive while reading a large result. The /execute route
+    actually uses a different technique (chunked NDJSON streaming via stream_result_ndjson,
+    where each yield between chunks hands control back to the loop) - this test documents
+    that the executor approach also works, as a lower-level fact about fastmssql/asyncio,
+    independent of which technique /execute happens to use."""
     result = await driver.execute(_BIG_QUERY, {})
     loop = asyncio.get_running_loop()
 
-    rows, elapsed, max_gap = await _measure(loop.run_in_executor(None, lambda: [row.to_dict() for row in result]))
+    rows, elapsed, max_gap = await _measure(loop.run_in_executor(None, lambda: asyncio.run(_fetch_all(result))))
 
-    assert len(rows) == 500_000
-    print(f"\nwrapped iteration elapsed: {elapsed:.3f}s, max heartbeat gap: {max_gap:.3f}s")
+    assert len(rows) == _BIG_QUERY_ROWS
+    print(f"\nwrapped fetch elapsed: {elapsed:.3f}s, max heartbeat gap: {max_gap:.3f}s")
     # Relative to elapsed rather than a fixed multiple of the heartbeat interval - absolute
     # thread-scheduling jitter grows under system load, but the fix keeps the loop responsive
     # for well under half the window, vs. ~the whole window for the unwrapped raw case above.

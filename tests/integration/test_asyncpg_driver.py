@@ -46,7 +46,11 @@ async def driver():
 
 async def _rows(driver: AsyncpgDriver, template: str, params: dict | None = None) -> list[dict]:
     result = await driver.execute(template, params or {})
-    return [row.to_dict() for row in result]
+    try:
+        rows = await result.fetch(1000)
+        return [dict(zip(result.columns(), row)) for row in rows]
+    finally:
+        await result.close()
 
 
 # ================================================================================
@@ -156,7 +160,8 @@ async def test_columns_are_available_without_any_row(driver):
     result = await driver.execute("SELECT 1 AS a, 'x' AS b WHERE false", {})
 
     assert result.columns() == ["a", "b"]
-    assert list(result) == []
+    assert await result.fetch(10) == []
+    await result.close()
 
 
 @requires_postgre_docker

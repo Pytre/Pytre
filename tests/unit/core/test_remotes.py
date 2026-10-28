@@ -2037,6 +2037,21 @@ def test_execute_yields_columns_and_rows(remote_server, monkeypatch):
 
 
 @pytest.mark.unit
+def test_execute_skips_pings_before_columns_and_between_rows(remote_server, monkeypatch):
+    """The server sends pings while the query executes, and while it waits for the next rows."""
+    _mock_health_check_ok(monkeypatch)
+    ping = {"__ping__": True}
+    lines = _ndjson_lines(
+        ping, ping, {"__columns__": ["id"]}, ping, {"__row__": ["1"]}, ping, ping, {"__row__": ["2"]}, ping
+    )
+    monkeypatch.setattr(httpx2, "stream", lambda *a, **k: _FakeStreamContext(_FakeStreamResponse(lines)))
+
+    with remote_server.execute("Q1", "hash1", DisplayFormat(), {}) as rows:
+        assert [col[0] for col in rows.description] == ["id"]
+        assert list(rows) == [("1",), ("2",)]
+
+
+@pytest.mark.unit
 def test_execute_decodes_wrapped_datetime_date_and_decimal(remote_server, monkeypatch):
     """Mirrors Pytre_Server's row encoding - the client must reconstruct real Python types
     so its own SqlTypeConverter settings apply."""

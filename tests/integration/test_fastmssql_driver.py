@@ -39,4 +39,6 @@ async def test_query_with_named_params(driver):
     """execute() takes a %(name)s-style template + dict, like the sync driver - it converts to
     fastmssql's positional @P1 style itself."""
     result = await driver.execute("SELECT %(@ID)s AS id", {"@ID": 7})
-    assert list(result)[0]["id"] == 7
+    assert result.columns() == ["id"]
+    assert await result.fetch(10) == [(7,)]
+    await result.close()

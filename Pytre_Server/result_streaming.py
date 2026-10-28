@@ -1,3 +1,4 @@
+import asyncio
 import json
 from collections.abc import AsyncGenerator
 from dataclasses import replace
@@ -16,50 +17,56 @@ class DisconnectAware(Protocol):
     async def is_disconnected(self) -> bool: ...
 
 
+class ClientDisconnected(Exception):
+    """Raised by pings_until_done() when the client went away while waiting."""
+
+
 async def stream_result_ndjson(
     result: AsyncSqlResult,
     http_request: DisconnectAware,
     chunk_size: int,
+    heartbeat_secs: int,
     execution_logs: ServerDriven | None,
     log_entry: ExecutionLogEntry,
 ) -> AsyncGenerator[str]:
-    """Serializes rows in chunks to keep peak memory at O(chunk_size).
-    Iterating `result` is still synchronous (no await point in QueryStream),
-    but yield hands control back between chunks.
+    """Streams `result` as NDJSON: a "__columns__" line, then "__row__" lines, fetching and sending `chunk_size`
+    rows at a time. Waiting for the next rows can take some time so pings are sent meanwhile.
 
-    A row failing to convert/serialize (e.g. ConversionError) is reported as a final "__error__" line.
-    The client distinguishes it from a normal row by that top-level key.
+    A failing fetch or a row failing to convert/serialize are reported as a final "__error__" line.
     Already-serialized rows are flushed first, nothing successfully read is thrown away.
 
-    Stops early if the client disconnects (checked once per chunk, not per row - fastmssql
-    exposes no way to cancel the underlying SQL Server query, so this only stops Pytre_Server
-    from doing further useless work, it doesn't free the connection any sooner)."""
+    Stops early if the client disconnects (checked once per chunk, and while waiting for one). A fetch still
+    running is then cancelled. Closing `result` has to be handled by the caller."""
 
-    try:
-        columns = tuple(result.columns())
-    except ValueError:
-        columns = tuple()  # fastmssql can't tell the column names if no line is returned
-
+    columns = tuple(result.columns())
     yield json.dumps({"__columns__": columns}) + "\n"
 
     json_lines: list[str] = []
     nb_rows = 0
     try:
-        for row in result:
-            row_dict = row.to_dict()
-            row_values = tuple(encode_row_value(row_dict[col]) for col in columns)
+        while True:
+            fetch_task = asyncio.create_task(result.fetch(chunk_size))
+            try:
+                async for ping_line in pings(fetch_task, http_request, heartbeat_secs):
+                    yield ping_line
+            except ClientDisconnected:
+                fetch_task.cancel()
+                await asyncio.gather(fetch_task, return_exceptions=True)
+                return
 
-            line = json.dumps({"__row__": row_values})
-            json_lines.append(line)
-            nb_rows += 1
+            rows = fetch_task.result()
+            if not rows:
+                break
 
-            if len(json_lines) >= chunk_size:
-                yield "\n".join(json_lines) + "\n"
-                json_lines = []
-                if await http_request.is_disconnected():
-                    return
-        if json_lines:
+            for row in rows:
+                json_lines.append(json.dumps({"__row__": tuple(encode_row_value(value) for value in row)}))
+                nb_rows += 1
+
             yield "\n".join(json_lines) + "\n"
+            json_lines = []
+
+            if await http_request.is_disconnected():
+                return
     except Exception as e:
         if json_lines:
             yield "\n".join(json_lines) + "\n"
@@ -69,3 +76,23 @@ async def stream_result_ndjson(
     if execution_logs is not None:
         duration_secs = int((datetime.now() - log_entry.start).total_seconds())
         execution_logs.log_execution(replace(log_entry, duration_secs=duration_secs, nb_rows=nb_rows))
+
+
+async def pings(task: asyncio.Task, http_request: DisconnectAware, heartbeat_secs: int) -> AsyncGenerator[str]:
+    """Prevent network devices to cut an idle connection after a few minutes by yielding a ping NDJSON line
+    every `heartbeat_secs` (0 to disable) while waiting for `task` to finish.
+    Raises ClientDisconnected if the client disconnected."""
+
+    if heartbeat_secs <= 0:
+        await asyncio.wait({task})
+        return
+
+    while True:
+        done, _pending = await asyncio.wait({task}, timeout=heartbeat_secs)
+
+        if task in done:
+            return
+        if await http_request.is_disconnected():
+            raise ClientDisconnected
+
+        yield json.dumps({"__ping__": True}) + "\n"

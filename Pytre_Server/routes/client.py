@@ -19,11 +19,11 @@ from Pytre_Core.user_prefs import DisplayFormat
 from Pytre_Core.utils import log as _log
 from Pytre_Core.sql_query.loader import build_queries_from_parsers, filter_queries
 from Pytre_Core.sql_query.query import Query
-from Pytre_Core.sql_query.query_drivers_async import AsyncSqlConnectionError, AsyncSqlExecutionError, AsyncSqlResult
+from Pytre_Core.sql_query.query_drivers_async import AsyncSqlConnectionError, AsyncSqlExecutionError
 
 from Pytre_Server.auth_token import create_token, decode_token, TokenType
 from Pytre_Server.oidc import OidcReverifyError, verify_still_active
-from Pytre_Server.result_streaming import DisconnectAware, stream_result_ndjson
+from Pytre_Server.result_streaming import ClientDisconnected, DisconnectAware, pings, stream_result_ndjson
 from Pytre_Server.server_state import ServerResources, ServerState, get_server_state
 from Pytre_Server.routes.client_sso import router as client_sso_router
 
@@ -369,78 +369,65 @@ async def _run_query(
     semaphore: asyncio.Semaphore,
     http_request: DisconnectAware,
 ) -> AsyncGenerator[str]:
-    """Executes the query on the server's shared, pooled driver, sending a `{"__ping__": true}` NDJSON
-    line every state.heartbeat_secs while it's still running (0 disables), then streams the NDJSON
-    result (_stream_result_ndjson). Releases `semaphore` once done, whichever way this ends.
+    """Executes the query on the server's shared driver, then streams its NDJSON result.
+    While the database executes the query and next rows are produced ping lines are sent every
+    state.heartbeat_secs. The driver stays in use until the result is closed.
+    Releases `semaphore` once done, whichever way this ends.
 
-    The query doesn't stream incrementally - the whole result is materialized before returning, so the
-    HTTP connection to the client is completely silent for the entire query duration. Some network devices
-    (NAT/firewall/proxy) cut an idle connection after a few minutes of silence even though both sides are
-    fine - the ping keeps bytes flowing on it regardless of how long the query takes.
-
-    Also lets the server notice a client disconnecting during query execution. Can't abort the SQL
-    Server-side query either way (driver limitation) - the background task is still awaited to completion
-    so the pooled connection is returned properly. Its result is just discarded."""
+    A client disconnecting during the execution can't interrupt it: the execution is still awaited so its
+    result is closed properly, then discarded."""
 
     query_id = request.query_id
     server_id = request.server_id
     username = user_ctx.user.username
     server = state.app_ctx.servers.servers_dict[request.server_id]
 
-    async def execute() -> tuple[AsyncSqlResult, datetime]:
-        async with resources.use_driver(server) as driver:
-            start_time = datetime.now()
-            return await driver.execute(template, params), start_time
-
     try:
-        task = asyncio.create_task(execute())
-        try:
-            # emit an heartbeat while waiting for query to finish execution
-            if state.heartbeat_secs > 0:
-                while True:
-                    done, _pending = await asyncio.wait({task}, timeout=state.heartbeat_secs)
-                    if task in done:
-                        break
-                    if await http_request.is_disconnected():
-                        log(
-                            f"User '{username}' disconnected while query '{query_id}' on server '{server_id}' "
-                            "was still executing.",
-                            logging.INFO,
-                        )
-                        await asyncio.gather(task, return_exceptions=True)
-                        return
-                    yield json.dumps({"__ping__": True}) + "\n"
-            # retrieve result generator and start_time
-            result, start_time = await task
-        except AsyncSqlConnectionError as e:
-            log(f"Server unavailable on server '{server_id}' (user {username}) : {e}", logging.WARNING)
-            yield json.dumps({"__error__": {"type": type(e).__name__, "message": f"Server unavailable: {e}"}}) + "\n"
-            return
-        except AsyncSqlExecutionError as e:
-            msg = f"SQL error for query '{query_id}' on server '{server_id}' (user {username}): {e}"
-            log(msg, logging.ERROR)
-            yield json.dumps({"__error__": {"type": type(e).__name__, "message": f"SQL error: {e}"}}) + "\n"
-            return
-        except Exception as e:
-            msg = f"Unexpected error for query '{query_id}' on server '{server_id}' (user {username}): "
-            log(f"{msg} {type(e).__name__}: {e}\n{traceback.format_exc()}", logging.ERROR)
-            yield json.dumps({"__error__": {"type": type(e).__name__, "message": f"Unexpected error: {e}"}}) + "\n"
-            return
+        async with resources.use_driver(server) as driver:
+            # execute the query and emit an heartbeat while waiting
+            start_time = datetime.now()
+            task = asyncio.create_task(driver.execute(template, params))
+            try:
+                async for ping_line in pings(task, http_request, state.heartbeat_secs):
+                    yield ping_line
+            except ClientDisconnected:
+                msg = f"User '{username}' disconnected while query '{query_id}' on '{server_id}' was still executing."
+                log(msg, logging.INFO)
+                outcome = (await asyncio.gather(task, return_exceptions=True))[0]
+                if not isinstance(outcome, BaseException):
+                    await outcome.close()
+                return
+            result = await task
 
-        # create log_entry
-        log_entry = ExecutionLogEntry(
-            server_id=server_id,
-            user_id=username,
-            user_name=user_ctx.user.title,
-            query_id=query_id,
-            start=start_time,
-            parameters=request.display_parameters,
-        )
+            # prepare a log_entry
+            log_entry = ExecutionLogEntry(
+                server_id=server_id,
+                user_id=username,
+                user_name=user_ctx.user.title,
+                query_id=query_id,
+                start=start_time,
+                parameters=request.display_parameters,
+            )
 
-        # stream query result
-        async for chunk in stream_result_ndjson(
-            result, http_request, state.chunk_size, resources.execution_logs, log_entry
-        ):
-            yield chunk
+            # stream result
+            try:
+                async for chunk in stream_result_ndjson(
+                    result, http_request, state.chunk_size, state.heartbeat_secs, resources.execution_logs, log_entry
+                ):
+                    yield chunk
+            finally:
+                await result.close()
+
+    except AsyncSqlConnectionError as e:
+        log(f"Server unavailable on server '{server_id}' (user {username}) : {e}", logging.WARNING)
+        yield json.dumps({"__error__": {"type": type(e).__name__, "message": f"Server unavailable: {e}"}}) + "\n"
+    except AsyncSqlExecutionError as e:
+        msg = f"SQL error for query '{query_id}' on '{server_id}' (user {username}): {e}"
+        log(msg, logging.ERROR)
+        yield json.dumps({"__error__": {"type": type(e).__name__, "message": f"SQL error: {e}"}}) + "\n"
+    except Exception as e:
+        msg = f"Unexpected error for query '{query_id}' on '{server_id}' (user {username}): "
+        log(f"{msg} {type(e).__name__}: {e}\n{traceback.format_exc()}", logging.ERROR)
+        yield json.dumps({"__error__": {"type": type(e).__name__, "message": f"Unexpected error: {e}"}}) + "\n"
     finally:
         semaphore.release()

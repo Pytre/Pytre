@@ -4,7 +4,7 @@ plus get_driver() to pick the right driver for a Server.type"""
 import logging
 import re
 import uuid
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, cast, Protocol
@@ -46,18 +46,14 @@ class AsyncSqlConnectionError(Exception):
     """Raised when a driver fails to connect, or loses its connection mid-query."""
 
 
-class AsyncSqlRow(Protocol):
-    """A single row from a SELECT query result."""
-
-    def to_dict(self) -> dict[str, Any]: ...
-
-
 class AsyncSqlResult(Protocol):
-    """Result from SELECT query. Rows expose to_dict() rather than a full Mapping interface ;
-    fastmssql's FastRow has no .keys()/.items(), only to_dict()/get()/get_by_index()/values()."""
+    """Result from a SELECT query, read batch by batch with fetch(). Keeps what reading needs (connection,
+    cursor...) until close(), which must always be called - it can be called several times, and while a
+    fetch() is still running."""
 
-    def __iter__(self) -> Iterator[AsyncSqlRow]: ...
     def columns(self) -> list[str]: ...
+    async def fetch(self, n: int) -> list[tuple[Any, ...]]: ...
+    async def close(self) -> None: ...
 
 
 class AsyncSqlDriver(Protocol):
@@ -75,8 +71,8 @@ class AsyncSqlDriver(Protocol):
         ...
 
     async def execute(self, template: str, params: dict[str, Any]) -> AsyncSqlResult:
-        """Runs a query template with %(name)s placeholders, filled from `params`. Returns the whole
-        result, loaded in memory."""
+        """Runs a query template with %(name)s placeholders, filled from `params`.
+        Returns the result to be read with fetch() then close()."""
         ...
 
 
@@ -140,8 +136,7 @@ class FastMssqlDriver:
         sql = self._conn_properties + positional_template.rstrip().rstrip(";") + self._recompile_option
 
         try:
-            # fastmssql's stub declares async iteration (__anext__) but is only iterable synchronously
-            return cast(AsyncSqlResult, await self._connection.query(sql, params_lst))
+            return _FastMssqlResult(await self._connection.query(sql, params_lst))
         except fastmssql.SqlConnectionError as e:
             raise AsyncSqlConnectionError(str(e)) from e
         except fastmssql.SqlError as e:
@@ -180,6 +175,26 @@ class FastMssqlDriver:
                 target = (hostname, resolved_port)
 
         return target
+
+
+class _FastMssqlResult:
+    """fastmssql loaded every row before query() returns, and its pooled connection is already
+    released - fetch() only converts rows batch by batch."""
+
+    def __init__(self, stream: fastmssql.QueryStream) -> None:
+        self._stream: fastmssql.QueryStream = stream
+
+    def columns(self) -> list[str]:
+        try:
+            return self._stream.columns()
+        except ValueError:
+            return []  # fastmssql can't tell the column names if no line is returned
+
+    async def fetch(self, n: int) -> list[tuple[Any, ...]]:
+        return [tuple(row.values()) for row in self._stream.fetch(n)]
+
+    async def close(self) -> None:
+        pass
 
 
 # ------------------------------------------------------------------------------------------
@@ -324,43 +339,45 @@ class AsyncpgDriver:
 
 
 class _AsyncpgResult:
-    def __init__(self, columns: list[str], records: list[asyncpg.Record]) -> None:
-        self._columns = columns
-        self._records = records
+    """Every record is loaded by execute(), fetch() returns them batch by batch."""
 
-    def __iter__(self) -> Iterator[AsyncSqlRow]:
-        return (_AsyncpgRow(record) for record in self._records)
+    def __init__(self, columns: list[str], records: list[asyncpg.Record]) -> None:
+        self._columns: list[str] = columns
+        self._records: list[asyncpg.Record] = records
+        self._position: int = 0
 
     def columns(self) -> list[str]:
         return list(self._columns)
 
+    async def fetch(self, n: int) -> list[tuple[Any, ...]]:
+        batch = self._records[self._position : self._position + n]
+        self._position += len(batch)
+        return [tuple(_json_safe(value) for value in record.values()) for record in batch]
 
-class _AsyncpgRow:
-    def __init__(self, record: asyncpg.Record) -> None:
-        self._record = record
-
-    def to_dict(self) -> dict[str, Any]:
-        return {key: self._json_safe(value) for key, value in self._record.items()}
-
-    def _json_safe(self, value: Any, nested: bool = False) -> Any:
-        """Turns a PostgreSQL value into something json.dumps accepts, once encode_row_value() has run on it:
-        that encoder handles Decimal/datetime/date at top level only, everything else JSON can't
-        represent (UUID, time, timedelta, IP addresses...) becomes a string - the client displays text anyway."""
-        if value is None or isinstance(value, (bool, int, float, str)):
-            return value
-        elif not nested and isinstance(value, (Decimal, datetime, date)):
-            return value
-        elif isinstance(value, list):
-            return [self._json_safe(item, nested=True) for item in value]
-        elif isinstance(value, bytes):
-            return "\\x" + value.hex()
-        else:
-            return str(value)
+    async def close(self) -> None:
+        self._records = []
 
 
 # ------------------------------------------------------------------------------------------
 # Other functions
 # ------------------------------------------------------------------------------------------
+def _json_safe(value: Any, nested: bool = False) -> Any:
+    """Turns a database value into something json.dumps accepts, once encode_row_value() has run on it:
+    that encoder handles Decimal/datetime/date at top level only, everything else JSON can't
+    represent (UUID, time, timedelta, IP addresses...) becomes a string - the client displays text anyway."""
+
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    elif not nested and isinstance(value, (Decimal, datetime, date)):
+        return value
+    elif isinstance(value, list):
+        return [_json_safe(item, nested=True) for item in value]
+    elif isinstance(value, bytes):
+        return "\\x" + value.hex()
+    else:
+        return str(value)
+
+
 def _to_positional_style(cmd_template: str, cmd_parameters: dict[str, Any], placeholder: str) -> tuple[str, list]:
     """Convert a template using %(name)s style and a dict for parameters into a template
     using positional `placeholder` style (e.g "@P{}" for @P1, @P2, ...) and an ordered list of parameters."""

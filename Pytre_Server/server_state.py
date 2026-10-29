@@ -14,7 +14,7 @@ from Pytre_Core.logs_central import ServerDriven
 from Pytre_Core.oidc_client import OidcClient, new_token
 from Pytre_Core.servers import Server
 from Pytre_Core.utils import log as _log
-from Pytre_Core.sql_query.query_drivers_async import AsyncSqlDriver, get_driver
+from Pytre_Core.sql_query.query_drivers_server import AsyncSqlDriver, get_driver
 
 from Pytre_Server.log_buffer import LogBufferHandler
 from Pytre_Server.query_catalog import QueryCatalog

@@ -4,7 +4,7 @@ import psycopg2.extensions
 
 from Pytre_Core.about import APP_NAME, full_version
 from Pytre_Core.servers import ServerType, Server
-from Pytre_Core.sql_query.query_driver_mssql import connect_mssql, error_msg as mssql_error_msg
+from Pytre_Core.sql_query.query_drivers_mssql import connect_mssql, error_msg as mssql_error_msg
 
 APP_ID = f"{APP_NAME}_{full_version()}"
 

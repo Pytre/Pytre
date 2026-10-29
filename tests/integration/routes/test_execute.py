@@ -239,7 +239,7 @@ def test_execute_reports_pool_saturated_as_ndjson_error(client, auth_headers, mo
     tests/unit/core/test_query_drivers_async.py."""
     import hashlib
 
-    from Pytre_Core.sql_query.query_drivers_async import AsyncSqlConnectionError, PyMssqlDriver
+    from Pytre_Core.sql_query.query_drivers_server import AsyncSqlConnectionError, PyMssqlDriver
 
     async def _raise_pool_timeout(self, template, params):
         raise AsyncSqlConnectionError("Connection pool timeout - all connections are busy.")
@@ -274,7 +274,7 @@ def test_execute_reports_server_unreachable_as_ndjson_error(client, auth_headers
     as above. The driver itself is monkeypatched, so no real docker connection is attempted."""
     import hashlib
 
-    from Pytre_Core.sql_query.query_drivers_async import AsyncSqlConnectionError, PyMssqlDriver
+    from Pytre_Core.sql_query.query_drivers_server import AsyncSqlConnectionError, PyMssqlDriver
 
     async def _raise_unreachable(self):
         raise AsyncSqlConnectionError("Failed to connect: connection refused.")
@@ -353,7 +353,7 @@ def test_execute_rejects_invalid_parameter_value(client, auth_headers):
 def _capture_sent_params(monkeypatch) -> dict:
     """Patches the SQL driver so /execute stops right before the database, capturing the
     SQL parameters it would have sent - no docker container needed."""
-    from Pytre_Core.sql_query.query_drivers_async import AsyncSqlConnectionError, PyMssqlDriver
+    from Pytre_Core.sql_query.query_drivers_server import AsyncSqlConnectionError, PyMssqlDriver
 
     captured = {}
 

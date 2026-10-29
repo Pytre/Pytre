@@ -14,7 +14,7 @@ import pytest
 
 from Pytre_Core.remotes import encode_row_value
 from Pytre_Core.servers import Server, ServerType
-from Pytre_Core.sql_query.query_drivers_async import (
+from Pytre_Core.sql_query.query_drivers_server import (
     APP_ID,
     AsyncSqlConnectionError,
     AsyncSqlExecutionError,
@@ -83,7 +83,9 @@ async def test_named_params_and_literal_percent(driver):
 @requires_docker
 @pytest.mark.anyio
 async def test_rows_are_fetched_batch_by_batch(driver):
-    result = await driver.execute("SELECT TOP (5) ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS n FROM sys.all_columns", {})
+    result = await driver.execute(
+        "SELECT TOP (5) ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS n FROM sys.all_columns", {}
+    )
     try:
         batches = [await result.fetch(2) for _ in range(4)]
     finally:

@@ -1,5 +1,5 @@
 """
-Tests for Pytre_Core/sql_query/query_drivers.py
+Tests for Pytre_Core/sql_query/query_drivers_client.py
 """
 
 from unittest.mock import Mock, patch
@@ -9,7 +9,7 @@ import psycopg2
 import pytest
 
 from Pytre_Core.servers import Server, ServerType
-from Pytre_Core.sql_query.query_drivers import APP_ID, ServerConnectionError, get_connection
+from Pytre_Core.sql_query.query_drivers_client import APP_ID, ServerConnectionError, get_connection
 
 
 # ================================================================================
@@ -29,7 +29,7 @@ def test_get_connection_mssql_calls_pymssql_connect():
     server.database = "db"
 
     fake_conn = Mock()
-    with patch("Pytre_Core.sql_query.query_drivers.pymssql.connect", return_value=fake_conn) as mock_connect:
+    with patch("Pytre_Core.sql_query.query_drivers_client.pymssql.connect", return_value=fake_conn) as mock_connect:
         result = get_connection(server)
 
     assert result is fake_conn
@@ -45,7 +45,7 @@ def test_get_connection_fastmssql_falls_back_to_pymssql():
     server.type = ServerType.fastmssql.name
 
     fake_conn = Mock()
-    with patch("Pytre_Core.sql_query.query_drivers.pymssql.connect", return_value=fake_conn):
+    with patch("Pytre_Core.sql_query.query_drivers_client.pymssql.connect", return_value=fake_conn):
         assert get_connection(server) is fake_conn
 
 
@@ -54,7 +54,7 @@ def test_conn_mssql_names_the_client_application():
     server = Server(Mock())
     server.type = ServerType.mssql.name
 
-    with patch("Pytre_Core.sql_query.query_drivers.pymssql.connect", return_value=Mock()) as mock_connect:
+    with patch("Pytre_Core.sql_query.query_drivers_client.pymssql.connect", return_value=Mock()) as mock_connect:
         get_connection(server)
 
     assert mock_connect.call_args.kwargs["appname"] == APP_ID
@@ -69,7 +69,7 @@ def test_conn_mssql_forces_ymd_dateformat():
     server.type = ServerType.mssql.name
 
     fake_conn = Mock()
-    with patch("Pytre_Core.sql_query.query_drivers.pymssql.connect", return_value=fake_conn) as mock_connect:
+    with patch("Pytre_Core.sql_query.query_drivers_client.pymssql.connect", return_value=fake_conn) as mock_connect:
         get_connection(server)
 
     conn_properties = mock_connect.call_args.kwargs["conn_properties"]
@@ -92,7 +92,7 @@ def test_get_connection_postgre_calls_psycopg2_connect():
     fake_conn = Mock()
     fake_conn.cursor = Mock(return_value=fake_cursor)
 
-    with patch("Pytre_Core.sql_query.query_drivers.psycopg2.connect", return_value=fake_conn) as mock_connect:
+    with patch("Pytre_Core.sql_query.query_drivers_client.psycopg2.connect", return_value=fake_conn) as mock_connect:
         result = get_connection(server)
 
     assert result is fake_conn
@@ -125,7 +125,7 @@ def test_conn_mssql_raises_server_connection_error():
     server.type = ServerType.mssql.name
 
     with patch(
-        "Pytre_Core.sql_query.query_drivers.pymssql.connect",
+        "Pytre_Core.sql_query.query_drivers_client.pymssql.connect",
         side_effect=pymssql._pymssql.OperationalError((1, b"connection failed")),
     ):
         with pytest.raises(ServerConnectionError, match="connection failed"):
@@ -138,7 +138,7 @@ def test_conn_postgre_raises_server_connection_error():
     server = Server(Mock())
     server.type = ServerType.postgre.name
 
-    with patch("Pytre_Core.sql_query.query_drivers.psycopg2.connect", side_effect=psycopg2.OperationalError("boom")):
+    with patch("Pytre_Core.sql_query.query_drivers_client.psycopg2.connect", side_effect=psycopg2.OperationalError("boom")):
         with pytest.raises(ServerConnectionError, match="boom"):
             get_connection(server)
 
@@ -155,6 +155,6 @@ def test_conn_postgre_converts_unicode_decode_error():
     fake_conn = Mock()
     fake_conn.cursor = Mock(return_value=fake_cursor)
 
-    with patch("Pytre_Core.sql_query.query_drivers.psycopg2.connect", return_value=fake_conn):
+    with patch("Pytre_Core.sql_query.query_drivers_client.psycopg2.connect", return_value=fake_conn):
         with pytest.raises(ServerConnectionError):
             get_connection(server)

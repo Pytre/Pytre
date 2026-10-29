@@ -11,7 +11,7 @@ from unittest.mock import Mock
 import pytest
 from fastapi import HTTPException
 
-from Pytre_Core.sql_query.query_drivers_async import AsyncSqlConnectionError, AsyncSqlExecutionError
+from Pytre_Core.sql_query.query_drivers_server import AsyncSqlConnectionError, AsyncSqlExecutionError
 from Pytre_Core.user_prefs import DisplayFormat
 from Pytre_Server.routes.client import ExecuteRequest, _apply_parameters, _run_query
 
@@ -99,12 +99,10 @@ def test_apply_parameters_leaves_non_hidden_param_untouched_for_non_admin():
 
 @pytest.mark.unit
 def test_apply_parameters_mix_of_hidden_and_visible_params_for_non_admin():
-    query = _make_query(
-        {
-            "@USER": _make_param(is_hidden=True, display_value="real_user"),
-            "@filter": _make_param(is_hidden=False),
-        }
-    )
+    query = _make_query({
+        "@USER": _make_param(is_hidden=True, display_value="real_user"),
+        "@filter": _make_param(is_hidden=False),
+    })
     request = _make_request({"@USER": "someone_else", "@filter": "2024-01-01"})
 
     _apply_parameters(query, request, is_admin=False)

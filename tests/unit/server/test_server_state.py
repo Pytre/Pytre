@@ -158,7 +158,7 @@ def _make_fake_driver_factory(monkeypatch) -> list[Mock]:
     Returns the list of fake driver instances created, in construction order.
     Driver construction details (trust_certificate forwarding, host resolution...) are
     fastmssql-specific and tested against get_driver()/FastMssqlDriver directly in
-    tests/unit/core/test_query_drivers_async.py, not here."""
+    tests/unit/core/test_query_drivers_server.py, not here."""
     created: list[Mock] = []
 
     async def fake_get_driver(server, pool_size):

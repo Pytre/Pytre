@@ -13,7 +13,7 @@ from typing import Any
 import pytest
 
 from Pytre_Core.remotes import encode_row_value
-from Pytre_Core.sql_query.query_drivers_async import (
+from Pytre_Core.sql_query.query_drivers_server import (
     APP_ID,
     AsyncpgDriver,
     AsyncSqlConnectionError,

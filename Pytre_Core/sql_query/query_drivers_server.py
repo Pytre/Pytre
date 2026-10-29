@@ -21,7 +21,7 @@ import pymssql
 from Pytre_Core.about import APP_NAME, full_version
 from Pytre_Core.servers import ServerType, Server
 from Pytre_Core.utils import log as _log
-from Pytre_Core.sql_query.query_driver_mssql import CONN_PROPERTIES, connect_mssql, error_msg as mssql_error_msg
+from Pytre_Core.sql_query.query_drivers_mssql import CONN_PROPERTIES, connect_mssql, error_msg as mssql_error_msg
 from Pytre_Core.sql_query.sql_browser import split_instance_host, resolve_instance_port
 
 APP_ID = f"{APP_NAME}_Server_{full_version()}"

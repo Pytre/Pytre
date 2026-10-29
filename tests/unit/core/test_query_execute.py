@@ -13,7 +13,7 @@ import pymssql
 
 from Pytre_Core.context import AppContext, AppMode
 from Pytre_Core.remotes import RemoteCursor, RemoteExecutionError, RemoteHTTPStatusError, RemoteRequestError
-from Pytre_Core.sql_query.query_drivers import ServerConnectionError
+from Pytre_Core.sql_query.query_drivers_client import ServerConnectionError
 from Pytre_Core.sql_query.query_execute import QueryExecute
 from Pytre_Core.sql_query.execute_config import LocalExecuteCfg, RemoteExecuteCfg
 from Pytre_Core.user_prefs import CsvFormat, DisplayFormat
@@ -60,8 +60,8 @@ def mock_server():
 @pytest.fixture(autouse=True)
 def patched_get_connection(mock_conn, monkeypatch):
     """_execute_local() gets its connection via the free function get_connection(server)
-    (Pytre_Core/sql_query/query_drivers.py, imported into query_execute's own namespace) rather
-    than a server.get_connection() method - patch it at that namespace (not query_drivers itself,
+    (Pytre_Core/sql_query/query_drivers_client.py, imported into query_execute's own namespace) rather
+    than a server.get_connection() method - patch it at that namespace (not query_drivers_client itself,
     since that's where _execute_local() actually looks the name up) so every test exercising the
     local execution path gets mock_conn without touching a real SQL driver."""
     monkeypatch.setattr("Pytre_Core.sql_query.query_execute.get_connection", Mock(return_value=mock_conn))

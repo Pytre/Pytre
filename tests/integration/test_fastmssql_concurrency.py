@@ -20,7 +20,7 @@ import time
 
 import pytest
 
-from Pytre_Core.sql_query.query_drivers_async import FastMssqlDriver
+from Pytre_Core.sql_query.query_drivers_server import FastMssqlDriver
 from tests.integration.conftest import requires_docker
 from tests.resources.build_test_keepass import TEST_SQL_SERVER
 

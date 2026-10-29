@@ -19,7 +19,7 @@ from Pytre_Core.user_prefs import DisplayFormat
 from Pytre_Core.utils import log as _log
 from Pytre_Core.sql_query.loader import build_queries_from_parsers, filter_queries
 from Pytre_Core.sql_query.query import Query
-from Pytre_Core.sql_query.query_drivers_async import AsyncSqlConnectionError, AsyncSqlExecutionError
+from Pytre_Core.sql_query.query_drivers_server import AsyncSqlConnectionError, AsyncSqlExecutionError
 
 from Pytre_Server.auth_token import create_token, decode_token, TokenType
 from Pytre_Server.oidc import OidcReverifyError, verify_still_active

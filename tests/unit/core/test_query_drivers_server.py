@@ -1,5 +1,5 @@
 """
-Tests for Pytre_Core/sql_query/query_drivers_async.py
+Tests for Pytre_Core/sql_query/query_drivers_server.py
 """
 
 import asyncio
@@ -18,7 +18,7 @@ import pytest
 
 from Pytre_Core.remotes import encode_row_value
 from Pytre_Core.servers import Server, ServerType
-from Pytre_Core.sql_query.query_drivers_async import (
+from Pytre_Core.sql_query.query_drivers_server import (
     APP_ID,
     AsyncpgDriver,
     AsyncSqlConnectionError,
@@ -38,7 +38,10 @@ def anyio_backend():
 
 
 def _make_server(
-    host: str = "h", port: str = "1433", trust_server_certificate: bool = False, server_type: str = ServerType.mssql.name
+    host: str = "h",
+    port: str = "1433",
+    trust_server_certificate: bool = False,
+    server_type: str = ServerType.mssql.name,
 ) -> Mock:
     return Mock(
         type=server_type,
@@ -128,7 +131,7 @@ def test_ignores_unused_dict_entries():
 def test_connection_defaults_to_validating_the_certificate():
     """trust_certificate not specified must default to False (secure) - see the plan doc's
     TrustServerCertificate section: this default only just flipped from always-true."""
-    with patch("Pytre_Core.sql_query.query_drivers_async.fastmssql.Connection") as MockConnection:
+    with patch("Pytre_Core.sql_query.query_drivers_server.fastmssql.Connection") as MockConnection:
         FastMssqlDriver(host="h", port=1433, database="db", username="u", password="p")
 
     _, kwargs = MockConnection.call_args
@@ -137,7 +140,7 @@ def test_connection_defaults_to_validating_the_certificate():
 
 @pytest.mark.unit
 def test_connection_forwards_trust_certificate_true():
-    with patch("Pytre_Core.sql_query.query_drivers_async.fastmssql.Connection") as MockConnection:
+    with patch("Pytre_Core.sql_query.query_drivers_server.fastmssql.Connection") as MockConnection:
         FastMssqlDriver(host="h", port=1433, database="db", username="u", password="p", trust_certificate=True)
 
     _, kwargs = MockConnection.call_args
@@ -149,7 +152,7 @@ def test_connection_sets_application_name_and_read_only_intent():
     """Mirrors the local pymssql path's appname=APP_ID/read_only=True -
     Pytre is a read-only extraction tool, and a distinct appname lets a DBA tell a Pytre_Server
     connection apart from a desktop client one in sys.dm_exec_sessions."""
-    with patch("Pytre_Core.sql_query.query_drivers_async.fastmssql.Connection") as MockConnection:
+    with patch("Pytre_Core.sql_query.query_drivers_server.fastmssql.Connection") as MockConnection:
         FastMssqlDriver(host="h", port=1433, database="db", username="u", password="p")
 
     _, kwargs = MockConnection.call_args
@@ -171,7 +174,7 @@ async def test_execute_converts_named_params_and_prefixes_session_init():
     fake_connection = Mock()
     fake_connection.query = AsyncMock(return_value=Mock())
 
-    with patch("Pytre_Core.sql_query.query_drivers_async.fastmssql.Connection", return_value=fake_connection):
+    with patch("Pytre_Core.sql_query.query_drivers_server.fastmssql.Connection", return_value=fake_connection):
         driver = FastMssqlDriver(host="h", port=1433, database="db", username="u", password="p")
         await driver.execute("SELECT %(@ID)s AS n", {"@ID": 42})
 
@@ -189,7 +192,7 @@ async def test_execute_strips_trailing_semicolon_before_appending_recompile():
     fake_connection = Mock()
     fake_connection.query = AsyncMock(return_value=Mock())
 
-    with patch("Pytre_Core.sql_query.query_drivers_async.fastmssql.Connection", return_value=fake_connection):
+    with patch("Pytre_Core.sql_query.query_drivers_server.fastmssql.Connection", return_value=fake_connection):
         driver = FastMssqlDriver(host="h", port=1433, database="db", username="u", password="p")
         await driver.execute("SELECT %(@ID)s AS n;", {"@ID": 42})
 
@@ -204,7 +207,7 @@ async def test_execute_wraps_the_query_stream_in_a_result():
     fake_connection = Mock()
     fake_connection.query = AsyncMock(return_value=stream)
 
-    with patch("Pytre_Core.sql_query.query_drivers_async.fastmssql.Connection", return_value=fake_connection):
+    with patch("Pytre_Core.sql_query.query_drivers_server.fastmssql.Connection", return_value=fake_connection):
         driver = FastMssqlDriver(host="h", port=1433, database="db", username="u", password="p")
         result = await driver.execute("SELECT 1 AS n", {})
 
@@ -296,7 +299,7 @@ async def test_connect_translates_sql_connection_error():
     original = fastmssql.SqlConnectionError("connection refused")
     fake_connection.connect = AsyncMock(side_effect=original)
 
-    with patch("Pytre_Core.sql_query.query_drivers_async.fastmssql.Connection", return_value=fake_connection):
+    with patch("Pytre_Core.sql_query.query_drivers_server.fastmssql.Connection", return_value=fake_connection):
         driver = FastMssqlDriver(host="h", port=1433, database="db", username="u", password="p")
 
         with pytest.raises(AsyncSqlConnectionError) as exc_info:
@@ -311,7 +314,7 @@ async def test_execute_translates_sql_connection_error():
     original = fastmssql.SqlConnectionError("pool timeout")
     fake_connection.query = AsyncMock(side_effect=original)
 
-    with patch("Pytre_Core.sql_query.query_drivers_async.fastmssql.Connection", return_value=fake_connection):
+    with patch("Pytre_Core.sql_query.query_drivers_server.fastmssql.Connection", return_value=fake_connection):
         driver = FastMssqlDriver(host="h", port=1433, database="db", username="u", password="p")
 
         with pytest.raises(AsyncSqlConnectionError) as exc_info:
@@ -326,7 +329,7 @@ async def test_execute_translates_sql_error():
     original = fastmssql.SqlError("Incorrect syntax")
     fake_connection.query = AsyncMock(side_effect=original)
 
-    with patch("Pytre_Core.sql_query.query_drivers_async.fastmssql.Connection", return_value=fake_connection):
+    with patch("Pytre_Core.sql_query.query_drivers_server.fastmssql.Connection", return_value=fake_connection):
         driver = FastMssqlDriver(host="h", port=1433, database="db", username="u", password="p")
 
         with pytest.raises(AsyncSqlExecutionError) as exc_info:
@@ -379,7 +382,7 @@ async def test_driver_sizes_the_pool_and_keeps_performance_preset_values(monkeyp
 @pytest.mark.anyio
 async def test_resolve_conn_host_skips_resolution_for_plain_host(monkeypatch):
     resolve_mock = Mock()
-    monkeypatch.setattr("Pytre_Core.sql_query.query_drivers_async.resolve_instance_port", resolve_mock)
+    monkeypatch.setattr("Pytre_Core.sql_query.query_drivers_server.resolve_instance_port", resolve_mock)
 
     target = await FastMssqlDriver._resolve_conn_host("SWTPX3BDD01", 1433)
 
@@ -392,7 +395,7 @@ async def test_resolve_conn_host_uses_resolved_port_for_named_instance(monkeypat
     async def fake_resolve(hostname, instance_name, timeout=5.0):
         return 52149
 
-    monkeypatch.setattr("Pytre_Core.sql_query.query_drivers_async.resolve_instance_port", fake_resolve)
+    monkeypatch.setattr("Pytre_Core.sql_query.query_drivers_server.resolve_instance_port", fake_resolve)
 
     target = await FastMssqlDriver._resolve_conn_host("SWTPX3BDD01\\DBX3V12", 1433)
 
@@ -404,7 +407,7 @@ async def test_resolve_conn_host_falls_back_to_configured_port_if_resolution_fai
     async def fake_resolve(hostname, instance_name, timeout=5.0):
         return None
 
-    monkeypatch.setattr("Pytre_Core.sql_query.query_drivers_async.resolve_instance_port", fake_resolve)
+    monkeypatch.setattr("Pytre_Core.sql_query.query_drivers_server.resolve_instance_port", fake_resolve)
 
     target = await FastMssqlDriver._resolve_conn_host("SWTPX3BDD01\\DBX3V12", 1433)
 
@@ -566,7 +569,7 @@ def _patch_connect(monkeypatch, connection: _FakePymssqlConnection | None = None
             raise error
         return connection
 
-    monkeypatch.setattr("Pytre_Core.sql_query.query_drivers_async.connect_mssql", fake_connect)
+    monkeypatch.setattr("Pytre_Core.sql_query.query_drivers_server.connect_mssql", fake_connect)
     return connect_calls
 
 
@@ -736,7 +739,9 @@ async def test_pymssql_result_fetches_tuples_batch_by_batch(monkeypatch, make_py
 
 @pytest.mark.anyio
 async def test_pymssql_result_makes_values_json_safe(monkeypatch, make_pymssql_driver):
-    _patch_connect(monkeypatch, _FakePymssqlConnection(columns=("u", "raw", "n"), rows=[(uuid.UUID(int=1), b"\xde\xad", 1)]))
+    _patch_connect(
+        monkeypatch, _FakePymssqlConnection(columns=("u", "raw", "n"), rows=[(uuid.UUID(int=1), b"\xde\xad", 1)])
+    )
     result = await make_pymssql_driver().execute("SELECT u, raw, n", {})
 
     assert await result.fetch(10) == [("00000000-0000-0000-0000-000000000001", "\\xdead", 1)]
@@ -1058,7 +1063,9 @@ def test_pg_driver_trust_certificate_accepts_what_the_server_offers():
 
 @pytest.mark.unit
 def test_pg_driver_builds_from_server_parameters():
-    server = _make_server(host="pg-host", port="5433", trust_server_certificate=True, server_type=ServerType.postgre.name)
+    server = _make_server(
+        host="pg-host", port="5433", trust_server_certificate=True, server_type=ServerType.postgre.name
+    )
     server.timeout = 30
     server.login_timeout = 5
 
@@ -1080,7 +1087,7 @@ async def test_pg_connect_creates_a_read_only_pool_with_timeouts():
     create_pool = AsyncMock(return_value=Mock())
     driver = AsyncpgDriver("h", 5432, "db", "u", "p", login_timeout=7, statement_timeout_secs=12)
 
-    with patch("Pytre_Core.sql_query.query_drivers_async.asyncpg.create_pool", create_pool):
+    with patch("Pytre_Core.sql_query.query_drivers_server.asyncpg.create_pool", create_pool):
         await driver.connect()
 
     kwargs = create_pool.call_args.kwargs
@@ -1098,7 +1105,7 @@ async def test_pg_connect_sizes_the_pool(pool_size, min_size):
     create_pool = AsyncMock(return_value=Mock())
     driver = AsyncpgDriver("h", 5432, "db", "u", "p", pool_size=pool_size)
 
-    with patch("Pytre_Core.sql_query.query_drivers_async.asyncpg.create_pool", create_pool):
+    with patch("Pytre_Core.sql_query.query_drivers_server.asyncpg.create_pool", create_pool):
         await driver.connect()
 
     kwargs = create_pool.call_args.kwargs
@@ -1120,7 +1127,7 @@ async def test_pg_connect_sizes_the_pool(pool_size, min_size):
 async def test_pg_connect_translates_every_failure_to_a_connection_error(error):
     driver = AsyncpgDriver("h", 5432, "db", "u", "p")
 
-    with patch("Pytre_Core.sql_query.query_drivers_async.asyncpg.create_pool", AsyncMock(side_effect=error)):
+    with patch("Pytre_Core.sql_query.query_drivers_server.asyncpg.create_pool", AsyncMock(side_effect=error)):
         with pytest.raises(AsyncSqlConnectionError) as exc_info:
             await driver.connect()
 
@@ -1359,7 +1366,10 @@ async def test_pg_result_makes_values_json_safe():
     "error, expected",
     [
         (asyncpg.QueryCanceledError("canceling statement due to statement timeout"), AsyncSqlExecutionError),
-        (asyncpg.ReadOnlySQLTransactionError("cannot execute CREATE TABLE in a read-only transaction"), AsyncSqlExecutionError),
+        (
+            asyncpg.ReadOnlySQLTransactionError("cannot execute CREATE TABLE in a read-only transaction"),
+            AsyncSqlExecutionError,
+        ),
         (asyncpg.DivisionByZeroError("division by zero"), AsyncSqlExecutionError),
         (asyncpg.InterfaceError("connection is closed"), AsyncSqlConnectionError),
         (ConnectionResetError("connection reset"), AsyncSqlConnectionError),
@@ -1511,8 +1521,16 @@ def test_json_safe_converts_array_elements_which_encode_row_value_would_not_reac
 @pytest.mark.unit
 def test_json_safe_values_are_always_json_serializable_after_encode_row_value():
     values = [
-        uuid.uuid4(), time(1, 2, 3), timedelta(hours=1), ipaddress.ip_address("::1"), b"\x00",
-        Decimal("3.14"), datetime(2024, 1, 2), date(2024, 1, 2), [Decimal("1"), None], None,
+        uuid.uuid4(),
+        time(1, 2, 3),
+        timedelta(hours=1),
+        ipaddress.ip_address("::1"),
+        b"\x00",
+        Decimal("3.14"),
+        datetime(2024, 1, 2),
+        date(2024, 1, 2),
+        [Decimal("1"), None],
+        None,
     ]
 
     json.dumps([encode_row_value(_json_safe(value)) for value in values])  # must not raise

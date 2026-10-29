@@ -1,5 +1,5 @@
 """
-Tests for Pytre_Core/sql_query/query_driver_mssql.py
+Tests for Pytre_Core/sql_query/query_drivers_mssql.py
 """
 
 from unittest.mock import Mock, patch
@@ -8,7 +8,7 @@ import pymssql
 import pytest
 
 from Pytre_Core.servers import Server
-from Pytre_Core.sql_query.query_driver_mssql import CONN_PROPERTIES, connect_mssql, error_msg
+from Pytre_Core.sql_query.query_drivers_mssql import CONN_PROPERTIES, connect_mssql, error_msg
 
 
 # ================================================================================
@@ -24,7 +24,7 @@ def test_connect_mssql_forwards_the_server_parameters():
     server.timeout, server.login_timeout, server.charset = 30, 5, "UTF-8"
 
     fake_conn = Mock()
-    with patch("Pytre_Core.sql_query.query_driver_mssql.pymssql.connect", return_value=fake_conn) as mock_connect:
+    with patch("Pytre_Core.sql_query.query_drivers_mssql.pymssql.connect", return_value=fake_conn) as mock_connect:
         assert connect_mssql(server, "Some_App") is fake_conn
 
     assert mock_connect.call_args.kwargs == {

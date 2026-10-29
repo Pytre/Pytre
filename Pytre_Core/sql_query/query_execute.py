@@ -14,7 +14,7 @@ from Pytre_Core.sql_query.execution_msg import ExecResultMsg
 from Pytre_Core.sql_query.converter import SqlTypeConverter
 from Pytre_Core.sql_query.log_utils import _STANDALONE_BROADCAST_LOGGER
 from Pytre_Core.sql_query.query import Query
-from Pytre_Core.sql_query.query_drivers import ServerConnectionError, LocalCursor, DriverErrors, get_connection
+from Pytre_Core.sql_query.query_drivers_client import ServerConnectionError, LocalCursor, DriverErrors, get_connection
 
 
 Cursor = RemoteCursor | LocalCursor

@@ -1,5 +1,5 @@
-"""SQL Server connection through pymssql, shared by the client (query_drivers) and the server
-(query_drivers_async) - depends on pymssql only."""
+"""SQL Server connection through pymssql, shared by the client (query_drivers_client) and the server
+(query_drivers_server) - depends on pymssql only."""
 
 import pymssql
 

@@ -100,13 +100,14 @@ def test_reload_queries_redirects_to_the_list(admin_client):
 def test_reload_queries_keeps_the_db_pool_size(monkeypatch):
     """--db-pool-size lives in ServerResources, which a reload hands over to the new ServerState."""
     monkeypatch.setattr(kee_module, "KEE_FILE", TEST_DB_PATH)
-    client = TestClient(create_app(master_key=TEST_DB_PASSWORD, db_pool_size=7))
+    app = create_app(master_key=TEST_DB_PASSWORD, db_pool_size=7)
+    client = TestClient(app)
     client.post("/admin/login", data={"username": TEST_USERNAME, "password": TEST_USER_PASSWORD})
-    assert client.app.state.server.resources.db_pool_size == 7
+    assert app.state.server.resources.db_pool_size == 7
 
     client.post("/admin/queries/reload")
 
-    assert client.app.state.server.resources.db_pool_size == 7
+    assert app.state.server.resources.db_pool_size == 7
 
 
 def test_reload_queries_reports_a_failed_reload(admin_client, monkeypatch):

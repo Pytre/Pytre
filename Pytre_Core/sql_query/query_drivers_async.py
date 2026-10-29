@@ -6,13 +6,15 @@ import copy
 import logging
 import re
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, cast, Protocol
 
 import asyncpg
+import asyncpg.cursor
+import asyncpg.transaction
 import fastmssql
 import pymssql
 
@@ -334,7 +336,9 @@ class _FastMssqlResult:
 # asyncpg driver implementation
 # ------------------------------------------------------------------------------------------
 class AsyncpgDriver:
-    """AsyncSqlDriver implementation using asyncpg."""
+    """AsyncSqlDriver implementation using asyncpg.
+    Rows are read through a cursor, each query keeps its pooled connection until its result is closed.
+    statement_timeout applies to each fetch, not to the whole query: PostgreSQL restarts it on each batch asked."""
 
     _min_pool_size = 2
     _acquire_timeout_secs = 10.0
@@ -410,21 +414,20 @@ class AsyncpgDriver:
         sql = sql.replace("%%", "%")
 
         try:
-            async with self._pool.acquire(timeout=self._acquire_timeout_secs) as conn:
-                statement = await cast(asyncpg.Connection, conn).prepare(sql)
-                columns = [cast(asyncpg.types.Attribute, attribute).name for attribute in statement.get_attributes()]
-                args = self._coerce_args(statement.get_parameters(), values)
-                records = await statement.fetch(*args)
-        except AsyncSqlExecutionError:
-            raise
+            conn = await self._pool.acquire(timeout=self._acquire_timeout_secs)
         except self._connection_errors as e:
             raise AsyncSqlConnectionError(self._error_msg(e)) from e
-        except asyncpg.PostgresError as e:
-            raise AsyncSqlExecutionError(self._error_msg(e)) from e
 
-        return _AsyncpgResult(columns, records)
+        result = _AsyncpgResult(self._pool, cast(asyncpg.Connection, conn))
+        try:
+            await result.open(sql, values)
+        except BaseException:
+            await result.close()  # rolls the transaction back and gives the connection back to the pool
+            raise
+        return result
 
-    def _coerce_args(self, param_types: Any, values: list) -> list:
+    @staticmethod
+    def _coerce_args(param_types: Any, values: list) -> list:
         # asyncpg types query arguments server-side and refuses a str for an int/date/timestamp/bool argument,
         # whereas Pytre gives str/int command parameters - coerce by the type PostgreSQL expects
         coercers: dict[str, Callable[[Any], Any]] = {
@@ -454,7 +457,8 @@ class AsyncpgDriver:
 
         return args
 
-    def _error_msg(self, error: Exception) -> str:
+    @staticmethod
+    def _error_msg(error: Exception) -> str:
         return str(error) or type(error).__name__  # e.g. TimeoutError has an empty message
 
     @classmethod
@@ -474,23 +478,67 @@ class AsyncpgDriver:
 
 
 class _AsyncpgResult:
-    """Every record is loaded by execute(), fetch() returns them batch by batch."""
+    """A query read through a cursor, in a read-only transaction, on its own pooled connection until close().
+    Cancelling a running fetch() also cancels the query on PostgreSQL."""
 
-    def __init__(self, columns: list[str], records: list[asyncpg.Record]) -> None:
-        self._columns: list[str] = columns
-        self._records: list[asyncpg.Record] = records
-        self._position: int = 0
+    def __init__(self, pool: asyncpg.Pool, conn: asyncpg.Connection) -> None:
+        self._pool = pool
+        self._conn = conn
+
+        self._transaction: asyncpg.transaction.Transaction | None = None
+        self._cursor: asyncpg.cursor.Cursor | None = None
+        self._columns: list[str] = []
+
+        self._running: asyncio.Future | None = None
+        self._closing: asyncio.Task | None = None
 
     def columns(self) -> list[str]:
         return list(self._columns)
 
+    async def open(self, sql: str, values: list) -> None:
+        await self._run(self._task_open(sql, values))
+
     async def fetch(self, n: int) -> list[tuple[Any, ...]]:
-        batch = self._records[self._position : self._position + n]
-        self._position += len(batch)
-        return [tuple(_json_safe(value) for value in record.values()) for record in batch]
+        if self._cursor is None or self._closing is not None:
+            return []
+        records: list[asyncpg.Record] = await self._run(self._cursor.fetch(n))
+        return [tuple(_json_safe(value) for value in record.values()) for record in records]
 
     async def close(self) -> None:
-        self._records = []
+        if self._closing is None:
+            self._closing = asyncio.create_task(self._task_close())
+        await asyncio.shield(self._closing)  # a cancelled caller doesn't stop the closing
+
+    async def _run(self, operation: Coroutine[Any, Any, Any]) -> Any:
+        """Runs `operation` as a task that close() can cancel. Not shielded: cancelling the caller cancels
+        the query too. asyncpg errors are translated."""
+        self._running = asyncio.ensure_future(operation)
+        try:
+            return await self._running
+        except AsyncpgDriver._connection_errors as e:
+            raise AsyncSqlConnectionError(AsyncpgDriver._error_msg(e)) from e
+        except asyncpg.PostgresError as e:
+            raise AsyncSqlExecutionError(AsyncpgDriver._error_msg(e)) from e
+
+    async def _task_open(self, sql: str, values: list) -> None:
+        self._transaction = self._conn.transaction(readonly=True)  # a cursor only lives in a transaction
+        await self._transaction.start()
+        statement = await self._conn.prepare(sql)
+        self._columns = [cast(asyncpg.types.Attribute, attribute).name for attribute in statement.get_attributes()]
+        args = AsyncpgDriver._coerce_args(statement.get_parameters(), values)
+        self._cursor = await statement.cursor(*args)
+
+    async def _task_close(self) -> None:
+        try:
+            if self._running is not None:
+                self._running.cancel()  # no effect once done, otherwise asyncpg cancels the query on PostgreSQL
+                await asyncio.wait({self._running})
+            if self._transaction is not None:
+                await self._transaction.rollback()  # waits for a cancellation to be done first
+        except (*AsyncpgDriver._connection_errors, asyncpg.PostgresError):
+            self._conn.terminate()  # can't be reset, the pool replaces it
+        finally:
+            await self._pool.release(self._conn)
 
 
 # ------------------------------------------------------------------------------------------

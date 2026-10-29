@@ -25,7 +25,6 @@ from Pytre_Core.sql_query.query_drivers_async import (
     AsyncSqlExecutionError,
     FastMssqlDriver,
     PyMssqlDriver,
-    _AsyncpgResult,
     _FastMssqlResult,
     get_driver,
     _json_safe,
@@ -913,16 +912,30 @@ class _Named:
 
 
 class _FakeRecord(dict):
-    """asyncpg.Record exposes .items() like a dict."""
+    """asyncpg.Record exposes .values() like a dict."""
+
+
+class _FakeCursor:
+    def __init__(self, connection: _FakeConnection, records) -> None:
+        self._connection = connection
+        self._records = list(records)
+        self.fetch_sizes: list[int] = []
+
+    async def fetch(self, n: int) -> list:
+        self.fetch_sizes.append(n)
+        await self._connection.step("fetch")
+        batch, self._records = self._records[:n], self._records[n:]
+        return batch
 
 
 class _FakeStatement:
-    def __init__(self, columns=(), param_types=(), records=(), fetch_error=None) -> None:
+    def __init__(self, connection: _FakeConnection, columns, param_types, records) -> None:
+        self._connection = connection
         self._columns = columns
         self._param_types = param_types
         self._records = records
-        self._fetch_error = fetch_error
-        self.fetch_args: tuple = ()
+        self.cursor_args: tuple = ()
+        self.cursor_obj: _FakeCursor | None = None
 
     def get_attributes(self):
         return [_Named(name) for name in self._columns]
@@ -930,38 +943,62 @@ class _FakeStatement:
     def get_parameters(self):
         return [_Named(name) for name in self._param_types]
 
-    async def fetch(self, *args):
-        self.fetch_args = args
-        if self._fetch_error is not None:
-            raise self._fetch_error
-        return list(self._records)
+    async def cursor(self, *args) -> _FakeCursor:
+        self.cursor_args = args
+        await self._connection.step("cursor")
+        self.cursor_obj = _FakeCursor(self._connection, self._records)
+        return self.cursor_obj
+
+
+class _FakeTransaction:
+    def __init__(self, connection: _FakeConnection) -> None:
+        self._connection = connection
+
+    async def start(self) -> None:
+        await self._connection.step("begin")
+
+    async def rollback(self) -> None:
+        await self._connection.step("rollback")
 
 
 class _FakeConnection:
-    def __init__(self, statement: _FakeStatement, prepare_error=None) -> None:
-        self._statement = statement
-        self._prepare_error = prepare_error
+    """Records each step (begin, prepare, cursor, fetch, rollback, terminate, release). `errors` makes a step
+    raise, `blocked` makes it wait for `gate` (after setting `entered`) like a query still running on
+    PostgreSQL - a step cancelled meanwhile is recorded as "<step> cancelled"."""
+
+    def __init__(self, columns=(), param_types=(), records=(), errors=None, blocked=None) -> None:
+        self.statement = _FakeStatement(self, columns, param_types, records)
+        self.errors: dict[str, BaseException] = errors or {}
+        self.blocked = blocked
+        self.entered = asyncio.Event()
+        self.gate = asyncio.Event()
+        self.steps: list[str] = []
         self.prepared_sql = ""
+        self.readonly: bool | None = None
 
-    async def prepare(self, sql: str):
+    async def step(self, name: str) -> None:
+        self.steps.append(name)
+        if name == self.blocked:
+            self.entered.set()
+            try:
+                await self.gate.wait()
+            except asyncio.CancelledError:
+                self.steps.append(f"{name} cancelled")
+                raise
+        if name in self.errors:
+            raise self.errors[name]
+
+    def transaction(self, readonly: bool = False) -> _FakeTransaction:
+        self.readonly = readonly
+        return _FakeTransaction(self)
+
+    async def prepare(self, sql: str) -> _FakeStatement:
         self.prepared_sql = sql
-        if self._prepare_error is not None:
-            raise self._prepare_error
-        return self._statement
+        await self.step("prepare")
+        return self.statement
 
-
-class _FakeAcquire:
-    def __init__(self, connection: _FakeConnection, error=None) -> None:
-        self._connection = connection
-        self._error = error
-
-    async def __aenter__(self):
-        if self._error is not None:
-            raise self._error
-        return self._connection
-
-    async def __aexit__(self, *exc_info):
-        return False
+    def terminate(self) -> None:
+        self.steps.append("terminate")
 
 
 class _FakePool:
@@ -969,20 +1006,41 @@ class _FakePool:
         self.connection = connection
         self._acquire_error = acquire_error
         self.acquire_timeout = None
+        self.released: list[_FakeConnection] = []
         self.closed = False
 
-    def acquire(self, timeout=None):
+    async def acquire(self, timeout=None) -> _FakeConnection:
         self.acquire_timeout = timeout
-        return _FakeAcquire(self.connection, self._acquire_error)
+        if self._acquire_error is not None:
+            raise self._acquire_error
+        return self.connection
 
-    async def close(self):
+    async def release(self, connection: _FakeConnection) -> None:
+        connection.steps.append("release")
+        self.released.append(connection)
+
+    async def close(self) -> None:
         self.closed = True
 
 
-def _make_pg_driver(statement=None, prepare_error=None, acquire_error=None, **kwargs) -> AsyncpgDriver:
+def _make_pg_driver(connection: _FakeConnection | None = None, acquire_error=None, **kwargs) -> AsyncpgDriver:
     driver = AsyncpgDriver(host="h", port=5432, database="db", username="u", password="p", **kwargs)
-    driver._pool = _FakePool(_FakeConnection(statement or _FakeStatement(), prepare_error), acquire_error)  # type: ignore
+    driver._pool = _FakePool(connection or _FakeConnection(), acquire_error)  # type: ignore
     return driver
+
+
+async def _pg_result(connection: _FakeConnection):
+    return await _make_pg_driver(connection).execute("SELECT n FROM t", {})
+
+
+_PG_CONNECTIVITY_ERRORS = [
+    OSError("connection reset"),
+    TimeoutError(),
+    asyncpg.InterfaceError("connection is closed"),
+    asyncpg.ConnectionFailureError("server closed the connection"),
+    asyncpg.CannotConnectNowError("starting up"),
+    asyncpg.TooManyConnectionsError("too many"),
+]
 
 
 # --- construction ---------------------------------------------------------------
@@ -1095,69 +1153,84 @@ async def test_pg_execute_requires_a_connected_driver():
 
 @pytest.mark.anyio
 async def test_pg_execute_translates_template_and_unescapes_percent():
-    statement = _FakeStatement(columns=["n"], param_types=["int4", "text"])
-    driver = _make_pg_driver(statement)
+    connection = _FakeConnection(columns=["n"], param_types=["int4", "text"])
+    driver = _make_pg_driver(connection)
 
-    await driver.execute("SELECT %(@ID)s, %(@Name)s WHERE x LIKE 'a%%'", {"@ID": "5", "@Name": "foo"})
+    result = await driver.execute("SELECT %(@ID)s, %(@Name)s WHERE x LIKE 'a%%'", {"@ID": "5", "@Name": "foo"})
 
-    assert driver._pool.connection.prepared_sql == "SELECT $1, $2 WHERE x LIKE 'a%'"  # type: ignore
-    assert statement.fetch_args == (5, "foo")
+    assert connection.prepared_sql == "SELECT $1, $2 WHERE x LIKE 'a%'"
+    assert connection.statement.cursor_args == (5, "foo")
+    await result.close()
 
 
 @pytest.mark.anyio
 async def test_pg_execute_acquires_with_a_timeout():
     driver = _make_pg_driver()
 
-    await driver.execute("SELECT 1", {})
+    result = await driver.execute("SELECT 1", {})
 
     assert driver._pool.acquire_timeout == AsyncpgDriver._acquire_timeout_secs  # type: ignore
+    await result.close()
+
+
+@pytest.mark.anyio
+async def test_pg_execute_opens_a_cursor_in_a_read_only_transaction():
+    """A cursor only lives in a transaction. No row is read before the first fetch()."""
+    connection = _FakeConnection(columns=["n"], records=[_FakeRecord(n=1)])
+
+    result = await _pg_result(connection)
+
+    assert connection.readonly is True
+    assert connection.steps == ["begin", "prepare", "cursor"]
+    await result.close()
+
+
+@pytest.mark.anyio
+async def test_pg_execute_keeps_the_connection_until_the_result_is_closed():
+    connection = _FakeConnection(columns=["n"])
+    driver = _make_pg_driver(connection)
+
+    result = await driver.execute("SELECT n FROM t", {})
+    assert driver._pool.released == []  # type: ignore
+
+    await result.close()
+    assert driver._pool.released == [connection]  # type: ignore
 
 
 @pytest.mark.anyio
 async def test_pg_execute_returns_columns_even_without_rows():
-    driver = _make_pg_driver(_FakeStatement(columns=["a", "b"], records=[]))
-
-    result = await driver.execute("SELECT a, b FROM t WHERE false", {})
+    result = await _pg_result(_FakeConnection(columns=["a", "b"], records=[]))
 
     assert result.columns() == ["a", "b"]
     assert await result.fetch(10) == []
+    await result.close()
 
 
 @pytest.mark.anyio
-async def test_pg_execute_returns_rows_as_tuples():
-    statement = _FakeStatement(columns=["id", "label"], records=[_FakeRecord(id=1, label="x"), _FakeRecord(id=2, label="y")])
-    driver = _make_pg_driver(statement)
-
-    result = await driver.execute("SELECT id, label FROM t", {})
-
-    assert await result.fetch(10) == [(1, "x"), (2, "y")]
-
-
-@pytest.mark.anyio
-@pytest.mark.parametrize(
-    "error",
-    [
-        OSError("connection reset"),
-        TimeoutError(),  # pool saturated
-        asyncpg.InterfaceError("connection is closed"),
-        asyncpg.ConnectionFailureError("server closed the connection"),
-        asyncpg.CannotConnectNowError("starting up"),
-        asyncpg.TooManyConnectionsError("too many"),
-    ],
-)
-@pytest.mark.parametrize("stage", ["acquire", "prepare", "fetch"])
-async def test_pg_execute_translates_connectivity_errors(error, stage):
-    kwargs = {
-        "acquire": {"acquire_error": error},
-        "prepare": {"prepare_error": error},
-        "fetch": {"statement": _FakeStatement(fetch_error=error)},
-    }[stage]
-    driver = _make_pg_driver(**kwargs)
+@pytest.mark.parametrize("error", _PG_CONNECTIVITY_ERRORS)
+async def test_pg_execute_translates_acquire_errors(error):
+    """TimeoutError: pool saturated."""
+    driver = _make_pg_driver(acquire_error=error)
 
     with pytest.raises(AsyncSqlConnectionError) as exc_info:
         await driver.execute("SELECT 1", {})
 
     assert exc_info.value.__cause__ is error
+    assert driver._pool.released == []  # type: ignore  # nothing was acquired
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("error", _PG_CONNECTIVITY_ERRORS)
+@pytest.mark.parametrize("stage", ["begin", "prepare", "cursor"])
+async def test_pg_execute_translates_connectivity_errors_and_releases_the_connection(error, stage):
+    connection = _FakeConnection(errors={stage: error})
+    driver = _make_pg_driver(connection)
+
+    with pytest.raises(AsyncSqlConnectionError) as exc_info:
+        await driver.execute("SELECT 1", {})
+
+    assert exc_info.value.__cause__ is error
+    assert driver._pool.released == [connection]  # type: ignore
 
 
 @pytest.mark.anyio
@@ -1170,13 +1243,38 @@ async def test_pg_execute_translates_connectivity_errors(error, stage):
         asyncpg.DataError("invalid input"),
     ],
 )
-async def test_pg_execute_translates_sql_errors(error):
-    driver = _make_pg_driver(prepare_error=error)
+@pytest.mark.parametrize("stage", ["prepare", "cursor"])
+async def test_pg_execute_translates_sql_errors_and_rolls_back(error, stage):
+    connection = _FakeConnection(errors={stage: error})
 
     with pytest.raises(AsyncSqlExecutionError) as exc_info:
-        await driver.execute("SELECT 1", {})
+        await _pg_result(connection)
 
     assert exc_info.value.__cause__ is error
+    assert connection.steps[-2:] == ["rollback", "release"]
+
+
+@pytest.mark.anyio
+async def test_pg_execute_invalid_parameter_value_rolls_back_and_releases():
+    connection = _FakeConnection(param_types=["int4"])
+
+    with pytest.raises(AsyncSqlExecutionError, match=r"\$1"):
+        await _make_pg_driver(connection).execute("SELECT %(@i)s", {"@i": "abc"})
+
+    assert connection.steps == ["begin", "prepare", "rollback", "release"]
+
+
+@pytest.mark.anyio
+async def test_pg_cancelled_execute_rolls_back_and_releases():
+    connection = _FakeConnection(blocked="prepare")
+    execute_task = asyncio.create_task(_pg_result(connection))
+    await connection.entered.wait()
+
+    execute_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await execute_task
+
+    assert connection.steps == ["begin", "prepare", "prepare cancelled", "rollback", "release"]
 
 
 # --- parameter coercion ---------------------------------------------------------
@@ -1222,44 +1320,154 @@ def test_pg_coerce_args_reports_the_invalid_parameter():
     assert isinstance(exc_info.value.__cause__, ValueError)
 
 
-# --- result adapter ---------------------------------------------------------------
+# --- result -------------------------------------------------------------------
 
 
-@pytest.mark.unit
-def test_pg_result_columns_returns_a_copy():
-    result = _AsyncpgResult(["a"], [])
+@pytest.mark.anyio
+async def test_pg_result_columns_returns_a_copy():
+    result = await _pg_result(_FakeConnection(columns=["a"]))
 
     result.columns().append("b")
 
     assert result.columns() == ["a"]
+    await result.close()
 
 
 @pytest.mark.anyio
-async def test_pg_result_fetches_tuples_batch_by_batch():
-    records = [_FakeRecord(id=i, label=f"r{i}") for i in range(5)]
-    result = _AsyncpgResult(["id", "label"], records)  # type: ignore
+async def test_pg_result_fetches_tuples_batch_by_batch_through_the_cursor():
+    connection = _FakeConnection(columns=["id", "label"], records=[_FakeRecord(id=i, label=f"r{i}") for i in range(5)])
+    result = await _pg_result(connection)
 
     batches = [await result.fetch(2) for _ in range(4)]
 
     assert batches == [[(0, "r0"), (1, "r1")], [(2, "r2"), (3, "r3")], [(4, "r4")], []]
+    assert connection.statement.cursor_obj.fetch_sizes == [2, 2, 2, 2]  # type: ignore
+    await result.close()
 
 
 @pytest.mark.anyio
 async def test_pg_result_makes_values_json_safe():
     record = _FakeRecord(u=uuid.UUID(int=1), raw=b"\xde\xad", n=1)
-    result = _AsyncpgResult(["u", "raw", "n"], [record])  # type: ignore
+    result = await _pg_result(_FakeConnection(columns=["u", "raw", "n"], records=[record]))
 
     assert await result.fetch(10) == [("00000000-0000-0000-0000-000000000001", "\\xdead", 1)]
+    await result.close()
 
 
 @pytest.mark.anyio
-async def test_pg_result_close_releases_records_and_can_be_called_several_times():
-    result = _AsyncpgResult(["id"], [_FakeRecord(id=1), _FakeRecord(id=2)])  # type: ignore
+@pytest.mark.parametrize(
+    "error, expected",
+    [
+        (asyncpg.QueryCanceledError("canceling statement due to statement timeout"), AsyncSqlExecutionError),
+        (asyncpg.ReadOnlySQLTransactionError("cannot execute CREATE TABLE in a read-only transaction"), AsyncSqlExecutionError),
+        (asyncpg.DivisionByZeroError("division by zero"), AsyncSqlExecutionError),
+        (asyncpg.InterfaceError("connection is closed"), AsyncSqlConnectionError),
+        (ConnectionResetError("connection reset"), AsyncSqlConnectionError),
+    ],
+)
+async def test_pg_fetch_errors_are_translated(error, expected):
+    """The query runs as rows are fetched: statement timeout, read-only refusal... surface in fetch()."""
+    result = await _pg_result(_FakeConnection(columns=["n"], errors={"fetch": error}))
+
+    with pytest.raises(expected) as exc_info:
+        await result.fetch(10)
+
+    assert exc_info.value.__cause__ is error
+    await result.close()
+
+
+@pytest.mark.anyio
+async def test_pg_close_rolls_back_then_releases_and_can_be_called_several_times():
+    connection = _FakeConnection(columns=["n"], records=[_FakeRecord(n=1)])
+    driver = _make_pg_driver(connection)
+    result = await driver.execute("SELECT n FROM t", {})
 
     await result.close()
+    await result.close()
+
+    assert connection.steps == ["begin", "prepare", "cursor", "rollback", "release"]
+    assert driver._pool.released == [connection]  # type: ignore  # released once only
+
+
+@pytest.mark.anyio
+async def test_pg_fetch_after_close_returns_no_row():
+    connection = _FakeConnection(columns=["n"], records=[_FakeRecord(n=1)])
+    result = await _pg_result(connection)
+
     await result.close()
 
     assert await result.fetch(10) == []
+    assert "fetch" not in connection.steps
+
+
+@pytest.mark.anyio
+async def test_pg_cancelled_fetch_cancels_the_query():
+    """Client gone: stream_result_ndjson cancels its fetch task, which must cancel the query on PostgreSQL
+    right away (asyncpg does on a cancelled call) - not leave it running until close()."""
+    connection = _FakeConnection(columns=["n"], records=[_FakeRecord(n=1)], blocked="fetch")
+    result = await _pg_result(connection)
+    fetch_task = asyncio.create_task(result.fetch(10))
+    await connection.entered.wait()
+
+    fetch_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await fetch_task
+
+    assert connection.steps[-1] == "fetch cancelled"
+    await result.close()
+    assert connection.steps[-2:] == ["rollback", "release"]
+
+
+@pytest.mark.anyio
+async def test_pg_close_cancels_the_running_fetch_before_rolling_back():
+    connection = _FakeConnection(columns=["n"], records=[_FakeRecord(n=1)], blocked="fetch")
+    result = await _pg_result(connection)
+    fetch_task = asyncio.create_task(result.fetch(10))
+    await connection.entered.wait()
+
+    await result.close()
+
+    assert connection.steps[-4:] == ["fetch", "fetch cancelled", "rollback", "release"]
+    with pytest.raises(asyncio.CancelledError):
+        await fetch_task
+
+
+@pytest.mark.anyio
+async def test_pg_cancelled_close_keeps_closing():
+    """A caller cancelled while waiting in close() (e.g. the request task) can't leave the connection taken."""
+    connection = _FakeConnection(columns=["n"], blocked="rollback")
+    driver = _make_pg_driver(connection)
+    result = await driver.execute("SELECT n FROM t", {})
+    close_task = asyncio.create_task(result.close())
+    await connection.entered.wait()
+
+    close_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await close_task
+    connection.gate.set()
+    await result.close()  # waits for the closing already under way
+
+    assert connection.steps[-2:] == ["rollback", "release"]
+    assert driver._pool.released == [connection]  # type: ignore
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "error",
+    [
+        asyncpg.InterfaceError("connection is closed"),
+        ConnectionResetError("connection reset"),
+        asyncpg.InternalServerError("unexpected"),
+    ],
+)
+async def test_pg_failed_rollback_terminates_the_connection(error):
+    """A connection that can't be rolled back can't be reused - the pool replaces a terminated one."""
+    connection = _FakeConnection(columns=["n"], errors={"rollback": error})
+    result = await _pg_result(connection)
+
+    await result.close()  # must not raise
+
+    assert connection.steps[-3:] == ["rollback", "terminate", "release"]
 
 
 # ================================================================================

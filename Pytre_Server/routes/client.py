@@ -1,5 +1,4 @@
 import asyncio
-import json
 import logging
 import traceback
 from collections.abc import AsyncGenerator
@@ -14,6 +13,7 @@ from pydantic import BaseModel, Field, Json
 from Pytre_Core.context import UserContext
 from Pytre_Core.logs_central import ExecutionLogEntry
 from Pytre_Core.servers import filter_servers
+from Pytre_Core.remote_protocol import stream_error
 from Pytre_Core.users import AuthType, hash_password, verify_password
 from Pytre_Core.user_prefs import DisplayFormat
 from Pytre_Core.utils import log as _log
@@ -420,14 +420,14 @@ async def _run_query(
 
     except AsyncSqlConnectionError as e:
         log(f"Server unavailable on server '{server_id}' (user {username}) : {e}", logging.WARNING)
-        yield json.dumps({"__error__": {"type": type(e).__name__, "message": f"Server unavailable: {e}"}}) + "\n"
+        yield stream_error(e, "Server unavailable: ")
     except AsyncSqlExecutionError as e:
         msg = f"SQL error for query '{query_id}' on '{server_id}' (user {username}): {e}"
         log(msg, logging.ERROR)
-        yield json.dumps({"__error__": {"type": type(e).__name__, "message": f"SQL error: {e}"}}) + "\n"
+        yield stream_error(e, "SQL error: ")
     except Exception as e:
         msg = f"Unexpected error for query '{query_id}' on '{server_id}' (user {username}): "
         log(f"{msg} {type(e).__name__}: {e}\n{traceback.format_exc()}", logging.ERROR)
-        yield json.dumps({"__error__": {"type": type(e).__name__, "message": f"Unexpected error: {e}"}}) + "\n"
+        yield stream_error(e, "Unexpected error: ")
     finally:
         semaphore.release()

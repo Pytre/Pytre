@@ -16,7 +16,7 @@ import fastmssql
 import pymssql
 import pytest
 
-from Pytre_Core.remotes import encode_row_value
+from Pytre_Core.remote_protocol import encode_row_value
 from Pytre_Core.servers import Server, ServerType
 from Pytre_Core.sql_query.query_drivers_server import (
     APP_ID,

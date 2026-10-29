@@ -24,55 +24,10 @@ from Pytre_Core.remotes import (
     RemoteServer,
     RemoteSsoRequiredError,
     Remotes,
-    decode_row_value,
     detail_from_response,
-    encode_row_value,
 )
 from Pytre_Core.users import AuthType
 from Pytre_Core.user_prefs import DisplayFormat
-
-
-# ================================================================================
-# encode_row_value / decode_row_value
-# ================================================================================
-
-
-@pytest.mark.unit
-def test_encode_row_value_wraps_datetime_date_and_decimal():
-    assert encode_row_value(datetime(2026, 1, 1, 10, 30)) == {"$datetime": "2026-01-01T10:30:00"}
-    assert encode_row_value(date(2026, 1, 1)) == {"$date": "2026-01-01"}
-    assert encode_row_value(Decimal("12.50")) == {"$decimal": "12.50"}
-
-
-@pytest.mark.unit
-def test_encode_row_value_passes_through_json_native_types():
-    assert encode_row_value("hello") == "hello"
-    assert encode_row_value(3) == 3
-    assert encode_row_value(1.5) == 1.5
-    assert encode_row_value(True) is True
-    assert encode_row_value(None) is None
-
-
-@pytest.mark.unit
-def test_decode_row_value_unwraps_datetime_date_and_decimal():
-    assert decode_row_value({"$datetime": "2026-01-01T10:30:00"}) == datetime(2026, 1, 1, 10, 30)
-    assert decode_row_value({"$date": "2026-01-01"}) == date(2026, 1, 1)
-    assert decode_row_value({"$decimal": "12.50"}) == Decimal("12.50")
-
-
-@pytest.mark.unit
-def test_decode_row_value_passes_through_unwrapped_values():
-    assert decode_row_value("hello") == "hello"
-    assert decode_row_value(3) == 3
-    assert decode_row_value(None) is None
-
-
-@pytest.mark.unit
-@pytest.mark.parametrize(
-    "value", [datetime(2026, 1, 1, 10, 30), date(2026, 1, 1), Decimal("12.50"), "hello", 3, 1.5, True, None]
-)
-def test_encode_decode_round_trip(value):
-    assert decode_row_value(encode_row_value(value)) == value
 
 
 class _FakeResponse:

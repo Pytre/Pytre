@@ -1,12 +1,11 @@
 import asyncio
-import json
 from collections.abc import AsyncGenerator
 from dataclasses import replace
 from datetime import datetime
 from typing import Protocol
 
 from Pytre_Core.logs_central import ExecutionLogEntry, ServerDriven
-from Pytre_Core.remotes import encode_row_value
+from Pytre_Core.remote_protocol import encode_row_value, StreamKey, stream_error, stream_line
 from Pytre_Core.sql_query.query_drivers_server import AsyncSqlResult
 
 
@@ -39,7 +38,7 @@ async def stream_result_ndjson(
     running is then cancelled. Closing `result` has to be handled by the caller."""
 
     columns = tuple(result.columns())
-    yield json.dumps({"__columns__": columns}) + "\n"
+    yield stream_line(StreamKey.COLUMNS, columns)
 
     json_lines: list[str] = []
     nb_rows = 0
@@ -59,18 +58,18 @@ async def stream_result_ndjson(
                 break
 
             for row in rows:
-                json_lines.append(json.dumps({"__row__": tuple(encode_row_value(value) for value in row)}))
+                json_lines.append(stream_line(StreamKey.ROW, tuple(encode_row_value(value) for value in row)))
                 nb_rows += 1
 
-            yield "\n".join(json_lines) + "\n"
+            yield "".join(json_lines)
             json_lines = []
 
             if await http_request.is_disconnected():
                 return
     except Exception as e:
         if json_lines:
-            yield "\n".join(json_lines) + "\n"
-        yield json.dumps({"__error__": {"type": type(e).__name__, "message": str(e)}}) + "\n"
+            yield "".join(json_lines)
+        yield stream_error(e)
         return
 
     if execution_logs is not None:
@@ -95,4 +94,4 @@ async def pings(task: asyncio.Task, http_request: DisconnectAware, heartbeat_sec
         if await http_request.is_disconnected():
             raise ClientDisconnected
 
-        yield json.dumps({"__ping__": True}) + "\n"
+        yield stream_line(StreamKey.PING, True)

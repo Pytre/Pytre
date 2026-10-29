@@ -5,8 +5,7 @@ import jwt
 import logging
 from contextlib import contextmanager
 from collections.abc import Generator, Iterator
-from datetime import datetime, date, timedelta, timezone
-from decimal import Decimal
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Self, Any, Protocol
 from urllib.parse import urlparse
@@ -15,6 +14,7 @@ from uuid import uuid4
 import httpx2
 
 from Pytre_Core.keyring import KeyringCatalog
+from Pytre_Core.remote_protocol import decode_row_value, StreamKey
 from Pytre_Core.user_prefs import CONFIG_FOLDER, DisplayFormat
 from Pytre_Core.users import AuthType
 from Pytre_Core.utils import detect_encoding, log as _log
@@ -31,47 +31,9 @@ def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__)
     _log(msg, level=level, sublogger=sublogger)
 
 
-def encode_row_value(value: Any) -> Any:
-    """JSON-safe encoding of a raw SQL value"""
-
-    if isinstance(value, datetime):  # no native date type
-        return {"$datetime": value.isoformat()}
-    elif isinstance(value, date):  # no native date type
-        return {"$date": value.isoformat()}
-    elif isinstance(value, Decimal):  # JSON number would lose Decimal's exact precision
-        return {"$decimal": str(value)}
-
-    return value
-
-
-def decode_row_value(value: Any) -> Any:
-    """Reverses the server-side JSON wrapping"""
-    if not isinstance(value, dict):
-        return value
-
-    if "$datetime" in value:
-        return datetime.fromisoformat(value["$datetime"])
-    elif "$date" in value:
-        return date.fromisoformat(value["$date"])
-    elif "$decimal" in value:
-        return Decimal(value["$decimal"])
-
-    return value
-
-
-class JsonResponse(Protocol):
-    """Minimal surface needed from a Response - only json()"""
-
-    def json(self) -> Any: ...
-
-
-class AuthenticatedResponse(JsonResponse, Protocol):
-    """Minimal surface needed from a Response by get_authenticated()'s callers -
-    raise_for_status() + json() (inherited from JsonResponse)."""
-
-    def raise_for_status(self) -> Any: ...
-
-
+# ------------------------------------------------------------------------------------------
+# Exceptions
+# ------------------------------------------------------------------------------------------
 class RemoteError(Exception):
     """Common base class for all remote exceptions."""
 
@@ -122,6 +84,37 @@ class RemoteSsoRequiredError(RemoteAuthError):
     isinstance(last_error, RemoteAuthError) checks in Pytre_Client keep treating it as an auth problem."""
 
 
+# ------------------------------------------------------------------------------------------
+# HTTP responses
+# ------------------------------------------------------------------------------------------
+class JsonResponse(Protocol):
+    """Minimal surface needed from a Response - only json()"""
+
+    def json(self) -> Any: ...
+
+
+class AuthenticatedResponse(JsonResponse, Protocol):
+    """Minimal surface needed from a Response by get_authenticated()'s callers -
+    raise_for_status() + json() (inherited from JsonResponse)."""
+
+    def raise_for_status(self) -> Any: ...
+
+
+def detail_from_response(response: JsonResponse | None, fallback: str) -> str:
+    """Extract detail from response - Pytre_Server always fails with HTTPException(detail="...")"""
+    if response is not None:
+        try:
+            detail = response.json().get("detail")
+            if isinstance(detail, str) and detail:
+                return detail
+        except (ValueError, AttributeError):
+            pass
+    return fallback
+
+
+# ------------------------------------------------------------------------------------------
+# Remotes related classes
+# ------------------------------------------------------------------------------------------
 class Remotes:
     """Manages configured remotes of an user. Servers are not fetched on initialization."""
 
@@ -749,7 +742,7 @@ class RemoteServer:
 
                 lines = response.iter_lines()
                 first_line = next(lines, None)
-                while first_line is not None and "__ping__" in json.loads(first_line):
+                while first_line is not None and StreamKey.PING in json.loads(first_line):
                     first_line = next(lines, None)  # keep alive sent while the query is still running
 
                 if first_line is None:
@@ -757,7 +750,7 @@ class RemoteServer:
                 else:
                     first_record = json.loads(first_line)
                     self._raise_if_error(first_record)
-                    col_names = first_record["__columns__"]
+                    col_names = first_record[StreamKey.COLUMNS]
 
                 yield RemoteCursor(tuple(col_names), self._iter_records(lines))
                 break
@@ -768,15 +761,15 @@ class RemoteServer:
                 continue
 
             record = json.loads(line)
-            if "__ping__" in record:
+            if StreamKey.PING in record:
                 continue
             self._raise_if_error(record)
 
-            yield tuple(decode_row_value(v) for v in record["__row__"])
+            yield tuple(decode_row_value(v) for v in record[StreamKey.ROW])
 
     def _raise_if_error(self, record: dict) -> None:
-        if "__error__" in record:
-            error = record["__error__"]
+        if StreamKey.ERROR in record:
+            error = record[StreamKey.ERROR]
             raise RemoteExecutionError(f"{error['type']}: {error['message']}")
 
     def get_serialized_queries(self, display_format: DisplayFormat) -> list[dict]:
@@ -851,15 +844,3 @@ class RemoteCursor:
         """Describes columns the same way a local cursor's `.description` would.
         Only column names are available - other fields are always None."""
         return tuple((col_name, None, None, None, None, None, None) for col_name in self._col_names)
-
-
-def detail_from_response(response: JsonResponse | None, fallback: str) -> str:
-    """Extract detail from response - Pytre_Server always fails with HTTPException(detail="...")"""
-    if response is not None:
-        try:
-            detail = response.json().get("detail")
-            if isinstance(detail, str) and detail:
-                return detail
-        except (ValueError, AttributeError):
-            pass
-    return fallback

@@ -13,6 +13,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import Pytre_Core.kee as kee_module
+from Pytre_Core.settings import Settings
 from Pytre_Core.sql_query.file_parser import FileParser
 from Pytre_Server.app import create_app
 from Pytre_Server.query_catalog import QueryCatalog
@@ -120,6 +121,45 @@ def test_reload_queries_reports_a_failed_reload(admin_client, monkeypatch):
 
     assert response.status_code == 200
     assert "Reload failed: boom" in response.text
+
+
+def test_reload_keeps_the_queries_when_the_folder_is_missing(admin_client, tmp_path):
+    """A folder unavailable for a moment (network share...) must not empty every user's query list."""
+    admin_client.app.state.server.app_ctx.settings.queries_folder = tmp_path / "missing"
+
+    response = admin_client.post("/admin/queries/reload", follow_redirects=False)
+    response = admin_client.get(response.headers["location"])
+
+    assert "Reload failed" in response.text
+    assert TEST_QUERY_ID in response.text
+
+
+# ------------------------------------------------------------------------------------------
+# Startup
+# ------------------------------------------------------------------------------------------
+def test_server_starts_without_queries_when_the_folder_is_missing(monkeypatch, tmp_path, caplog):
+    """The queries folder is set from the admin webui: the server must start anyway for it to be fixed."""
+    missing_folder = tmp_path / "missing"
+    original_load = Settings.load
+
+    def load_with_a_missing_folder(self, reload: bool = False) -> None:
+        original_load(self, reload)
+        self.queries_folder = missing_folder
+
+    monkeypatch.setattr(Settings, "load", load_with_a_missing_folder)
+    monkeypatch.setattr(kee_module, "KEE_FILE", TEST_DB_PATH)
+
+    with caplog.at_level(logging.WARNING):
+        app = create_app(master_key=TEST_DB_PASSWORD)
+
+    assert app.state.server.query_catalog.parsers == []
+    assert any("No query loaded" in r.message and r.levelno == logging.WARNING for r in caplog.records)
+
+    client = TestClient(app)
+    client.post("/admin/login", data={"username": TEST_USERNAME, "password": TEST_USER_PASSWORD})
+    response = client.get("/admin/queries")
+    assert response.status_code == 200
+    assert str(missing_folder) in response.text  # the load error is shown to the admin
 
 
 def test_reload_queries_reports_a_build_error_in_the_flash_message(admin_client, tmp_path):

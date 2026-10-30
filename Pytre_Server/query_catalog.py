@@ -25,6 +25,11 @@ class QueryCatalog:
         by_file_id = {p.filename.stem: p for p in parsers}
         return cls(parsers=parsers, load_errors=errors, by_file_id=by_file_id)
 
+    @classmethod
+    def create_empty(cls, error: str) -> typing.Self:
+        """Catalog without any query, `error` telling why (e.g. a missing folder at startup)."""
+        return cls(parsers=[], load_errors=[error], by_file_id={})
+
     def with_build_errors(self, app_ctx: AppContext, user_ctx: UserContext) -> typing.Self:
         """Returns a copy of this catalog with build_errors filled, by attempting to build a
         Query from every parser as user_ctx would see it - surfaces structurally broken queries

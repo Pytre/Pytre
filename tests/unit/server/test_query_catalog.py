@@ -81,6 +81,29 @@ def test_load_by_file_id_does_not_collide_on_duplicate_code_header(tmp_path):
     assert catalog.by_file_id["b"].filename.name == "b.sql"
 
 
+@pytest.mark.unit
+def test_load_raises_for_a_missing_folder(tmp_path):
+    """Left to the caller: at startup the server goes on with create_empty(), a reload keeps the
+    catalog already in place."""
+    with pytest.raises(ValueError):
+        QueryCatalog.load(tmp_path / "missing")
+
+
+# ================================================================================
+# create_empty
+# ================================================================================
+
+
+@pytest.mark.unit
+def test_create_empty_has_no_query_and_tells_why():
+    catalog = QueryCatalog.create_empty("folder not found")
+
+    assert catalog.parsers == []
+    assert catalog.by_file_id == {}
+    assert catalog.load_errors == ["folder not found"]
+    assert catalog.build_errors == []
+
+
 # ================================================================================
 # with_build_errors
 # ================================================================================

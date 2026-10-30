@@ -56,9 +56,15 @@ def create_app(
     if _app_ctx.settings.logs_are_on:
         execution_logs = ServerDriven(logs_folder=_app_ctx.settings.logs_folder)
 
+    try:
+        query_catalog = QueryCatalog.load(_app_ctx.settings.queries_folder)
+    except (ValueError, OSError) as e:
+        log(f"No query loaded: {e}", logging.WARNING)
+        query_catalog = QueryCatalog.create_empty(str(e))
+
     app.state.server = ServerState(
         app_ctx=_app_ctx,
-        query_catalog=QueryCatalog.load(_app_ctx.settings.queries_folder),
+        query_catalog=query_catalog,
         chunk_size=chunk_size,
         max_concurrency_per_user=max_concurrency_per_user,
         heartbeat_secs=heartbeat_secs,

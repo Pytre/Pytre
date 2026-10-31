@@ -14,6 +14,7 @@ import uuid
 import pytest
 
 from Pytre_Core.utils import log as pytre_log
+from Pytre_Server.log_buffer import SEPARATOR_MESSAGE
 from Pytre_Server.routes import admin_logs
 
 pytestmark = pytest.mark.integration
@@ -67,6 +68,21 @@ def test_logs_page_caps_rendered_entries_at_initial_page_size(admin_client, monk
     assert markers[0] not in response.text
 
 
+def test_logs_page_renders_stored_logs_below_a_separator_without_level(admin_client, tmp_path):
+    marker = _unique_marker()
+    log_file = tmp_path / "server.log"
+    log_file.write_text(f"2026-10-31 10:13:20+0100 - INFO - Pytre.test - {marker}\n", encoding="utf-8")
+    admin_client.app.state.server.resources.log_buffer.load_from_file(log_file)
+
+    response = admin_client.get("/admin/logs")
+
+    separator_pos = response.text.index('log-separator" data-seq="')
+    assert SEPARATOR_MESSAGE in response.text
+    assert separator_pos < response.text.index(marker)  # newest first: stored lines are under it
+    separator_row = response.text[separator_pos : response.text.index("</div>", separator_pos)]
+    assert "data-level" not in separator_row  # stays visible whatever the level filters
+
+
 def test_sidebar_shows_logs_link(admin_client):
     response = admin_client.get("/admin/logs")
 
@@ -115,6 +131,20 @@ def test_logs_before_returns_entries_preceding_the_given_seq(admin_client):
     messages = [e["message"] for e in response.json()]
     assert older_marker in messages
     assert newer_marker not in messages
+
+
+def test_logs_before_flags_the_separator(admin_client, tmp_path):
+    """The separator can be past the first page - buildRow() relies on this flag to render it."""
+    log_file = tmp_path / "server.log"
+    log_file.write_text(f"2026-10-31 10:13:20+0100 - INFO - Pytre.test - {_unique_marker()}\n", encoding="utf-8")
+    log_buffer = admin_client.app.state.server.resources.log_buffer
+    log_buffer.load_from_file(log_file)
+    before_seq = max(e.seq for e in log_buffer.entries_since(0)) + 1
+
+    response = admin_client.get(f"/admin/logs/before?before={before_seq}&limit=5")
+
+    assert any(e["is_separator"] and e["message"] == SEPARATOR_MESSAGE for e in response.json())
+    assert not all(e["is_separator"] for e in response.json())
 
 
 def test_logs_before_is_empty_once_history_exhausted(admin_client):

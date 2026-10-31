@@ -116,6 +116,7 @@ def start_server(args: argparse.Namespace):
             max_concurrency_per_user=args.max_concurrency_per_user,
             heartbeat_secs=args.heartbeat_secs,
             log_buffer_mb=args.log_buffer_mb,
+            log_file=args.log_file,
         ),
         host=args.host,
         port=args.port,

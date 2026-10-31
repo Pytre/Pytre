@@ -3,15 +3,43 @@ Tests for Pytre_Server/logs.py
 """
 
 import logging
+import re
 from logging.handlers import RotatingFileHandler
 
 import pytest
 
 from Pytre_Core.utils import LOGGER_ROOT_NAME, log as pytre_log
+from Pytre_Server import logs
 from Pytre_Server.logs import BACKUP_COUNT, MAX_BYTES, setup_file_logging, setup_terminal_logging
 
 
 pytestmark = pytest.mark.usefixtures("pristine_pytre_logger")  # see tests/conftest.py
+
+
+@pytest.mark.unit
+def test_setup_file_logging_limits_logs_to_two_files_of_bounded_size(tmp_path, monkeypatch):
+    max_bytes = 500
+    monkeypatch.setattr(logs, "MAX_BYTES", max_bytes)
+    log_file = tmp_path / "server.log"
+    setup_file_logging(log_file)
+
+    for i in range(200):
+        pytre_log(f"message {i}", level=logging.INFO, sublogger="test_logs")
+
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["server.log", "server.log.1"]
+    assert log_file.stat().st_size <= max_bytes
+    assert log_file.with_name("server.log.1").stat().st_size <= max_bytes
+
+
+@pytest.mark.unit
+def test_setup_file_logging_writes_dates_with_their_utc_offset(tmp_path):
+    log_file = tmp_path / "server.log"
+    setup_file_logging(log_file)
+
+    pytre_log("hello", level=logging.INFO, sublogger="test_logs")
+
+    content = log_file.read_text(encoding="utf-8")
+    assert re.match(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}[+-]\d{4} - INFO - ", content)
 
 
 @pytest.mark.unit

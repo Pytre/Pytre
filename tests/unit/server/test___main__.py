@@ -192,9 +192,23 @@ def test_start_server_runs_uvicorn_with_resolved_master_key(monkeypatch):
         db_pool_size=30,
         max_concurrency_per_user=4,
         heartbeat_secs=30,
-        log_buffer_mb=10,
+        log_buffer_mb=5,
+        log_file=None,
     )
     run.assert_called_once_with("app", host="0.0.0.0", port=9000, forwarded_allow_ips=None)
+
+
+@pytest.mark.unit
+def test_start_server_forwards_log_file_to_create_app(monkeypatch):
+    monkeypatch.setattr("Pytre_Server.__main__.get_master_key_interactive", Mock(return_value="s3cret"))
+    create_app_mock = Mock(return_value="app")
+    monkeypatch.setattr("Pytre_Server.__main__.create_app", create_app_mock)
+    monkeypatch.setattr("Pytre_Server.__main__.uvicorn.run", Mock())
+    args = create_parser().parse_args(["--log-file", "server.log"])
+
+    start_server(args)
+
+    assert str(create_app_mock.call_args.kwargs["log_file"]) == "server.log"
 
 
 @pytest.mark.unit

@@ -15,12 +15,16 @@
     </div>
     <div class="logs-scroll" id="logs-scroll" data-last-seq="{{ last_seq }}">
         {% for e in entries %}
+        {% if e.is_separator %}
+        <div class="log-row log-separator" data-seq="{{ e.seq }}">{{ e.message }}</div>
+        {% else %}
         <div class="log-row" data-level="{{ e.level_name }}" data-seq="{{ e.seq }}">
             <span class="log-ts" data-ts="{{ e.timestamp | int }}"></span>
             <span class="log-level log-level-{{ e.level_name | lower }}">{{ e.level_name }}</span>
             <span class="log-logger">{{ e.logger_name }}</span>
             <span class="log-message">{{ e.message }}</span>
         </div>
+        {% endif %}
         {% endfor %}
         <div id="logs-older-sentinel"></div>
     </div>
@@ -63,8 +67,13 @@
     function buildRow(entry) {
         var row = document.createElement("div");
         row.className = "log-row";
-        row.dataset.level = entry.level_name;
         row.dataset.seq = entry.seq;
+        if (entry.is_separator) {
+            row.classList.add("log-separator");
+            row.textContent = entry.message;
+            return row;
+        }
+        row.dataset.level = entry.level_name;
         row.innerHTML =
             '<span class="log-ts"></span>' +
             '<span class="log-level log-level-' + entry.level_name.toLowerCase() + '">' + entry.level_name + '</span>' +

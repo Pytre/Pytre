@@ -1,5 +1,6 @@
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.responses import RedirectResponse
@@ -42,11 +43,12 @@ def create_app(
     max_concurrency_per_user: int = 4,
     heartbeat_secs: int = 30,
     log_buffer_mb: int = MAX_LOG_SIZE_MB,
+    log_file: Path | str | None = None,
 ) -> FastAPI:
     """Build and configure the FastAPI app"""
 
     # setup log_buffer
-    log_buffer = setup_log_buffer(max_mb=log_buffer_mb)
+    log_buffer = setup_log_buffer(max_mb=log_buffer_mb, log_file=log_file)
 
     # create app
     app = FastAPI(title="Pytre Server", lifespan=_lifespan)
@@ -97,7 +99,7 @@ if __name__ == "__main__":
 
     setup_terminal_logging(logging.DEBUG)
 
-    log_file = None  # specify a file to allow file logging
+    log_file = "./Pytre_Server.log"  # specify a file to allow file logging
     if log_file is not None:
         setup_file_logging(log_file)
 
@@ -105,4 +107,4 @@ if __name__ == "__main__":
     if master_key is None:
         print("Startup cancelled: no master password configured.")
     else:
-        uvicorn.run(create_app(master_key=master_key), host="127.0.0.1", port=8000)
+        uvicorn.run(create_app(master_key=master_key, log_file=log_file), host="127.0.0.1", port=8000)

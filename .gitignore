@@ -11,4 +11,5 @@ changelog*.txt
 
 /Pytre.key
 /Pytre*.db
+/Pytre*.log
 

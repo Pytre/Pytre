@@ -155,7 +155,7 @@ class Remotes:
                 with open(self.remotes_file, mode="r", encoding="utf-8") as f:
                     json_dict = json.load(f)
                     assert isinstance(json_dict, dict)
-            except (json.JSONDecodeError, IOError) as e:
+            except (json.JSONDecodeError, UnicodeDecodeError, IOError) as e:
                 log(f"Error while loading remotes json file : {e}", logging.WARNING)
                 load_issues = True
             except AssertionError as e:

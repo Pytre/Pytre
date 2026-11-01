@@ -1153,9 +1153,8 @@ def test_server_save_creates_new_entry(mock_kee):
     new_entry.uuid = "new-uuid"
     mock_kee.db.add_entry = Mock(return_value=new_entry)
 
-    result = server.save()
+    server.save()
 
-    assert result is True
     assert mock_kee.db.add_entry.called
     assert new_entry.title == "NEW_SERVER"
     assert mock_kee.save_db.called
@@ -1174,9 +1173,8 @@ def test_server_delete_removes_entry(mock_kee):
     entry = Mock(spec=Entry)
     mock_kee.db.find_entries = Mock(return_value=entry)
 
-    result = server.delete()
+    server.delete()
 
-    assert result is True
     assert entry.delete.called
     assert mock_kee.save_db.called
 
@@ -1238,9 +1236,8 @@ def test_server_save_updates_existing_entry(mock_kee):
     existing_entry = Mock(spec=Entry)
     mock_kee.db.find_entries = Mock(return_value=existing_entry)
 
-    result = server.save()
+    server.save()
 
-    assert result is True
     assert existing_entry.title == "EXISTING"
     assert not mock_kee.db.add_entry.called
     assert mock_kee.save_db.called

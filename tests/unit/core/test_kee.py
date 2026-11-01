@@ -236,22 +236,53 @@ def test_save_db_saves_successfully(mock_pykeepass, mock_credentials):
     with patch("Pytre_Core.kee.PyKeePass", return_value=mock_pykeepass):
         kee = Kee(password="test_password")
 
-        assert kee.save_db() is True
+        kee.save_db()
+
         assert mock_pykeepass.save.called
+        assert not mock_pykeepass.reload.called
 
 
 @pytest.mark.unit
-def test_save_db_handles_permission_error(mock_pykeepass, mock_credentials):
-    """save_db should handle permission errors gracefully"""
-
-    # Mock save to raise PermissionError
-    mock_pykeepass.save.side_effect = PermissionError
+@pytest.mark.parametrize("error", [PermissionError("denied"), FileNotFoundError("Pytre.tmp"), OSError("disk full")])
+def test_save_db_raises_a_clear_oserror_and_discards_unsaved_changes(mock_pykeepass, mock_credentials, error):
+    """FileNotFoundError is what pykeepass ends up raising for a read-only folder: its cleanup of a
+    temporary file that was never created fails, hiding the original PermissionError."""
+    mock_pykeepass.save.side_effect = error
 
     with patch("Pytre_Core.kee.PyKeePass", return_value=mock_pykeepass):
         kee = Kee(password="test_password")
 
-        # Should not raise error but report the failure
-        assert kee.save_db() is False
+        with pytest.raises(OSError, match="check write access") as exc_info:
+            kee.save_db()
+
+    assert str(kee.file) in str(exc_info.value)
+    assert exc_info.value.__cause__ is error
+    mock_pykeepass.reload.assert_called_once()
+
+
+@pytest.mark.unit
+def test_save_db_keeps_changes_when_asked_not_to_discard_them(mock_pykeepass, mock_credentials):
+    mock_pykeepass.save.side_effect = PermissionError("denied")
+
+    with patch("Pytre_Core.kee.PyKeePass", return_value=mock_pykeepass):
+        kee = Kee(password="test_password")
+
+        with pytest.raises(OSError, match="check write access"):
+            kee.save_db(discard_on_failure=False)
+
+    assert not mock_pykeepass.reload.called
+
+
+@pytest.mark.unit
+def test_save_db_failure_is_not_hidden_by_a_failing_reload(mock_pykeepass, mock_credentials):
+    mock_pykeepass.save.side_effect = PermissionError("denied")
+    mock_pykeepass.reload.side_effect = ValueError("unreadable database")
+
+    with patch("Pytre_Core.kee.PyKeePass", return_value=mock_pykeepass):
+        kee = Kee(password="test_password")
+
+        with pytest.raises(OSError, match="check write access"):
+            kee.save_db()
 
 
 # ================================================================================
@@ -458,6 +489,7 @@ def test_pwd_change_keeps_previous_password_if_save_fails(mock_pykeepass, mock_c
 
     assert kee.password == "test_password"
     assert mock_pykeepass.password == "test_password"
+    assert not mock_pykeepass.reload.called  # would use the new password on a file still using the previous one
     mock_credentials.assert_not_called()
 
 

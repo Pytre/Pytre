@@ -104,10 +104,12 @@ async def _save_user(
     # update user with form submitted values
     await user_form.apply_to(user, attribs_cust)
 
+    saved_uuid = user.uuid
     try:
         _apply_oidc_link(user, form_data)
         await asyncio.to_thread(user.save)
-    except ValueError as e:
+    except (ValueError, OSError) as e:
+        user.uuid = saved_uuid  # a failed creation must be displayed as "new" (its entry was discarded)
         context = _form_context(state, user)
         context["error"] = str(e)
         return templates.TemplateResponse(request, "admin/user_form.html", context)

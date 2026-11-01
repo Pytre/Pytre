@@ -135,7 +135,7 @@ class OidcProvider:
         if entry is not None:
             self._load_from_entry(entry)
 
-    def save(self, save_db: bool = True) -> bool:
+    def save(self, save_db: bool = True) -> None:
         """Updates the OIDC provider's entry in memory. If `save_db` is False then save_db() is not called -
         the caller is responsible for persisting the change."""
 
@@ -180,9 +180,7 @@ class OidcProvider:
         if save_db:
             self.providers.kee.save_db()
 
-        return True
-
-    def delete(self) -> bool:
+    def delete(self) -> None:
         self.providers.open_db()
         if self.providers.kee.db is None:
             raise RuntimeError("Database not opened, can't delete OIDC provider")
@@ -195,5 +193,3 @@ class OidcProvider:
 
         entry.delete()
         self.providers.kee.save_db()
-
-        return True

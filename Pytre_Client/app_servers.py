@@ -434,38 +434,37 @@ class ServersWindow(tk.Toplevel):
 
         # enregistrement des infos
         try:
-            result = self.server.save()
+            self.server.save()
         except Exception as e:
             msg = "Erreur inattendue lors de l'enregistrement :\n"
             messagebox.showerror(title="Mise à jour infos serveur", message=msg + str(e), parent=self)
             return
 
         # signalement de la fin de l'enregistrement
-        if result:
-            self.new_server = False
-            self.servers_modified = True
-            self.reload_all()
-            msg = "Modifications enregistrées"
-            messagebox.showinfo(title="Mise à jour infos serveur", message=msg, parent=self)
-        else:
-            msg = "Problème lors de l'enregistrement !"
-            messagebox.showerror(title="Mise à jour infos serveur", message=msg, parent=self)
+        self.new_server = False
+        self.servers_modified = True
+        self.reload_all()
+        msg = "Modifications enregistrées"
+        messagebox.showinfo(title="Mise à jour infos serveur", message=msg, parent=self)
 
     def server_remove(self):
         if self.server is None:
             raise RuntimeError("No server selected !")
 
         curr_pos = self.tree.index(self.tree.focus())
-        result = self.server.delete()
-        if result:
-            self.reload_all()
-            self.tree_select_pos(max(curr_pos - 1, 0))
-            self.servers_modified = True
-            msg = "Suppression du serveur réussi"
-            messagebox.showinfo(title="Suppression infos serveur", message=msg, parent=self)
-        else:
-            msg = "Problème lors de la suppression !"
+
+        try:
+            self.server.delete()
+        except OSError as e:
+            msg = f"Problème lors de la suppression :\n{e}"
             messagebox.showerror(title="Suppression infos serveur", message=msg, parent=self)
+            return
+
+        self.reload_all()
+        self.tree_select_pos(max(curr_pos - 1, 0))
+        self.servers_modified = True
+        msg = "Suppression du serveur réussi"
+        messagebox.showinfo(title="Suppression infos serveur", message=msg, parent=self)
 
     def import_servers(self):
         title = "Fichier à importer"

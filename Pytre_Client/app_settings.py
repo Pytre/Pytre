@@ -220,16 +220,12 @@ class SettingsWindow(MainSettingsWindow):
             setattr(self.settings, key, val)
 
         try:
-            result = self.settings.save()
-        except (LookupError, ValueError) as e:
+            self.settings.save()
+        except (LookupError, ValueError, OSError) as e:
             messagebox.showerror(title="Mise à jour paramètres", message=str(e), parent=self)
             return
 
-        if result:
-            self.app_exit()
-        else:
-            msg = "Problème lors de l'enregistrement !"
-            messagebox.showerror(title="Mise à jour paramètres", message=msg, parent=self)
+        self.app_exit()
 
 
 class UserPrefsWindow(MainSettingsWindow):

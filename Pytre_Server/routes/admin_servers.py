@@ -164,9 +164,11 @@ async def _save_server(
     `server_obj` is either a blank new Server or one just loaded via find_server_by_uuid()."""
     server_form.apply_to(server_obj)
 
+    saved_uuid = server_obj.uuid
     try:
         await asyncio.to_thread(server_obj.save)
-    except ValueError as e:
+    except (ValueError, OSError) as e:
+        server_obj.uuid = saved_uuid  # a failed creation must be displayed as "new" (its entry was discarded)
         context = _form_context(state, server_obj)
         context["error"] = str(e)
         return templates.TemplateResponse(request, "admin/server_form.html", context)

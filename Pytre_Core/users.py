@@ -725,7 +725,7 @@ class User:
 
         return True
 
-    def save(self, save_db: bool = True) -> bool:
+    def save(self, save_db: bool = True) -> None:
         """Updates the user's entry in memory. If `save_db` is False then save_db() is not called -
         the caller is responsible for persisting the change."""
 
@@ -788,9 +788,7 @@ class User:
         self.exists = True
         self.is_authorized = True
 
-        return True
-
-    def delete(self) -> bool:
+    def delete(self) -> None:
         if self.users is None:
             raise RuntimeError("No users database, cannot delete user")
 
@@ -806,8 +804,6 @@ class User:
 
         u_entry.delete()
         self.users.kee.save_db()
-
-        return True
 
     def export_infos_for_remote(self) -> dict:
         """Export infos needed to correctly deserialize queries from a remote."""

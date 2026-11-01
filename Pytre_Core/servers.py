@@ -394,7 +394,7 @@ class Server:
         if entry is not None:
             self._load_from_entry(entry)
 
-    def save(self, save_db: bool = True) -> bool:
+    def save(self, save_db: bool = True) -> None:
         """Updates the server's entry in memory. If `save_db` is False then save_db() is not called -
         the caller is responsible for persisting the change."""
 
@@ -447,9 +447,8 @@ class Server:
         if save_db:
             self.servers.kee.save_db()
         self.servers.get_all_groups(reload=False)
-        return True
 
-    def delete(self) -> bool:
+    def delete(self) -> None:
         self.servers.open_db()
         if self.servers.kee.db is None:
             raise RuntimeError("Database not opened, can't delete server")
@@ -462,8 +461,6 @@ class Server:
 
         s_entry.delete()
         self.servers.kee.save_db()
-
-        return True
 
 
 def filter_servers(servers: dict[str, Server], grp_filter: list[str] | None) -> dict[str, Server]:

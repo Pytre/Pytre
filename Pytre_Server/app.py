@@ -1,9 +1,11 @@
 import logging
+import traceback
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import quote_plus
 
-from fastapi import FastAPI
-from fastapi.responses import RedirectResponse
+from fastapi import FastAPI, Request, Response, status
+from fastapi.responses import JSONResponse, RedirectResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from Pytre_Core.context import AppContext, AppMode
@@ -21,6 +23,22 @@ from Pytre_Server.server_state import ServerResources, ServerState
 
 def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__) -> None:
     _log(msg, level=level, sublogger=sublogger)
+
+
+def os_error_handler(request: Request, exc: Exception) -> Response:
+    """Catch all OSError no route handled. For instance failing to save the settings database."""
+    details = "".join(traceback.format_exception(exc))
+    log(f"Unhandled OSError on {request.method} {request.url.path}:\n{details}", logging.ERROR)
+
+    # Only an authenticated admin may see file paths, and redirecting a GET could loop on itself
+    if getattr(request.state, "admin_username", None) is not None and request.method != "GET":
+        section = "/".join(request.url.path.split("/")[:3])  # /admin/users/x/delete -> /admin/users
+        url = f"{section}?error={quote_plus(str(exc))}"
+        return RedirectResponse(url, status_code=status.HTTP_303_SEE_OTHER)
+
+    return JSONResponse(
+        {"detail": "Server storage error, see server logs"}, status_code=status.HTTP_503_SERVICE_UNAVAILABLE
+    )
 
 
 @asynccontextmanager
@@ -86,6 +104,9 @@ def create_app(
 
     # exception handler to redirect to /admin/login when no valid admin session
     app.add_exception_handler(AdminAuthRequired, admin_auth_required_handler)
+
+    # exception handler for storage errors not handled by the routes
+    app.add_exception_handler(OSError, os_error_handler)
 
     log("Server started", logging.INFO)
 

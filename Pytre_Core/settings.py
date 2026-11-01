@@ -89,8 +89,8 @@ class Settings:
         self.load(reload=True)
 
     def set_jwt_secret(self) -> None:
-        """Generate and persist a new jwt secret directly.
-        Avoid save() so other fields are not changed, revalidated and rewritten."""
+        """Generate and persist a new jwt secret directly. Avoid save() so other fields are not changed, revalidated
+        and rewritten. Only called when no previous jwt_secret exists."""
         kee_title = _KeepassEnum.JWT_SECRET.name
 
         self.jwt_secret = secrets.token_urlsafe(32)
@@ -101,9 +101,14 @@ class Settings:
 
         entry.username = self.jwt_secret
 
-        self.kee.save_db()
+        try:
+            self.kee.save_db()
+        except OSError as e:
+            # A read-only database must not prevent startup
+            msg = f"JWT secret kept in memory only, it will change on next start. Tokens will need to be renewed: {e}"
+            log(msg, logging.WARNING)
 
-    def save(self) -> bool:
+    def save(self) -> None:
         self.open_db()
 
         assert self.kee.db is not None
@@ -125,7 +130,6 @@ class Settings:
             info.username = str(value)
 
         self.kee.save_db()
-        return True
 
     def get_min_version(self, queries_folder: str | Path) -> tuple[str, str, bool]:
         """for query_folder return min version needed for application and settings and

@@ -87,7 +87,7 @@ def test_save_then_reload_from_a_new_kee_keeps_every_field(kee, oidcs):
         public_base_url="https://pytre.example.com",
     )
 
-    assert oidc.save() is True
+    oidc.save()
     assert oidc.uuid != ""
 
     loaded = _reopened().get_all_providers()[ISSUER]
@@ -171,7 +171,7 @@ def test_delete_removes_the_entry(kee, oidcs):
     oidc = _new_oidc(oidcs)
     oidc.save()
 
-    assert oidc.delete() is True
+    oidc.delete()
 
     assert _reopened().get_all_providers() == {}
 

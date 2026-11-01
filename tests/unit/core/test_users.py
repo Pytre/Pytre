@@ -1440,9 +1440,8 @@ def test_user_save_creates_new_entry(mock_kee):
     new_entry.uuid = "new-uuid"
     mock_kee.db.add_entry = Mock(return_value=new_entry)
 
-    result = user.save()
+    user.save()
 
-    assert result is True
     assert mock_kee.db.add_entry.called
     assert new_entry.username == "jdoe"
     assert new_entry.title == "John Doe"
@@ -1508,9 +1507,8 @@ def test_user_delete_removes_entry(mock_kee):
     entry = Mock(spec=Entry)
     mock_kee.db.find_entries = Mock(return_value=entry)
 
-    result = user.delete()
+    user.delete()
 
-    assert result is True
     assert entry.delete.called
     assert mock_kee.save_db.called
 

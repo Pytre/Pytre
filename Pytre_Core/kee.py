@@ -78,18 +78,24 @@ class Kee:
         self.grp_users = self._get_group(KeeGroup.USERS.value)
         self.grp_oidc = self._get_group(KeeGroup.OIDC.value)
 
-    def save_db(self) -> bool:
-        """Returns whether the database was saved"""
+    def save_db(self, discard_on_failure: bool = True) -> None:
+        """Raises OSError if write failed. Unsaved changes are discarded unless `discard_on_failure` is False."""
         if self.db is None:
             raise RuntimeError("Can't save a closed database.")
 
         try:
             self.db.save()
-        except PermissionError as e:
-            log(f"Failed to save settings database: {e}", logging.ERROR)
-            return False
+        except OSError as save_err:
+            msg = f"Failed to save settings database '{self.file}', check write access: {save_err}"
+            log(msg, logging.ERROR)
 
-        return True
+            if discard_on_failure:
+                try:
+                    self.open_db(reload=True)
+                except Exception as reload_err:
+                    log(f"Failed to reload settings database: {reload_err}", logging.ERROR)
+
+            raise OSError(msg) from save_err
 
     def create_db(self, password: str = BLANK_PWD):
         self.is_ko = True
@@ -136,9 +142,11 @@ class Kee:
         previous_password, previous_db_password = self.password, self.db.password
         self.password, self.db.password = new_password, new_password
 
-        if not self.save_db():
+        try:
+            self.save_db(discard_on_failure=False)  # no discard, reloading before reverting password would fail
+        except OSError as e:
             self.password, self.db.password = previous_password, previous_db_password
-            raise RuntimeError("Failed to save the settings database with its new password")
+            raise RuntimeError("Failed to save the settings database with its new password") from e
 
         if self._uses_key_file:
             crypted_file_pwd_change(new_password)

@@ -1,7 +1,9 @@
 import logging
 import tkinter as tk
+import traceback
 import webbrowser
 from threading import Thread
+from types import TracebackType
 from queue import Queue as ThreadQueue
 from tkinter import Event as tkEvent, ttk, messagebox, font
 
@@ -70,7 +72,10 @@ class ParamWidgetGroup:
 class App(tk.Toplevel):
     def __init__(self, mode: AppMode = AppMode.CLIENT):
         super().__init__()
-        self.master.withdraw()  # type: ignore
+
+        assert isinstance(self.master, tk.Tk)
+        self.master.report_callback_exception = self.on_callback_error
+        self.master.withdraw()
         self.withdraw()  # hide until initialization is complete to avoid visual artifacts
 
         self.console_app: ConsoleWindow = ConsoleWindow(parent=self, hide=True)
@@ -118,6 +123,12 @@ class App(tk.Toplevel):
 
         self.cache_folder_cleanup()
 
+    def on_callback_error(self, exc_type: type[BaseException], exc: BaseException, tb: TracebackType | None) -> None:
+        """Handles and exposes an error no callback handled."""
+        details = "".join(traceback.format_exception(exc_type, exc, tb))
+        log(f"Unhandled error in a callback:\n{details}", logging.ERROR)
+        messagebox.showerror(title="Erreur inattendue", message=str(exc))
+
     def check_database_access(self, max_attempts=5):
         if not self.app_ctx.acts_as_server:
             return
@@ -161,8 +172,14 @@ class App(tk.Toplevel):
                 + "Pensez à mettre à jour le mot de passe et les utilisateurs après."
             )
             messagebox.showinfo(title="Base créée", message=msg)
+
             self.user_ctx.user.admin = True
-            self.user_ctx.user.save()
+
+            try:
+                self.user_ctx.user.save()
+            except OSError as e:
+                self.user_ctx.user.admin = False
+                messagebox.showerror(title="Base créée", message=f"Echec de l'ajout de l'administrateur :\n{e}")
 
     def check_user_access(self):
         if not self.user_ctx.user.is_authorized:

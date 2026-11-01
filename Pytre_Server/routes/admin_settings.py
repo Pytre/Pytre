@@ -63,7 +63,7 @@ def settings_save(
 
     try:
         settings.save()
-    except (LookupError, ValueError) as e:
+    except (LookupError, ValueError, OSError) as e:
         settings.queries_folder, settings.logs_are_on, settings.logs_folder = original  # restore valid values
         values = {
             "queries_folder": queries_folder,

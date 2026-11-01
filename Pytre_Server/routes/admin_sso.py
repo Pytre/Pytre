@@ -141,11 +141,13 @@ def _save_provider(
     request: Request, provider: OidcProvider, provider_form: OidcProviderForm, users: Users, admin_username: str
 ) -> HTMLResponse | RedirectResponse:
     saved_issuer = provider.issuer  # empty for a new provider
+    saved_uuid = provider.uuid
     provider_form.apply_to(provider)
 
     try:
         provider.save()
-    except ValueError as e:
+    except (ValueError, OSError) as e:
+        provider.uuid = saved_uuid  # a failed creation must be displayed as "new" (its entry was discarded)
         context = _form_context(provider, users, saved_issuer=saved_issuer)
         context["error"] = str(e)
         return templates.TemplateResponse(request, "admin/oidc_provider_form.html", context)

@@ -8,6 +8,7 @@ REGRESSION TESTS:
 
 import pytest
 import json
+import logging
 from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
 
@@ -176,7 +177,7 @@ def test_save_logs_folder_invalid_does_not_raise_when_logs_are_off(mock_kee, tmp
     settings.logs_are_on = False
     settings.logs_folder = tmp_path / "nonexistent"
 
-    assert settings.save() is True
+    settings.save()
 
 
 # ================================================================================
@@ -219,10 +220,9 @@ def test_save_writes_to_keepass(mock_kee, tmp_path):
     settings.queries_folder = tmp_path  # must exist - save() now validates it regardless of what changed
 
     # Save
-    result = settings.save()
+    settings.save()
 
     # Verify
-    assert result is True
     assert mock_kee.save_db.called
 
 
@@ -284,6 +284,28 @@ def test_jwt_secret_not_regenerated_when_present(mock_kee):
 
     assert settings.jwt_secret == "existing-secret-value"
     assert not mock_kee.save_db.called
+
+
+@pytest.mark.unit
+def test_jwt_secret_kept_in_memory_with_a_warning_if_it_cant_be_saved(mock_kee, caplog):
+    """A read-only database (e.g. hybrid client on a network share) must not prevent startup."""
+    mock_kee.save_db.side_effect = PermissionError("denied")
+
+    with caplog.at_level(logging.WARNING):
+        settings = Settings(mock_kee)
+
+    assert settings.jwt_secret
+    assert any("kept in memory only" in r.message for r in caplog.records)
+
+
+@pytest.mark.unit
+def test_save_lets_a_write_failure_reach_the_caller(mock_kee):
+    settings = Settings(mock_kee)
+    settings.queries_folder = settings.logs_folder = Path.cwd()
+    mock_kee.save_db.side_effect = PermissionError("denied")
+
+    with pytest.raises(OSError, match="denied"):
+        settings.save()
 
 
 # ================================================================================

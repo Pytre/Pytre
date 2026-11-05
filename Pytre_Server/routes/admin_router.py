@@ -8,6 +8,7 @@ from Pytre_Server.routes.admin_auth import require_admin_session, router as admi
 from Pytre_Server.routes.admin_logs import router as admin_logs_router
 from Pytre_Server.routes.admin_master_key import router as admin_master_key_router
 from Pytre_Server.routes.admin_queries import router as admin_queries_router
+from Pytre_Server.routes.admin_query_logs import router as admin_query_logs_router
 from Pytre_Server.routes.admin_servers import router as admin_servers_router
 from Pytre_Server.routes.admin_settings import router as admin_settings_router
 from Pytre_Server.routes.admin_sso import router as admin_sso_router
@@ -21,6 +22,7 @@ protected_router = APIRouter(dependencies=[Depends(require_admin_session)])
 protected_router.include_router(admin_logs_router)
 protected_router.include_router(admin_master_key_router)
 protected_router.include_router(admin_queries_router)
+protected_router.include_router(admin_query_logs_router)
 protected_router.include_router(admin_servers_router)
 protected_router.include_router(admin_settings_router)
 protected_router.include_router(admin_sso_router)

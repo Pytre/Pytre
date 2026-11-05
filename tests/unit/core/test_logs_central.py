@@ -528,6 +528,154 @@ def test_update_db_aborts_if_a_migration_step_fails(central_logs):
 
 
 # ================================================================================
+# Stats views and indexes (version 3)
+# ================================================================================
+
+STATS_VIEWS = ("MONTHLY_STATS", "RUNS_PER_USER", "TOP_QUERIES")
+EXPECTED_INDEXES = ["IDX_QUERY", "IDX_START", "IDX_USER"]
+
+
+def _create_v2_database(db_path: Path) -> None:
+    """Schema of version 2 with its indexes, the views didn't exist yet"""
+    with contextlib.closing(sqlite3.connect(db_path)) as conn:
+        conn.execute(
+            "CREATE TABLE QUERIES_EXEC (SERVER_ID TEXT, USER_ID TEXT NOT NULL, USER_NAME TEXT, QUERY TEXT NOT NULL, "
+            "START TEXT NOT NULL, DURATION_SECS INTEGER, NB_ROWS INTEGER, PARAMETERS TEXT)"
+        )
+        conn.execute("CREATE INDEX IDX_SERVER_ID ON QUERIES_EXEC (SERVER_ID)")
+        conn.execute("CREATE INDEX IDX_QUERY ON QUERIES_EXEC (QUERY)")
+        conn.execute("CREATE INDEX IDX_START ON QUERIES_EXEC (START DESC)")
+        conn.execute("PRAGMA user_version = 2")
+        conn.commit()
+
+
+def _insert_executions(db_path: Path, rows: list[tuple]) -> None:
+    with contextlib.closing(sqlite3.connect(db_path)) as conn:
+        conn.executemany(
+            "INSERT INTO QUERIES_EXEC (SERVER_ID, USER_ID, USER_NAME, QUERY, START, DURATION_SECS, NB_ROWS, PARAMETERS) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            rows,
+        )
+        conn.commit()
+
+
+def _indexes(db_path: Path) -> list[str]:
+    with contextlib.closing(sqlite3.connect(db_path)) as conn:
+        return sorted(r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='index'"))
+
+
+def _select_view(db_path: Path, view: str) -> list[tuple]:
+    with contextlib.closing(sqlite3.connect(db_path)) as conn:
+        return conn.execute(f"SELECT * FROM {view}").fetchall()
+
+
+STATS_ROWS = [
+    ("srv", "DOM\\alice", "Alice", "Q1", "2026-10-03T09:00:00", 2, 10, None),
+    ("srv", "DOM\\alice", "Alice", "Q2", "2026-10-04T09:00:00", 4, 20, None),
+    ("srv", "DOM\\bob", "", "Q1", "2026-10-05T09:00:00", 1, 5, None),
+    ("srv", "DOM\\carl", "", "Q1", "2026-11-01T09:00:00+00:00", 1, 5, None),
+]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("view", STATS_VIEWS)
+def test_create_db_creates_readable_stats_views(central_logs, view):
+    """SQLite accepts a view referencing a missing column and only fails when it's read - hence a real SELECT"""
+    central_logs.create_db()
+    _insert_executions(central_logs.db_path, STATS_ROWS)
+
+    assert _select_view(central_logs.db_path, view)
+
+
+@pytest.mark.unit
+def test_create_db_creates_only_the_indexes_the_stats_need(central_logs):
+    central_logs.create_db()
+
+    assert _indexes(central_logs.db_path) == EXPECTED_INDEXES
+
+
+@pytest.mark.unit
+def test_update_db_from_v2_creates_the_views_and_replaces_the_indexes(central_logs):
+    _create_v2_database(central_logs.db_path)
+    _insert_executions(central_logs.db_path, STATS_ROWS)
+    central_logs.version = 2
+
+    assert central_logs.update_db() is True
+
+    assert central_logs.version == LATEST_VERSION
+    assert _indexes(central_logs.db_path) == EXPECTED_INDEXES
+    for view in STATS_VIEWS:
+        assert _select_view(central_logs.db_path, view)
+
+
+@pytest.mark.unit
+def test_monthly_stats_average_per_user_is_not_truncated(central_logs):
+    """SQLite integer division would turn 3 executions by 2 users into 1 instead of 1.5"""
+    central_logs.create_db()
+    _insert_executions(central_logs.db_path, STATS_ROWS)
+
+    rows = {month: per_user for month, _, _, per_user in _select_view(central_logs.db_path, "MONTHLY_STATS")}
+
+    assert rows["2026.10"] == 1.5
+
+
+@pytest.mark.unit
+def test_runs_per_user_keeps_users_without_title_apart(central_logs):
+    """Grouping by the title (USER_NAME) merged every user without a title into a single row"""
+    central_logs.create_db()
+    _insert_executions(central_logs.db_path, STATS_ROWS)
+
+    rows = {user_id: (user_name, nb) for user_id, user_name, nb in _select_view(central_logs.db_path, "RUNS_PER_USER")}
+
+    assert rows == {"DOM\\alice": ("Alice", 2), "DOM\\bob": ("", 1), "DOM\\carl": ("", 1)}
+
+
+@pytest.mark.unit
+def test_top_queries_counts_and_last_run_per_query(central_logs):
+    central_logs.create_db()
+    _insert_executions(central_logs.db_path, STATS_ROWS)
+
+    rows = {query: (nb, last_run) for query, nb, _, _, last_run in _select_view(central_logs.db_path, "TOP_QUERIES")}
+
+    assert rows == {"Q1": (3, "2026-11-01T09:00:00+00:00"), "Q2": (1, "2026-10-04T09:00:00")}
+
+
+# ================================================================================
+# db_uri
+# ================================================================================
+
+
+@pytest.mark.unit
+def test_db_uri_escapes_special_characters_so_the_database_lands_where_expected(tmp_path):
+    folder = tmp_path / "dir #1 ?"
+    folder.mkdir()
+    logs = CentralLogs(logs_folder=folder)
+
+    assert logs.create_db() is True
+
+    assert logs.db_path.exists()
+    assert sorted(p.name for p in folder.iterdir()) == [CENTRAL_DB]
+
+
+@pytest.mark.unit
+def test_db_uri_gives_a_unc_path_an_empty_authority():
+    """SQLite rejects any URI authority but localhost, which is where as_uri() puts a UNC server name"""
+    logs = CentralLogs()
+    unc_path = Mock()
+    unc_path.resolve.return_value.as_uri.return_value = "file://srv/share/logs/Pytre_Central_Logs.db"
+    logs.db_path = unc_path
+
+    assert logs.db_uri == "file:////srv/share/logs/Pytre_Central_Logs.db"
+
+
+@pytest.mark.unit
+def test_db_uri_keeps_a_local_path_unchanged(tmp_path):
+    logs = CentralLogs(logs_folder=tmp_path)
+
+    assert logs.db_uri == (tmp_path / CENTRAL_DB).resolve().as_uri()
+
+
+# ================================================================================
 # start / stop Tests
 # ================================================================================
 

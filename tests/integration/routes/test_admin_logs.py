@@ -86,8 +86,7 @@ def test_logs_page_renders_stored_logs_below_a_separator_without_level(admin_cli
 def test_sidebar_shows_logs_link(admin_client):
     response = admin_client.get("/admin/logs")
 
-    assert 'href="/admin/logs"' in response.text
-    assert ">Logs<" in response.text
+    assert 'href="/admin/logs">Server Logs<' in response.text
 
 
 # ------------------------------------------------------------------------------------------

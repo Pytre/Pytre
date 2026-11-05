@@ -1,0 +1,193 @@
+{% extends "admin/base.html" %}
+{% block title %}Query Logs — Pytre Server{% endblock %}
+{% block main_class %}main-flush{% endblock %}
+{% block content %}
+<div class="users-page">
+    <form method="get" action="/admin/query-logs" class="toolbar users-toolbar">
+        <select name="source" id="source" onchange="this.form.submit()">
+            {% for s in sources %}
+            <option value="{{ s }}"{% if s == source %} selected{% endif %}>{{ s.label }}</option>
+            {% endfor %}
+        </select>
+        <button type="submit" class="pager-btn" name="page" value="{{ page - 1 }}"{% if page <= 1 %} disabled{% endif %}>Previous</button>
+        <span class="toolbar-label">Page {{ page }}</span>
+        <button type="submit" class="pager-btn" name="page" value="{{ page + 1 }}"{% if not has_next %} disabled{% endif %}>Next</button>
+        <input type="text" id="filter" placeholder="Filter this page...">
+    </form>
+
+    {% if error %}
+    <div class="users-banner">
+        <p class="error form-error" style="margin-top: 0;">{{ error }}</p>
+    </div>
+    {% endif %}
+
+    <div class="users-table-wrap">
+        <table id="query-logs-table" class="query-logs-table">
+            <thead>
+                <tr>
+                    {% for column in columns %}
+                    <th class="sortable">{{ column }}<span class="sort-indicator"></span></th>
+                    {% endfor %}
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in rows %}
+                <tr>
+                    {% for value in row %}
+                    {% if loop.index0 in timestamp_indexes %}
+                    <td data-ts="{{ value if value is not none else '' }}"></td>
+                    {% else %}
+                    {% if value is number %}
+                    <td class="num"><div class="query-logs-cell" data-num="{{ value }}">{{ value }}</div></td>
+                    {% else %}
+                    <td><div class="query-logs-cell">{{ value if value is not none else "" }}</div></td>
+                    {% endif %}
+                    {% endif %}
+                    {% endfor %}
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<script>
+(function () {
+    var filterInput = document.getElementById("filter");
+    var table = document.getElementById("query-logs-table");
+    var tbody = table.tBodies[0];
+
+    Array.prototype.forEach.call(tbody.querySelectorAll("td[data-ts]"), function (td) {
+        if (td.dataset.ts) td.textContent = pytreFormatLocal(parseInt(td.dataset.ts, 10));
+    });
+
+    // Hovering a truncated cell shows its full content, multi-line values (parameters) included.
+    Array.prototype.forEach.call(tbody.querySelectorAll(".query-logs-cell"), function (cell) {
+        if (cell.scrollWidth > cell.clientWidth) cell.title = cell.textContent + "\n\n(double-click to open)";
+    });
+
+    // Double-clicking a cell opens its full content in a scrollable modal. A read-only textarea keeps
+    // the original line breaks (parameters JSON) and makes selecting part or all of it easy. The header
+    // buttons move to the neighbouring cells, among the rows currently shown (filter and sort applied).
+    var detailCell = null;
+    var detailTitle, detailPosition, detail, navButtons;
+
+    function visibleRows() {
+        return Array.prototype.filter.call(tbody.rows, function (row) { return row.style.display !== "none"; });
+    }
+
+    function navButton(label, title, rowStep, colStep) {
+        var button = document.createElement("button");
+        button.type = "button";
+        button.className = "query-logs-nav-btn";
+        button.textContent = label;
+        button.title = title;
+        button.addEventListener("click", function () { moveDetail(rowStep, colStep); });
+        return button;
+    }
+
+    function buildDetail() {
+        detailTitle = document.createElement("h2");
+        detailPosition = document.createElement("span");
+        detailPosition.className = "query-logs-detail-position";
+        navButtons = {
+            up: navButton("▲", "Previous row", -1, 0),
+            down: navButton("▼", "Next row", 1, 0),
+            left: navButton("◀", "Previous column", 0, -1),
+            right: navButton("▶", "Next column", 0, 1),
+        };
+
+        var nav = document.createElement("div");
+        nav.className = "query-logs-detail-nav";
+        nav.append(navButtons.left, navButtons.right, navButtons.up, navButtons.down);
+
+        var header = document.createElement("div");
+        header.className = "query-logs-detail-header";
+        header.append(detailTitle, detailPosition, nav);
+
+        detail = document.createElement("textarea");
+        detail.className = "query-logs-detail";
+        detail.readOnly = true;
+        detail.wrap = "off";
+
+        document.getElementById("pytre-modal-content").replaceChildren(header, detail);
+    }
+
+    function showDetail(td) {
+        detailCell = td;
+        var rows = visibleRows();
+        var rowIndex = rows.indexOf(td.parentElement);
+        var lastCol = td.parentElement.cells.length - 1;
+
+        detailTitle.textContent = table.tHead.rows[0].cells[td.cellIndex].childNodes[0].textContent;
+        detailPosition.textContent = "Row " + (rowIndex + 1) + " / " + rows.length;
+        navButtons.up.disabled = rowIndex <= 0;
+        navButtons.down.disabled = rowIndex >= rows.length - 1;
+        navButtons.left.disabled = td.cellIndex <= 0;
+        navButtons.right.disabled = td.cellIndex >= lastCol;
+
+        detail.value = td.textContent.trim();
+        detail.scrollTop = 0;
+        detail.scrollLeft = 0;
+        detail.focus();
+        detail.setSelectionRange(0, 0);
+    }
+
+    function moveDetail(rowStep, colStep) {
+        var rows = visibleRows();
+        var row = rows[rows.indexOf(detailCell.parentElement) + rowStep];
+        var cell = row ? row.cells[detailCell.cellIndex + colStep] : null;
+        if (cell) showDetail(cell);
+    }
+
+    tbody.addEventListener("dblclick", function (e) {
+        var td = e.target.closest("td");
+        if (!td) return;
+
+        buildDetail();
+        document.getElementById("pytre-modal-overlay").hidden = false;
+        showDetail(td);
+    });
+
+    // Plain arrow keys behave as the navigation buttons while the detail is shown. With a modifier
+    // (Shift to extend a selection, Ctrl...) they keep their usual effect on the text.
+    var arrowButtons = { ArrowUp: "up", ArrowDown: "down", ArrowLeft: "left", ArrowRight: "right" };
+    document.addEventListener("keydown", function (e) {
+        if (!detail || !detail.isConnected || document.getElementById("pytre-modal-overlay").hidden) return;
+        if (!(e.key in arrowButtons) || e.shiftKey || e.ctrlKey || e.altKey || e.metaKey) return;
+
+        e.preventDefault();
+        var button = navButtons[arrowButtons[e.key]];
+        if (!button.disabled) button.click();
+    });
+
+    // Only filters the rows of the current page, the database itself is never searched.
+    filterInput.addEventListener("input", function () {
+        var q = filterInput.value.toLowerCase();
+        Array.prototype.forEach.call(tbody.rows, function (row) {
+            row.style.display = q === "" || row.textContent.toLowerCase().indexOf(q) !== -1 ? "" : "none";
+        });
+    });
+
+    var sortState = { col: null, asc: true };
+    Array.prototype.forEach.call(table.tHead.rows[0].cells, function (th, colIndex) {
+        th.addEventListener("click", function () {
+            var asc = sortState.col === colIndex ? !sortState.asc : true;
+            sortState = { col: colIndex, asc: asc };
+
+            var rows = Array.prototype.slice.call(tbody.rows);
+            rows.sort(function (a, b) {
+                var result = pytreCompareCells(a.cells[colIndex], b.cells[colIndex]);
+                return asc ? result : -result;
+            });
+            rows.forEach(function (row) { tbody.appendChild(row); });
+
+            Array.prototype.forEach.call(table.tHead.querySelectorAll(".sort-indicator"), function (s) {
+                s.textContent = "";
+            });
+            th.querySelector(".sort-indicator").textContent = asc ? " ▲" : " ▼";
+        });
+    });
+})();
+</script>
+{% endblock %}

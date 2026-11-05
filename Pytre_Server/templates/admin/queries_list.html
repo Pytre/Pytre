@@ -20,6 +20,8 @@
     </div>
     {% endif %}
 
+    {# usage columns only when query logs could be read - every row then has a count, 0 if never executed #}
+    {% set show_usage = rows | rejectattr("nb_exec", "none") | list | length > 0 %}
     <div class="users-table-wrap">
         <table id="queries-table">
             <thead>
@@ -32,6 +34,10 @@
                     <th class="sortable">Servers Restriction<span class="sort-indicator"></span></th>
                     <th class="sortable">Groups Restriction<span class="sort-indicator"></span></th>
                     <th class="sortable">Hash exemption<span class="sort-indicator"></span></th>
+                    {% if show_usage %}
+                    <th class="sortable col-narrow" title="Executions through this server">Nb Runs<span class="sort-indicator"></span></th>
+                    <th class="sortable col-narrow" title="Last execution through this server">Last run<span class="sort-indicator"></span></th>
+                    {% endif %}
                 </tr>
             </thead>
             <tbody>
@@ -45,6 +51,10 @@
                     <td>{{ row.servers | join(", ") }}</td>
                     <td>{{ row.groups | join(", ") }}</td>
                     <td data-ts="{{ row.exempt_until.timestamp() | int if row.exempt_until else '' }}"></td>
+                    {% if show_usage %}
+                    <td class="num" data-num="{{ row.nb_exec }}">{{ row.nb_exec }}</td>
+                    <td data-ts="{{ row.last_run or '' }}"></td>
+                    {% endif %}
                 </tr>
                 {% endfor %}
             </tbody>
@@ -199,17 +209,13 @@
 
             var rows = Array.prototype.slice.call(tbody.rows);
             rows.sort(function (a, b) {
-                var av, bv;
+                var result;
                 if (colIndex === 1) {
-                    av = rowCheckbox(a).checked ? 1 : 0;
-                    bv = rowCheckbox(b).checked ? 1 : 0;
+                    result = (rowCheckbox(a).checked ? 1 : 0) - (rowCheckbox(b).checked ? 1 : 0);
                 } else {
-                    av = a.cells[colIndex].textContent.trim().toLowerCase();
-                    bv = b.cells[colIndex].textContent.trim().toLowerCase();
+                    result = pytreCompareCells(a.cells[colIndex], b.cells[colIndex]);
                 }
-                if (av < bv) return asc ? -1 : 1;
-                if (av > bv) return asc ? 1 : -1;
-                return 0;
+                return asc ? result : -result;
             });
             rows.forEach(function (row) { tbody.appendChild(row); });
 

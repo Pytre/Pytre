@@ -31,28 +31,24 @@ class LogRecord:
         self.exported: int
 
     def __repr__(self):
-        return str(
-            {
-                "server": self.server,
-                "query": self.query,
-                "start": self.start,
-                "duration": self.duration,
-                "nb_rows": self.nb_rows,
-                "exported": self.exported,
-            }
-        )
+        return str({
+            "server": self.server,
+            "query": self.query,
+            "start": self.start,
+            "duration": self.duration,
+            "nb_rows": self.nb_rows,
+            "exported": self.exported,
+        })
 
     def __str__(self):
-        return str(
-            {
-                "server": self.server,
-                "query": self.query,
-                "start": self.start,
-                "duration": self.duration,
-                "nb_rows": self.nb_rows,
-                "exported": self.exported,
-            }
-        )
+        return str({
+            "server": self.server,
+            "query": self.query,
+            "start": self.start,
+            "duration": self.duration,
+            "nb_rows": self.nb_rows,
+            "exported": self.exported,
+        })
 
 
 class LogStats:
@@ -65,28 +61,24 @@ class LogStats:
         self.last_run: datetime | None
 
     def __repr__(self):
-        return str(
-            {
-                "server": self.server,
-                "query": self.query,
-                "nb_run": self.nb_run,
-                "min_run": self.min_run,
-                "max_run": self.max_run,
-                "last_run": self.last_run,
-            }
-        )
+        return str({
+            "server": self.server,
+            "query": self.query,
+            "nb_run": self.nb_run,
+            "min_run": self.min_run,
+            "max_run": self.max_run,
+            "last_run": self.last_run,
+        })
 
     def __str__(self):
-        return str(
-            {
-                "server": self.server,
-                "query": self.query,
-                "nb_run": self.nb_run,
-                "min_run": self.min_run,
-                "max_run": self.max_run,
-                "last_run": self.last_run,
-            }
-        )
+        return str({
+            "server": self.server,
+            "query": self.query,
+            "nb_run": self.nb_run,
+            "min_run": self.min_run,
+            "max_run": self.max_run,
+            "last_run": self.last_run,
+        })
 
 
 class UserLogs(BaseLogs):
@@ -181,7 +173,7 @@ class UserLogs(BaseLogs):
         log_file = str(file) if file else None  # si un objet Path est retourné il ne peut pas être insérer
 
         try:
-            with closing(sqlite3.connect(f"file:{self.db_path}?mode=rw", uri=True)) as conn:
+            with closing(sqlite3.connect(f"{self.db_uri}?mode=rw", uri=True)) as conn:
                 # insertion infos
                 conn.execute(
                     """INSERT INTO QUERIES_EXEC (SERVER_ID, QUERY, START, DURATION_SECS, NB_ROWS, PARAMETERS, FILE)
@@ -208,7 +200,7 @@ class UserLogs(BaseLogs):
             return []
 
         with (
-            closing(sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True)) as conn,
+            closing(sqlite3.connect(f"{self.db_uri}?mode=ro", uri=True)) as conn,
             closing(conn.cursor()) as cursor,
         ):
             cursor.execute(
@@ -226,7 +218,7 @@ class UserLogs(BaseLogs):
         if not self.check_db(False):
             return []
 
-        with closing(sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True)) as conn:
+        with closing(sqlite3.connect(f"{self.db_uri}?mode=ro", uri=True)) as conn:
             conn.row_factory = sqlite3.Row
 
             with closing(conn.cursor()) as cursor:
@@ -252,7 +244,7 @@ class UserLogs(BaseLogs):
         if not self.check_db(False):
             return []
 
-        with closing(sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True)) as conn:
+        with closing(sqlite3.connect(f"{self.db_uri}?mode=ro", uri=True)) as conn:
             conn.row_factory = sqlite3.Row
 
             with closing(conn.cursor()) as cursor:

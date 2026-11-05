@@ -4,15 +4,46 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <script>
-        // Formats a UTC epoch (seconds) as "YYYY-MM-DD HH:MM" in the viewer's own timezone -
-        // shared by the queries list and its edit form (live preview).
-        // Defined here, before <body>, so it's available to any inline script in page content -
-        // a content script can run before the shared <script> block further down the page is reached.
+        // Helpers shared by the pages' inline scripts. Defined here, before <body>, so they're available
+        // to any inline script in page content - a content script can run before the shared <script>
+        // block further down the page is reached.
+
+        // Formats a UTC epoch (seconds) as "YYYY-MM-DD HH:MM" in the viewer's own timezone.
         function pytreFormatLocal(epochSeconds) {
             var d = new Date(epochSeconds * 1000);
             function pad(n) { return n < 10 ? "0" + n : "" + n; }
             return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate())
                 + " " + pad(d.getHours()) + ":" + pad(d.getMinutes());
+        }
+
+        // Formats every element carrying a raw data-num value with the viewer's thousands separator and
+        // at most 2 decimals. Called once by the shared script at the end of the page.
+        function pytreFormatNumbers(root) {
+            var formatter = new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 });
+            Array.prototype.forEach.call(root.querySelectorAll("[data-num]"), function (el) {
+                if (el.dataset.num !== "") el.textContent = formatter.format(Number(el.dataset.num));
+            });
+        }
+
+        // Compares two table cells for a column sort: by their data-ts epoch or data-num value if any
+        // (formatted text can't be compared), numerically when both are numbers (so 9 comes before 10),
+        // else as lowercase text. Empty cells always sort first.
+        function pytreCompareCells(a, b) {
+            function key(cell) {
+                if (cell.hasAttribute("data-ts")) return cell.dataset.ts === "" ? null : parseInt(cell.dataset.ts, 10);
+                var numEl = cell.hasAttribute("data-num") ? cell : cell.querySelector("[data-num]");
+                if (numEl) return numEl.dataset.num === "" ? null : Number(numEl.dataset.num);
+                var text = cell.textContent.trim();
+                if (text === "") return null;
+                var number = Number(text);
+                return isNaN(number) ? text.toLowerCase() : number;
+            }
+            var av = key(a), bv = key(b);
+            if (av === bv) return 0;
+            if (av === null) return -1;
+            if (bv === null) return 1;
+            if (typeof av !== typeof bv) return typeof av === "number" ? -1 : 1;
+            return av < bv ? -1 : 1;
         }
 
         // Applied before first paint to avoid a flash of the wrong theme.
@@ -386,6 +417,45 @@
         .users-table-wrap tbody td a { cursor: pointer; color: var(--accent); text-decoration: none; font-weight: 600; }
         .users-table-wrap tbody td a:hover { text-decoration: underline; }
 
+        /* Query Logs page (/admin/query-logs) - read-only table, every column sized to its content */
+        .users-table-wrap table.query-logs-table { width: auto; }
+        .users-table-wrap .query-logs-table th, .users-table-wrap .query-logs-table td {
+            width: auto;
+            text-align: left;
+            padding: 8px 10px;
+        }
+        #source { width: auto; flex: 0 0 auto; }
+        .pager-btn { width: 6.0em; padding-left: 0; padding-right: 0; text-align: center; }
+        .users-table-wrap .query-logs-table th { cursor: pointer; text-align: center; }
+        .users-table-wrap .query-logs-table tbody tr { cursor: default; user-select: text; }
+        /* max-width is unreliable on a table cell itself, hence the inner div. The ellipsis is only
+           visual: selecting the cell still copies its full content. */
+        .query-logs-cell { max-width: 30em; overflow: hidden; text-overflow: ellipsis; }
+        .query-logs-detail {
+            width: 100%;
+            height: 55vh;
+            font-family: monospace;
+            font-size: 13px;
+            white-space: pre;
+            overflow: auto;
+            resize: vertical;
+            caret-color: transparent; /* read-only: no blinking cursor, selection and scrolling still work */
+            padding: 8px 10px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: var(--surface);
+            color: var(--text);
+        }
+        .query-logs-detail-header { display: flex; align-items: center; gap: 12px; margin: 0 28px 8px 0; }
+        .query-logs-detail-header h2 { margin: 0; }
+        .query-logs-detail-position { color: var(--text-secondary); font-size: 13px; }
+        .query-logs-detail-nav { display: flex; gap: 4px; margin-left: auto; }
+        .query-logs-nav-btn { margin-top: 0; padding: 4px 10px; }
+        .query-logs-nav-btn:disabled { opacity: 0.4; cursor: default; }
+
+        /* Numbers (not dates) right-aligned in every list - declared after the rules above it overrides */
+        .users-table-wrap td.num { text-align: right; }
+
         /* Logs page (/admin/logs) - newest entries on top, oldest at the bottom */
         .logs-page { height: 100%; display: flex; flex-direction: column; background: var(--surface); }
         .logs-toolbar { padding: 14px 24px; background: var(--surface); flex-shrink: 0; margin-bottom: 0; }
@@ -606,7 +676,8 @@
             <a class="nav-link{% if request.url.path.startswith('/admin/sso') %} active{% endif %}" href="/admin/sso">SSO providers</a>
             <a class="nav-link{% if request.url.path.startswith('/admin/settings') %} active{% endif %}" href="/admin/settings">General settings</a>
             <a class="nav-link{% if request.url.path.startswith('/admin/master-key') %} active{% endif %}" href="/admin/master-key">Master key</a>
-            <a class="nav-link{% if request.url.path.startswith('/admin/logs') %} active{% endif %}" href="/admin/logs">Logs</a>
+            <a class="nav-link{% if request.url.path.startswith('/admin/query-logs') %} active{% endif %}" href="/admin/query-logs">Query Logs</a>
+            <a class="nav-link{% if request.url.path.startswith('/admin/logs') %} active{% endif %}" href="/admin/logs">Server Logs</a>
             {% if request.state.admin_username is defined and request.state.admin_username != "local" %}
             <div class="sidebar-logout">
                 <button type="submit" form="admin-logout-form" class="sidebar-logout-text" title="Connected as {{ request.state.admin_username }}">Log out</button>
@@ -1025,6 +1096,8 @@
                 });
             });
         }
+
+        pytreFormatNumbers(document);
     </script>
 </body>
 </html>

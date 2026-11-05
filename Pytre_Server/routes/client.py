@@ -385,7 +385,7 @@ async def _run_query(
     try:
         async with resources.use_driver(server) as driver:
             # execute the query and emit an heartbeat while waiting
-            start_time = datetime.now()
+            start_time = datetime.now(timezone.utc)
             task = asyncio.create_task(driver.execute(template, params))
             try:
                 async for ping_line in pings(task, http_request, state.heartbeat_secs):

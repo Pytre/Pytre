@@ -43,6 +43,9 @@
                     {% for attrib in attribs %}
                     <th class="sortable col-narrow">{{ attrib }}<span class="sort-indicator"></span></th>
                     {% endfor %}
+                    {% if last_runs is not none %}
+                    <th class="sortable col-narrow" title="Last query executed through this server">Last run<span class="sort-indicator"></span></th>
+                    {% endif %}
                 </tr>
             </thead>
             <tbody>
@@ -65,6 +68,9 @@
                     {% for attrib in attribs %}
                     <td>{{ user.attribs_cust.get(attrib, "") }}</td>
                     {% endfor %}
+                    {% if last_runs is not none %}
+                    <td data-ts="{{ last_runs.get(user.username) or '' }}"></td>
+                    {% endif %}
                 </tr>
                 {% endfor %}
             </tbody>
@@ -81,11 +87,18 @@
     var lastClickedIndex = null;
     var FILTER_KEY = "pytre-users-filter";
 
+    Array.prototype.forEach.call(tbody.querySelectorAll("td[data-ts]"), function (td) {
+        if (td.dataset.ts) td.textContent = pytreFormatLocal(parseInt(td.dataset.ts, 10));
+    });
+
     function applyFilter() {
         var q = filterInput.value.toLowerCase();
         Array.prototype.forEach.call(tbody.rows, function (row) {
-            var text = row.textContent.toLowerCase();
-            row.style.display = q === "" || text.indexOf(q) !== -1 ? "" : "none";
+            var text = "";
+            Array.prototype.forEach.call(row.cells, function (cell) {
+                if (!cell.hasAttribute("data-ts")) text += cell.textContent + " ";
+            });
+            row.style.display = q === "" || text.toLowerCase().indexOf(q) !== -1 ? "" : "none";
         });
     }
 
@@ -214,17 +227,13 @@
 
             var rows = Array.prototype.slice.call(tbody.rows);
             rows.sort(function (a, b) {
-                var av, bv;
+                var result;
                 if (colIndex === 1) {
-                    av = rowCheckbox(a).checked ? 1 : 0;
-                    bv = rowCheckbox(b).checked ? 1 : 0;
+                    result = (rowCheckbox(a).checked ? 1 : 0) - (rowCheckbox(b).checked ? 1 : 0);
                 } else {
-                    av = a.cells[colIndex].textContent.trim().toLowerCase();
-                    bv = b.cells[colIndex].textContent.trim().toLowerCase();
+                    result = pytreCompareCells(a.cells[colIndex], b.cells[colIndex]);
                 }
-                if (av < bv) return asc ? -1 : 1;
-                if (av > bv) return asc ? 1 : -1;
-                return 0;
+                return asc ? result : -result;
             });
             rows.forEach(function (row) { tbody.appendChild(row); });
 

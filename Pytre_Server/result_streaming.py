@@ -73,7 +73,8 @@ async def stream_result_ndjson(
         return
 
     if execution_logs is not None:
-        duration_secs = int((datetime.now() - log_entry.start).total_seconds())
+        now = datetime.now(log_entry.start.tzinfo)
+        duration_secs = int((now - log_entry.start).total_seconds())
         execution_logs.log_execution(replace(log_entry, duration_secs=duration_secs, nb_rows=nb_rows))
 
 

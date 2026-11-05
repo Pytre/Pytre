@@ -21,6 +21,13 @@ class BaseLogs:
         self.latest_version: int = self.LATEST_VERSION
         self.update_already_run: bool = False
 
+    @property
+    def db_uri(self) -> str:
+        """SQLite rejects any URI authority but localhost: a UNC path (\\\\server\\share) is written
+        file:////server/share/... instead of the file://server/share/... returned by as_uri()."""
+        uri = self.db_path.resolve().as_uri()
+        return uri if uri.startswith("file:///") else uri.replace("file://", "file:////", 1)
+
     def check_db(self, create: bool = True) -> bool:
         result: bool = False
         if not self.db_path.exists():

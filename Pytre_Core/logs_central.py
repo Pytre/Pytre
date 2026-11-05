@@ -27,8 +27,45 @@ CENTRAL_DB: Path | str = "Pytre_Central_Logs.db"  # default filename for central
 SERVER_DB: str = "Pytre_Server_Logs.db"  # default filename for server logs database
 SERVER_PENDING_FILE: str = "Pytre_Server_Logs.json"  # default filename for pending logs to add to server database
 
-LATEST_VERSION: int = 2  # latest version model of central database
+LATEST_VERSION: int = 3  # latest version model of central database
 ENCODING: str = "utf-8"
+
+VIEW_MONTHLY_STATS = """
+                        SELECT
+                            strftime('%Y.%m', START) as Month,
+                            COUNT(*) as Nb_Extract,
+                            COUNT(DISTINCT USER_ID) as Nb_Users,
+                            ROUND(1.0 * COUNT(*) / COUNT(DISTINCT USER_ID), 1) as Nb_Extract_Per_User
+                        FROM QUERIES_EXEC
+                        GROUP BY strftime('%Y.%m', START)
+                        ORDER BY strftime('%Y.%m', START) DESC
+                    """
+VIEW_RUNS_PER_USER = """
+                        SELECT
+                            USER_ID,
+                            (
+                                SELECT USER_NAME
+                                FROM QUERIES_EXEC
+                                WHERE USER_ID = q.USER_ID
+                                ORDER BY START DESC
+                                LIMIT 1
+                            ) as USER_NAME,
+                            COUNT(*) as NB
+                        FROM QUERIES_EXEC q
+                        GROUP BY USER_ID
+                        ORDER BY COUNT(*) DESC
+                    """
+VIEW_TOP_QUERIES = """
+                        SELECT
+                            QUERY,
+                            COUNT(*) as NB,
+                            ROUND(AVG(DURATION_SECS), 1) as AVG_DURATION,
+                            CAST(ROUND(AVG(NB_ROWS), 0) AS INTEGER) as AVG_ROWS,
+                            MAX(START) as LAST_RUN
+                        FROM QUERIES_EXEC
+                        GROUP BY QUERY
+                        ORDER BY COUNT(*) DESC
+                    """
 
 
 def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__) -> None:
@@ -51,7 +88,7 @@ class CentralLogs(BaseLogs):
     # ------------------------------------------------------------------------------------------
     def create_db(self) -> bool:
         try:
-            with closing(sqlite3.connect(f"file:{self.db_path}?mode=rwc", uri=True)) as conn:
+            with closing(sqlite3.connect(f"{self.db_uri}?mode=rwc", uri=True)) as conn:
                 conn.execute(f"PRAGMA user_version = {self.latest_version};")
                 conn.execute(
                     """
@@ -67,9 +104,12 @@ class CentralLogs(BaseLogs):
                         );
                     """
                 )
-                conn.execute("CREATE INDEX IDX_SERVER_ID ON QUERIES_EXEC (SERVER_ID);")
-                conn.execute("CREATE INDEX IDX_QUERY ON QUERIES_EXEC (QUERY);")
+                conn.execute(f"CREATE VIEW MONTHLY_STATS as {VIEW_MONTHLY_STATS};")
+                conn.execute(f"CREATE VIEW RUNS_PER_USER as {VIEW_RUNS_PER_USER};")
+                conn.execute(f"CREATE VIEW TOP_QUERIES as {VIEW_TOP_QUERIES};")
                 conn.execute("CREATE INDEX IDX_START ON QUERIES_EXEC (START DESC);")
+                conn.execute("CREATE INDEX IDX_QUERY ON QUERIES_EXEC (QUERY, START, DURATION_SECS, NB_ROWS);")
+                conn.execute("CREATE INDEX IDX_USER ON QUERIES_EXEC (USER_ID, START, USER_NAME);")
 
                 conn.commit()
                 self.version = self.latest_version
@@ -82,7 +122,7 @@ class CentralLogs(BaseLogs):
     def update_db_0_to_1(self) -> bool:
         new_version: int = 1
         try:
-            with closing(sqlite3.connect(f"file:{self.db_path}?mode=rw", uri=True)) as conn:
+            with closing(sqlite3.connect(f"{self.db_uri}?mode=rw", uri=True)) as conn:
                 conn.execute(f"PRAGMA user_version = {new_version};")
                 conn.execute("ALTER TABLE QUERIES_EXEC ADD COLUMN SERVER_ID TEXT;")
                 conn.execute("DROP INDEX IF EXISTS IDX_SERVER_ID;")
@@ -111,6 +151,30 @@ class CentralLogs(BaseLogs):
             log(f"Unexpected error in schema update to version {new_version}: {e}", logging.ERROR)
             return False
 
+    def update_db_2_to_3(self) -> bool:
+        new_version: int = 3
+        try:
+            with closing(sqlite3.connect(self.db_path)) as conn:
+                conn.execute(f"PRAGMA user_version = {new_version};")
+                conn.execute("DROP VIEW IF EXISTS MONTHS_STATS;")
+                conn.execute(f"CREATE VIEW IF NOT EXISTS MONTHLY_STATS as {VIEW_MONTHLY_STATS};")
+                conn.execute("DROP VIEW IF EXISTS NB_QUERIES_PER_USER;")
+                conn.execute(f"CREATE VIEW IF NOT EXISTS RUNS_PER_USER as {VIEW_RUNS_PER_USER};")
+                conn.execute("DROP VIEW IF EXISTS TOP_QUERIES;")
+                conn.execute(f"CREATE VIEW IF NOT EXISTS TOP_QUERIES as {VIEW_TOP_QUERIES};")
+                conn.execute("DROP INDEX IF EXISTS IDX_SERVER_ID;")
+                conn.execute("DROP INDEX IF EXISTS IDX_QUERY;")
+                conn.execute("CREATE INDEX IDX_QUERY ON QUERIES_EXEC (QUERY, START, DURATION_SECS, NB_ROWS);")
+                conn.execute("DROP INDEX IF EXISTS IDX_USER_ID_START;")
+                conn.execute("CREATE INDEX IDX_USER ON QUERIES_EXEC (USER_ID, START, USER_NAME);")
+                conn.commit()
+                log(f"Central database updated to version {new_version}")
+                self.version = new_version
+                return True
+        except Exception as e:
+            log(f"Unexpected error in schema update to version {new_version}: {e}", logging.ERROR)
+            return False
+
     # ------------------------------------------------------------------------------------------
     # Database modifications
     # ------------------------------------------------------------------------------------------
@@ -123,7 +187,7 @@ class CentralLogs(BaseLogs):
 
         try:
             with (
-                closing(sqlite3.connect(f"file:{self.db_path}?mode=rw", uri=True, timeout=60)) as conn,
+                closing(sqlite3.connect(f"{self.db_uri}?mode=rw", uri=True, timeout=60)) as conn,
                 closing(conn.cursor()) as cursor,
             ):
                 conn.execute("PRAGMA busy_timeout=10000")

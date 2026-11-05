@@ -43,7 +43,7 @@
                     <td>{{ provider.label }}</td>
                     <td>{{ provider.issuer }}</td>
                     <td>{{ provider.client_id }}</td>
-                    <td class="col-narrow">{{ linked_counts[provider.uuid] }}</td>
+                    <td class="col-narrow num" data-num="{{ linked_counts[provider.uuid] }}">{{ linked_counts[provider.uuid] }}</td>
                     <td>{{ "Yes" if provider.enabled else "No" }}</td>
                     <td>{{ "Yes" if provider.is_usable else "No" }}</td>
                 </tr>

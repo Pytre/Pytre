@@ -75,6 +75,7 @@ def create_app(
     execution_logs: ServerDriven | None = None
     if _app_ctx.settings.logs_are_on:
         execution_logs = ServerDriven(logs_folder=_app_ctx.settings.logs_folder)
+        execution_logs.check_db()  # create or update (if needed) now and not on the first logged execution
 
     try:
         query_catalog = QueryCatalog.load(_app_ctx.settings.queries_folder)

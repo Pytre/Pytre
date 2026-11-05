@@ -19,6 +19,7 @@ from starlette.datastructures import FormData
 
 from Pytre_Core.users import AuthType, OidcLink, User, UserField, hash_password
 from Pytre_Core.utils import log as _log
+from Pytre_Server.query_logs_reader import QueryLogsUnavailable, last_run_by_user, start_to_timestamp
 from Pytre_Server.routes.admin_auth import require_admin_session
 from Pytre_Server.server_state import ServerState, get_server_state
 from Pytre_Server.templating import templates
@@ -142,6 +143,7 @@ def users_list(
         "provider_labels": {
             issuer: provider.label for issuer, provider in state.app_ctx.oidc_providers.get_all_providers().items()
         },
+        "last_runs": _last_runs(state),
         "msg": msg,
         "error": error,
     }
@@ -151,6 +153,21 @@ def users_list(
 @router.post("/reload", response_class=RedirectResponse)
 def users_reload() -> RedirectResponse:
     return RedirectResponse(url="/admin/users?msg=Users+reloaded", status_code=status.HTTP_303_SEE_OTHER)
+
+
+def _last_runs(state: ServerState) -> dict[str, int | None] | None:
+    """Username -> epoch of the user's last execution. None when query logs are disabled or can't be read, the list
+    is then shown without that column."""
+    if state.resources.execution_logs is None:
+        return None
+
+    try:
+        last_runs = last_run_by_user(state.resources.execution_logs.db_uri)
+    except QueryLogsUnavailable as e:
+        log(f"Users last executions not shown, query logs unavailable: {e}", logging.DEBUG)
+        return None
+
+    return {username: start_to_timestamp(start) for username, start in last_runs.items()}
 
 
 # ------------------------------------------------------------------------------------------

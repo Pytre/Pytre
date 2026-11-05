@@ -16,6 +16,7 @@ from Pytre_Core.context import UserContext
 from Pytre_Core.sql_query.file_parser import FileParser
 from Pytre_Core.utils import log as _log
 from Pytre_Server.query_catalog import QueryCatalog
+from Pytre_Server.query_logs_reader import QueryLogsUnavailable, start_to_timestamp, usage_by_query
 from Pytre_Server.routes.admin_auth import require_admin_session
 from Pytre_Server.server_state import ServerState, get_server_state
 from Pytre_Server.templating import templates
@@ -39,6 +40,8 @@ class _QueryRow:
     groups: list[str]
     hidden: bool
     exempt_until: datetime | None  # UTC datetime
+    nb_exec: int | None = None
+    last_run: int | None = None
 
 
 def _build_query_row(parser: FileParser, ignore_hash_until: dict[str, datetime]) -> _QueryRow:
@@ -56,6 +59,17 @@ def _build_query_row(parser: FileParser, ignore_hash_until: dict[str, datetime])
         hidden=infos.get("hide", "0") != "0",
         exempt_until=exemption if exemption is not None and exemption > now else None,
     )
+
+
+def _usage(db_uri: str) -> dict[str, tuple[int, int | None]] | None:
+    """Query id -> (number of executions, epoch of the last one). None when query logs can't be read."""
+    try:
+        usage = usage_by_query(db_uri)
+    except QueryLogsUnavailable as e:
+        log(f"Queries usage not shown, query logs unavailable: {e}", logging.DEBUG)
+        return None
+
+    return {query_id: (nb, start_to_timestamp(last_run)) for query_id, (nb, last_run) in usage.items()}
 
 
 def _clear_hash_exemption(state: ServerState, file_id: str, admin_username: str) -> RedirectResponse:
@@ -77,6 +91,13 @@ def queries_list(
     error: str | None = None,
 ) -> HTMLResponse:
     rows = [_build_query_row(p, state.resources.ignore_hash_until) for p in state.query_catalog.parsers]
+
+    if state.resources.execution_logs:
+        usage = _usage(state.resources.execution_logs.db_uri)
+        if usage is not None:
+            for row in rows:
+                row.nb_exec, row.last_run = usage.get(row.file_id, (0, None))
+
     context = {
         "rows": rows,
         "load_errors": state.query_catalog.load_errors + state.query_catalog.build_errors,

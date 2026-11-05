@@ -4,7 +4,7 @@ Tests for Pytre_Server/result_streaming.py
 
 import asyncio
 import json
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from unittest.mock import Mock
 
@@ -467,6 +467,20 @@ async def test_stream_ndjson_logs_execution_on_successful_completion():
     assert logged.duration_secs >= 0
     assert logged.server_id == log_entry.server_id
     assert logged.query_id == log_entry.query_id
+
+
+@pytest.mark.unit
+@pytest.mark.anyio
+async def test_stream_ndjson_logs_duration_of_a_start_with_a_time_zone():
+    """/execute logs an UTC start: the duration must be computed in that same time zone, mixing it with
+    a naive datetime.now() raises a TypeError."""
+    result = _FakeResult([("1",)], columns=["id"])
+    execution_logs = Mock()
+    log_entry = _make_log_entry(start=datetime.now(timezone.utc) - timedelta(seconds=5))
+
+    await _collect(_stream(result, execution_logs=execution_logs, log_entry=log_entry))
+
+    assert 5 <= execution_logs.log_execution.call_args[0][0].duration_secs < 60
 
 
 @pytest.mark.unit

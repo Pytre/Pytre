@@ -97,7 +97,7 @@ def main() -> None:
 
     users = Users(kee)
     user = User(users, username=TEST_USERNAME, detect_user=False)
-    user.title = TEST_USER_TITLE
+    user.display_name = TEST_USER_TITLE
     user.admin = True
     user.auth_type = AuthType.BASIC
     user.password_hash = hash_password(TEST_USER_PASSWORD)

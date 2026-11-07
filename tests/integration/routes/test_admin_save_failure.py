@@ -29,7 +29,7 @@ def _user_uuid(client, username: str = TEST_USERNAME) -> str:
 
 
 def _new_user_data(username: str) -> dict:
-    return {"username": username, "title": "", "auth_type": "none", "password": ""}
+    return {"username": username, "display_name": "", "auth_type": "none", "password": ""}
 
 
 # ------------------------------------------------------------------------------------------
@@ -61,7 +61,7 @@ def test_new_user_can_be_saved_once_writing_works_again(isolated_admin_client):
 
 def test_edit_user_failure_keeps_the_edit_form_and_discards_the_change(isolated_admin_client):
     uuid = _user_uuid(isolated_admin_client)
-    data = {"username": "renamed_user", "title": "", "auth_type": "basic", "password": ""}
+    data = {"username": "renamed_user", "display_name": "", "auth_type": "basic", "password": ""}
 
     with _writes_denied():
         response = isolated_admin_client.post(f"/admin/users/{uuid}/edit", data=data)

@@ -34,7 +34,7 @@ def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__)
 
 class UserForm(BaseModel):
     username: str
-    title: str = ""
+    display_name: str = ""
     admin: bool = False
     auth_type: str
     password: str = ""
@@ -48,7 +48,7 @@ class UserForm(BaseModel):
         the caller from the raw form since their names are only known at runtime - they are merged into
         the user's, the others are kept."""
         user.username = self.username.strip()
-        user.title = self.title.strip()
+        user.display_name = self.display_name.strip()
         user.admin = self.admin
         user.auth_type = AuthType.from_value(self.auth_type) or AuthType.NONE
         if self.password:

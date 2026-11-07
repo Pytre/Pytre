@@ -64,7 +64,7 @@ def test_create_user_succeeds_and_appears_in_list(isolated_admin_client):
         "/admin/users/new",
         data={
             "username": "new_admin",
-            "title": "New Admin",
+            "display_name": "New Admin",
             "admin": "1",
             "auth_type": "basic",
             "password": "s3cret!",
@@ -85,7 +85,7 @@ def test_create_user_is_logged_with_the_admin_username(isolated_admin_client, ca
     with caplog.at_level(logging.INFO):
         isolated_admin_client.post(
             "/admin/users/new",
-            data={"username": "logged_user", "title": "", "auth_type": "none", "password": ""},
+            data={"username": "logged_user", "display_name": "", "auth_type": "none", "password": ""},
         )
 
     assert any(f"User 'logged_user' saved by admin '{TEST_USERNAME}'" in r.message for r in caplog.records)
@@ -97,7 +97,7 @@ def test_create_user_blank_username_reports_error(isolated_admin_client):
     check - the form is re-rendered with that message."""
     response = isolated_admin_client.post(
         "/admin/users/new",
-        data={"username": "", "title": "", "auth_type": "none", "password": ""},
+        data={"username": "", "display_name": "", "auth_type": "none", "password": ""},
     )
     assert response.status_code == 200
     match = re.search(r'<p class="error form-error">(.*?)</p>', response.text)
@@ -108,13 +108,13 @@ def test_create_user_blank_username_reports_error(isolated_admin_client):
 def test_create_user_duplicate_username_reports_error(isolated_admin_client):
     isolated_admin_client.post(
         "/admin/users/new",
-        data={"username": "dup_user", "title": "", "auth_type": "none", "password": ""},
+        data={"username": "dup_user", "display_name": "", "auth_type": "none", "password": ""},
         follow_redirects=False,
     )
 
     response = isolated_admin_client.post(
         "/admin/users/new",
-        data={"username": "dup_user", "title": "Second", "auth_type": "none", "password": ""},
+        data={"username": "dup_user", "display_name": "Second", "auth_type": "none", "password": ""},
     )
     assert response.status_code == 200
     assert "<form" in response.text  # re-rendered form, not a redirect
@@ -126,7 +126,7 @@ def test_create_user_duplicate_username_reports_error(isolated_admin_client):
 def test_edit_user_updates_fields_including_admin_promotion(isolated_admin_client):
     isolated_admin_client.post(
         "/admin/users/new",
-        data={"username": "promote_me", "title": "Before", "auth_type": "none", "password": ""},
+        data={"username": "promote_me", "display_name": "Before", "auth_type": "none", "password": ""},
         follow_redirects=False,
     )
     list_page = isolated_admin_client.get("/admin/users")
@@ -136,7 +136,7 @@ def test_edit_user_updates_fields_including_admin_promotion(isolated_admin_clien
         f"/admin/users/{uuid}/edit",
         data={
             "username": "promote_me",
-            "title": "After",
+            "display_name": "After",
             "admin": "1",  # the exact use case a future admin login page will need
             "auth_type": "none",
             "password": "",
@@ -156,7 +156,7 @@ def test_create_user_without_admin_checkbox_is_not_admin(isolated_admin_client):
     saved user an admin."""
     isolated_admin_client.post(
         "/admin/users/new",
-        data={"username": "plain_user", "title": "", "auth_type": "none", "password": ""},
+        data={"username": "plain_user", "display_name": "", "auth_type": "none", "password": ""},
         follow_redirects=False,
     )
     uuid = _find_uuid(isolated_admin_client.get("/admin/users").text, "plain_user")
@@ -172,7 +172,7 @@ def test_edit_user_unchecking_admin_demotes_them(isolated_admin_client):
         "/admin/users/new",
         data={
             "username": "demote_me",
-            "title": "",
+            "display_name": "",
             "admin": "1",
             "auth_type": "none",
             "password": "",
@@ -184,7 +184,7 @@ def test_edit_user_unchecking_admin_demotes_them(isolated_admin_client):
 
     isolated_admin_client.post(
         f"/admin/users/{uuid}/edit",
-        data={"username": "demote_me", "title": "", "auth_type": "none", "password": ""},
+        data={"username": "demote_me", "display_name": "", "auth_type": "none", "password": ""},
         follow_redirects=False,
     )
 
@@ -199,7 +199,7 @@ def test_edit_user_blank_password_preserves_existing_hash(isolated_admin_client)
         "/admin/users/new",
         data={
             "username": "keep_pwd",
-            "title": "",
+            "display_name": "",
             "auth_type": "basic",
             "password": "OriginalPass1",
         },
@@ -212,7 +212,7 @@ def test_edit_user_blank_password_preserves_existing_hash(isolated_admin_client)
         f"/admin/users/{uuid}/edit",
         data={
             "username": "keep_pwd",
-            "title": "Updated title only",
+            "display_name": "Updated title only",
             "auth_type": "basic",
             "password": "",  # left blank on purpose
         },
@@ -222,7 +222,7 @@ def test_edit_user_blank_password_preserves_existing_hash(isolated_admin_client)
     app_ctx = AppContext(master_key="password")
     user = app_ctx.users.find_user_by_uuid(uuid)
     assert user is not None
-    assert user.title == "Updated title only"
+    assert user.display_name == "Updated title only"
     assert verify_password("OriginalPass1", user.password_hash) is True
 
 
@@ -231,7 +231,7 @@ def test_edit_user_new_password_is_hashed_and_verifiable(isolated_admin_client):
 
     isolated_admin_client.post(
         "/admin/users/new",
-        data={"username": "change_pwd", "title": "", "auth_type": "basic", "password": "OldPass1"},
+        data={"username": "change_pwd", "display_name": "", "auth_type": "basic", "password": "OldPass1"},
         follow_redirects=False,
     )
     list_page = isolated_admin_client.get("/admin/users")
@@ -241,7 +241,7 @@ def test_edit_user_new_password_is_hashed_and_verifiable(isolated_admin_client):
         f"/admin/users/{uuid}/edit",
         data={
             "username": "change_pwd",
-            "title": "",
+            "display_name": "",
             "auth_type": "basic",
             "password": "NewPass2",
         },
@@ -266,7 +266,7 @@ def test_edit_unknown_uuid_redirects_to_list_with_error(isolated_admin_client):
 def test_delete_single_user(isolated_admin_client):
     isolated_admin_client.post(
         "/admin/users/new",
-        data={"username": "delete_me", "title": "", "auth_type": "none", "password": ""},
+        data={"username": "delete_me", "display_name": "", "auth_type": "none", "password": ""},
         follow_redirects=False,
     )
     list_page = isolated_admin_client.get("/admin/users")
@@ -283,7 +283,7 @@ def test_delete_single_user(isolated_admin_client):
 def test_delete_single_user_is_logged_with_the_admin_username(isolated_admin_client, caplog):
     isolated_admin_client.post(
         "/admin/users/new",
-        data={"username": "delete_me_logged", "title": "", "auth_type": "none", "password": ""},
+        data={"username": "delete_me_logged", "display_name": "", "auth_type": "none", "password": ""},
     )
     list_page = isolated_admin_client.get("/admin/users")
     uuid = _find_uuid(list_page.text, "delete_me_logged")
@@ -306,7 +306,7 @@ def test_bulk_delete_removes_all_selected(isolated_admin_client):
     for username in ("bulk_a", "bulk_b"):
         isolated_admin_client.post(
             "/admin/users/new",
-            data={"username": username, "title": "", "auth_type": "none", "password": ""},
+            data={"username": username, "display_name": "", "auth_type": "none", "password": ""},
             follow_redirects=False,
         )
     list_page = isolated_admin_client.get("/admin/users")
@@ -327,7 +327,7 @@ def test_bulk_delete_removes_all_selected(isolated_admin_client):
 def test_bulk_delete_is_logged_per_user_with_the_admin_username(isolated_admin_client, caplog):
     for username in ("bulk_log_a", "bulk_log_b"):
         isolated_admin_client.post(
-            "/admin/users/new", data={"username": username, "title": "", "auth_type": "none", "password": ""}
+            "/admin/users/new", data={"username": username, "display_name": "", "auth_type": "none", "password": ""}
         )
     list_page = isolated_admin_client.get("/admin/users")
     uuid_a = _find_uuid(list_page.text, "bulk_log_a")
@@ -343,7 +343,7 @@ def test_bulk_delete_is_logged_per_user_with_the_admin_username(isolated_admin_c
 def test_bulk_delete_reports_partial_failure(isolated_admin_client):
     isolated_admin_client.post(
         "/admin/users/new",
-        data={"username": "bulk_real", "title": "", "auth_type": "none", "password": ""},
+        data={"username": "bulk_real", "display_name": "", "auth_type": "none", "password": ""},
         follow_redirects=False,
     )
     list_page = isolated_admin_client.get("/admin/users")
@@ -450,7 +450,7 @@ def _create_user(client, username: str, **fields: str) -> str:
     e.g. no_all_group="1" to tick a checkbox."""
     client.post(
         "/admin/users/new",
-        data={"username": username, "title": "", "auth_type": "none", "password": ""} | fields,
+        data={"username": username, "display_name": "", "auth_type": "none", "password": ""} | fields,
         follow_redirects=False,
     )
     list_page = client.get("/admin/users")
@@ -458,7 +458,7 @@ def _create_user(client, username: str, **fields: str) -> str:
 
 
 def _edit_user_data(username: str, **overrides) -> dict:
-    data = {"username": username, "title": "", "auth_type": "none", "password": ""}
+    data = {"username": username, "display_name": "", "auth_type": "none", "password": ""}
     data.update(overrides)
     return data
 
@@ -816,7 +816,7 @@ def test_edit_user_unchecking_groups_restriction_removes_it(isolated_admin_clien
 
     isolated_admin_client.post(
         f"/admin/users/{uuid}/edit",
-        data={"username": "unrestrict_me", "title": "", "auth_type": "none", "password": ""},
+        data={"username": "unrestrict_me", "display_name": "", "auth_type": "none", "password": ""},
         follow_redirects=False,
     )
 

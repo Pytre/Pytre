@@ -37,7 +37,7 @@ class UsersWindow(tk.Toplevel):
 
         self.users: Users = users
         self.pwd_infos: bool = pwd_infos
-        self.default_sort_col: str = "title"
+        self.default_sort_col: str = "display_name"
         self.sort_info: dict[str, str | bool | None] = {"col": None, "reverse": None}
         self.groups: set = set()
 
@@ -137,7 +137,7 @@ class UsersWindow(tk.Toplevel):
     def _tree_cols(self) -> dict:
         cols = {
             "username": {"text": "Id", "minwidth": 200, "stretch": False},
-            "title": {"text": "Libellé", "minwidth": 200, "stretch": False},
+            "display_name": {"text": "Libellé", "minwidth": 200, "stretch": False},
             "admin": {"text": "Admin", "minwidth": 75, "stretch": False},
             "groups": {"text": "Groupes", "minwidth": 60, "stretch": True},
         }
@@ -554,7 +554,7 @@ class UserDialog(tk.Toplevel):
 
         entries_caption: dict[str, str] = {
             "username": "Id",
-            "title": "Libellé",
+            "display_name": "Libellé",
             "admin": "Admin",
         }
 

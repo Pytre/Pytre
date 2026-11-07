@@ -237,7 +237,11 @@ class QueryExecute:
         # if on, launch central log
         if not self.remote and self.app_ctx.settings.logs_are_on:
             user: users.User = self.user_ctx.user
-            log_infos: dict = {"user_logs": user_log.db_path, "user_id": user.username, "user_name": user.title}
+            log_infos: dict = {
+                "user_logs": user_log.db_path,
+                "user_id": user.username,
+                "user_display_name": user.display_name,
+            }
             self.queue.put((ExecResultMsg.CENTRAL_LOG, log_infos))
 
         # notify end result

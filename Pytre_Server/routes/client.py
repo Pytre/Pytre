@@ -403,7 +403,7 @@ async def _run_query(
             log_entry = ExecutionLogEntry(
                 server_id=server_id,
                 user_id=username,
-                user_name=user_ctx.user.title,
+                user_display_name=user_ctx.user.display_name,
                 query_id=query_id,
                 start=start_time,
                 parameters=request.display_parameters,

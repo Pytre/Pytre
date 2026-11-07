@@ -83,7 +83,7 @@ def exec_user_ctx():
     ctx.user_logs.db_path = "/fake/path/Pytre_Logs.db"  # must stay picklable (goes through a real mp.Queue)
     ctx.current_user = Mock()
     ctx.current_user.username = "u1"
-    ctx.current_user.title = "User One"
+    ctx.current_user.display_name = "User One"
     ctx.display_format = DisplayFormat()
     return ctx
 

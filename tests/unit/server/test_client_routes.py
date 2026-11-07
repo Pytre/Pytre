@@ -214,10 +214,10 @@ def _make_state(heartbeat_secs: float, chunk_size: int = 10) -> Mock:
     return state
 
 
-def _make_user_ctx(username: str = "alice", title: str = "Alice A") -> Mock:
+def _make_user_ctx(username: str = "alice", display_name: str = "Alice A") -> Mock:
     user_ctx = Mock()
     user_ctx.current_user.username = username
-    user_ctx.current_user.title = title
+    user_ctx.current_user.display_name = display_name
     return user_ctx
 
 

@@ -306,10 +306,10 @@ def test_stop_sync_stops_thread():
 def test_set_user_info(central_logs):
     """CentralLogs should track user info"""
     central_logs.user_id = "test_user"
-    central_logs.user_name = "Test User"
+    central_logs.user_display_name = "Test User"
 
     assert central_logs.user_id == "test_user"
-    assert central_logs.user_name == "Test User"
+    assert central_logs.user_display_name == "Test User"
 
 
 # ================================================================================
@@ -350,7 +350,7 @@ def test_create_db_handles_permission_error(central_logs):
 def test_sql_rows_get_unsynced_returns_string(client_driven):
     """_get_unsynced_rows_sql should return SQL string - ClientDriven only, reads from a user db"""
     client_driven.user_id = "test_user"
-    client_driven.user_name = "Test User"
+    client_driven.user_display_name = "Test User"
 
     result = client_driven._get_unsynced_rows_sql()
 
@@ -716,11 +716,11 @@ def test_trigger_sync_starts_thread(client_driven, tmp_path):
     user_logs.write_text("fake db")
 
     with patch.object(client_driven, "check_db", return_value=True):
-        client_driven.trigger_sync(user_logs, user_id="u1", user_name="User One")
+        client_driven.trigger_sync(user_logs, user_id="u1", user_display_name="User One")
         client_driven.sync_thread.join(timeout=2)
 
     assert client_driven.user_id == "u1"
-    assert client_driven.user_name == "User One"
+    assert client_driven.user_display_name == "User One"
 
 
 @pytest.mark.unit
@@ -1230,7 +1230,7 @@ def test_rows_get_unsynced_returns_rows(client_driven, temp_logs_folder):
 
     client_driven.user_logs = user_logs
     client_driven.user_id = "u1"
-    client_driven.user_name = "User One"
+    client_driven.user_display_name = "User One"
 
     rows = client_driven.get_unsynced_rows()
 
@@ -1298,7 +1298,7 @@ def test_export_unsynced_data_writes_export_file(client_driven, temp_logs_folder
     _create_user_logs_with_unsynced_row(user_logs)
     client_driven.user_logs = user_logs
     client_driven.user_id = "u1"
-    client_driven.user_name = "User One"
+    client_driven.user_display_name = "User One"
 
     result = client_driven.export_unsynced_data()
 
@@ -1454,7 +1454,7 @@ def test_synchronization_attempt_full_happy_path(client_driven, temp_logs_folder
     _create_user_logs_with_unsynced_row(user_logs)
     client_driven.user_logs = user_logs
     client_driven.user_id = "u1"
-    client_driven.user_name = "User One"
+    client_driven.user_display_name = "User One"
     client_driven.create_db()
 
     result = client_driven.synchronization_attempt()
@@ -1613,7 +1613,7 @@ def _make_entry(
     *,
     server_id: str = "SRV1",
     user_id: str = "u1",
-    user_name: str = "User One",
+    user_display_name: str = "User One",
     query_id: str = "Q1",
     start: datetime = datetime(2026, 1, 1, 10, 30),
     duration_secs: int = 5,
@@ -1624,7 +1624,7 @@ def _make_entry(
     return ExecutionLogEntry(
         server_id=server_id,
         user_id=user_id,
-        user_name=user_name,
+        user_display_name=user_display_name,
         query_id=query_id,
         start=start,
         duration_secs=duration_secs,

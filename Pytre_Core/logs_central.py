@@ -256,7 +256,7 @@ class ClientDriven(CentralLogs):
         super().__init__(logs_folder, logs_filename=logs_filename)
 
         self.user_id: str = ""
-        self.user_name: str = ""
+        self.user_display_name: str = ""
         self.user_logs: Path | None = None
 
         self.queue_ctrl_file: Path = self.logs_folder / "Pytre_Queue.json"
@@ -271,7 +271,7 @@ class ClientDriven(CentralLogs):
         self.sync_heartbeat: int = 90  # seconds after which heartbeat will be updated
         self.stop_heartbeat: Event = Event()
 
-    def trigger_sync(self, user_logs: Path, user_id: str = "", user_name: str = ""):
+    def trigger_sync(self, user_logs: Path, user_id: str = "", user_display_name: str = ""):
         if not self.db_path:
             log("Error: Central log database not specified", logging.ERROR)
             return
@@ -287,7 +287,7 @@ class ClientDriven(CentralLogs):
         if self.sync_thread is None or not self.sync_thread.is_alive():
             self.stop_event.clear()
             self.user_id = user_id
-            self.user_name = user_name
+            self.user_display_name = user_display_name
             self.user_logs = Path(user_logs)
 
             self.sync_thread = Thread(target=self.thread_start, daemon=True)
@@ -380,7 +380,7 @@ class ClientDriven(CentralLogs):
         return f"""
             SELECT 
                 ROWID, SERVER_ID,
-                :user_id AS USER_ID, :user_name AS USER_NAME, 
+                :user_id AS USER_ID, :user_display_name AS USER_NAME, 
                 QUERY, START, DURATION_SECS, NB_ROWS, PARAMETERS 
             FROM
                 QUERIES_EXEC 
@@ -435,7 +435,7 @@ class ClientDriven(CentralLogs):
             closing(conn.cursor()) as cursor,
         ):
             sql_cmd = self._get_unsynced_rows_sql()
-            cursor.execute(sql_cmd, {"user_id": self.user_id, "user_name": self.user_name})
+            cursor.execute(sql_cmd, {"user_id": self.user_id, "user_display_name": self.user_display_name})
             unsynced = cursor.fetchall()
 
         return unsynced
@@ -821,7 +821,7 @@ class ExecutionLogEntry:
 
     server_id: str
     user_id: str
-    user_name: str
+    user_display_name: str
     query_id: str
     start: datetime
     duration_secs: int = 0
@@ -834,7 +834,7 @@ class ExecutionLogEntry:
         return (
             self.server_id,
             self.user_id,
-            self.user_name,
+            self.user_display_name,
             self.query_id,
             self.start.isoformat(),
             self.duration_secs,

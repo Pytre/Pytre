@@ -133,7 +133,7 @@ async def test_user_form_apply_to_copies_every_field():
     user.attribs_cust = {"kept": "stays", "dept": "old"}
     form = UserForm(
         username="  jdoe  ",
-        title=" Doe ",
+        display_name=" Doe ",
         admin=True,
         auth_type="basic",
         groups=["sales", "it"],
@@ -142,7 +142,7 @@ async def test_user_form_apply_to_copies_every_field():
     await form.apply_to(user, {"dept": "IT"})
 
     assert user.username == "jdoe"
-    assert user.title == "Doe"
+    assert user.display_name == "Doe"
     assert user.admin is True
     assert user.auth_type == AuthType.BASIC
     assert user.groups == ["sales", "it"]  # replaces the default ["all"], not added to it

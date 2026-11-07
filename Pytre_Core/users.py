@@ -79,7 +79,7 @@ class UserField(Enum):
     identity."""
 
     ID = (_CsvStatus.REQUIRED, "id", _DbKind.NATIVE, "username")
-    DESCRIPTION = (_CsvStatus.REQUIRED, "description", _DbKind.NATIVE, "title")
+    DISPLAY_NAME = (_CsvStatus.REQUIRED, "display name", _DbKind.NATIVE, "title")
     ADMIN = (_CsvStatus.REQUIRED, "admin", _DbKind.CUSTOM, "superuser")
     GROUPS = (_CsvStatus.REQUIRED, "groups", _DbKind.TAGS, "")
 
@@ -343,6 +343,11 @@ class Users:
             # csv fieldnames standardization
             csv_reader.fieldnames = [header.strip().lower() for header in csv_reader.fieldnames or []]
 
+            # legacy header for display name, accepted on import only
+            display_header = UserField.DISPLAY_NAME.csv_header
+            if display_header not in csv_reader.fieldnames and "description" in csv_reader.fieldnames:
+                csv_reader.fieldnames = [display_header if h == "description" else h for h in csv_reader.fieldnames]
+
             # check for missing columns
             missing_cols = [col for col in cols_required if col not in csv_reader.fieldnames]
             if missing_cols:
@@ -369,7 +374,7 @@ class Users:
                     u_entry = self.kee.db.add_entry(self.kee_grp, "", username, "")
 
                 # update standard and optional infos
-                u_entry.title = row.get(UserField.DESCRIPTION.csv_header, "").strip()
+                u_entry.title = row.get(UserField.DISPLAY_NAME.csv_header, "").strip()
 
                 for user_field in (UserField.ADMIN, UserField.NO_ALL_GROUP):
                     if user_field.csv_header in row:
@@ -591,7 +596,7 @@ class User:
         self.users: Users | None = users
 
         self.uuid: str = ""
-        self.username: str = ""
+        self.username: str = ""  # user_id (KeePass username, CSV id)
         self._pwd_hash: str = ""
         self._pwd_changed_at: datetime | None = None
         self.auth_type: AuthType = AuthType.NONE
@@ -600,7 +605,7 @@ class User:
         self.exists: bool = False
         self.is_authorized: bool = False
 
-        self.title: str = ""
+        self.display_name: str = ""
         self.admin: bool = False
         self.groups: list[str] = ["all"]  # by default user belongs to "all" group
         self.no_all_group: bool = False
@@ -643,7 +648,7 @@ class User:
     def user_info(self, attr: str) -> str:
         """Returns an attribute value exposed to a SQL query's USER_INFO(...)"""
 
-        if attr in ("username", "title", "admin"):  # allowed predefined info
+        if attr in ("username", "display_name", "admin"):  # allowed predefined info
             return getattr(self, attr, "")
 
         return self.attribs_cust.get(attr, "")  # or custom info
@@ -656,7 +661,7 @@ class User:
             "password_changed_at": self.password_changed_at or "",
             "exist_in_settings": self.exists,
             "is_authorized": self.is_authorized,
-            "title": self.title,
+            "display_name": self.display_name,
             "superuser": self.admin,
             "no_all_group": self.no_all_group,
             "grp_authorized": self.groups,
@@ -692,7 +697,7 @@ class User:
         self.uuid = str(u_entry.uuid)
         self.username = str(u_entry.username)
         self._pwd_hash = str(u_entry.password or "")
-        self.title = str(u_entry.title or "")
+        self.display_name = str(u_entry.title or "")
         for property in u_entry.custom_properties:
             value = u_entry.get_custom_property(property)
             value = value if value else ""
@@ -762,7 +767,7 @@ class User:
         # Update entry
         u_entry.username = self.username
         u_entry.password = self._pwd_hash
-        u_entry.title = self.title
+        u_entry.title = self.display_name
 
         admin_val = "true" if self.admin else "false"
         no_all_group_val = "true" if self.no_all_group else "false"
@@ -809,7 +814,7 @@ class User:
         """Export infos needed to correctly deserialize queries from a remote."""
         return {
             "username": self.username,
-            "title": self.title,
+            "display_name": self.display_name,
             "admin": self.admin,
             "attribs_cust": self.attribs_cust,
         }
@@ -819,7 +824,7 @@ class User:
         """Create a user from a remote's infos - Used to deserialize its queries."""
         user = User(users, detect_user=False)
         user.username = data.get("username", "")
-        user.title = data.get("title", "")
+        user.display_name = data.get("display_name", "")
         user.admin = data.get("admin", False)
         user.attribs_cust = data.get("attribs_cust", {})
 

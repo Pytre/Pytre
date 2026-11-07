@@ -188,7 +188,7 @@ TEST_PG;PostgreSQL;localhost;5432;testdb"""
 def sample_csv_users(tmp_path):
     """Create sample CSV for user import testing"""
     csv_file = tmp_path / "users.csv"
-    content = """id;description;admin;groups
+    content = """id;display name;admin;groups
 user1;Test User 1;1;admin,users
 user2;Test User 2;0;users"""
     csv_file.write_text(content, encoding="latin-1")

@@ -80,7 +80,7 @@ def _make_log_entry(
     *,
     server_id: str = "SRV1",
     user_id: str = "u1",
-    user_name: str = "User One",
+    user_display_name: str = "User One",
     query_id: str = "Q1",
     start: datetime = datetime(2026, 1, 1, 10, 0, 0),
     duration_secs: int = 0,
@@ -91,7 +91,7 @@ def _make_log_entry(
     return ExecutionLogEntry(
         server_id=server_id,
         user_id=user_id,
-        user_name=user_name,
+        user_display_name=user_display_name,
         query_id=query_id,
         start=start,
         duration_secs=duration_secs,

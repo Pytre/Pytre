@@ -9,11 +9,12 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from enum import IntEnum
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import httpx2
 
 from Pytre_Core.about import REPO, AppStage, AppVersion
+from Pytre_Core.app_folders import get_install_folder
 from Pytre_Core.credentials import secret_key_available
 from Pytre_Core.utils import detect_encoding, log as _log
 
@@ -53,11 +54,11 @@ class UpdatePolicy(IntEnum):
 
     @staticmethod
     def load(folder: Path | None = None) -> UpdatePolicy:
-        """Update policy set by `POLICY_FILE` in `folder` (when None then executable folder by default).
+        """Update policy set by `POLICY_FILE` in `folder` (the install folder by default).
         ALLOWED without the file or without `update_policy`, DISABLED when the file can't be read or holds an
         unknown policy. Never raises."""
 
-        folder = folder or Path(sys.executable).parent
+        folder = folder or get_install_folder()
         file_src = folder / POLICY_FILE
 
         if not file_src.exists():

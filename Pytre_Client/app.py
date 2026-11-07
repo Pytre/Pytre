@@ -13,6 +13,13 @@ from datetime import datetime
 
 from Pytre_Core import utils
 from Pytre_Core.about import APP_NAME, CLIENT_BASENAME, AppVersion, full_version
+from Pytre_Core.app_folders import (
+    get_cache_folder,
+    get_config_folder,
+    get_resources_folder,
+    prepare_user_folders,
+    UserFolderError,
+)
 from Pytre_Core.context import AppContext, AppMode, UserContext, detect_client_mode
 from Pytre_Core.credentials import secret_key_available
 from Pytre_Core.logs_central import ClientDriven as CentralLogs
@@ -260,7 +267,7 @@ class App(tk.Toplevel):
             )
 
     def cache_folder_cleanup(self):
-        cache_folder = self.user_ctx.user_prefs.get(PrefEnum.CACHE_FOLDER)
+        cache_folder = get_cache_folder()
         cache_number_of_days = self.user_ctx.user_prefs.get(PrefEnum.CACHE_DAYS)
 
         files = list_old_files(cache_folder, age_in_days=cache_number_of_days)
@@ -277,7 +284,7 @@ class App(tk.Toplevel):
     def setup_app_identity(self):
         self.title(self.get_default_title())
 
-        icon_file = utils.get_app_path() / "res" / "app.png"
+        icon_file = get_resources_folder() / "app.png"
         icon_img = tk.PhotoImage(file=icon_file)
         self.iconphoto(True, icon_img)
         self.console_app.iconphoto(True, icon_img)  # setting icon for console is also needed
@@ -326,7 +333,7 @@ class App(tk.Toplevel):
         self.menu_query.add_separator()
         self.menu_query.add_command(
             label="Dossier cache...",
-            command=lambda: self.open_folder(self.user_ctx.user_prefs.get(PrefEnum.CACHE_FOLDER)),
+            command=lambda: self.open_folder(get_cache_folder()),
         )
         self.menu_query.add_separator()
         self.menu_query.add_command(label="Quitter", command=self.app_exit)
@@ -1112,10 +1119,23 @@ class App(tk.Toplevel):
             pass
 
     def open_folder(self, folder: str | Path):
-        if folder == self.user_ctx.user_prefs.get(PrefEnum.CACHE_FOLDER) and self.output_file:
-            utils.showfile(self.output_file)
-        else:
-            utils.showfile(folder)
+        """Opens `folder` in the file manager. For the cache folder, selects the last extracted file if
+        it still exists"""
+        cache_folder = get_cache_folder()
+        is_cache = Path(folder) == cache_folder
+
+        try:
+            if is_cache:
+                cache_folder.mkdir(parents=True, exist_ok=True)  # created on first extraction, may not exist yet
+
+            if is_cache and self.output_file and self.output_file.exists():
+                utils.showfile(self.output_file)
+            else:
+                utils.showfile(folder)
+        except (OSError, ValueError) as e:
+            log(f"Couldn't open {folder}: {e}", logging.WARNING)
+            msg = f"Echec ouverture de :\n{folder}\n\n{e}"
+            messagebox.showerror("Ouverture du dossier", msg, parent=self)
 
     def orphan_queries(self):
         orphans = orphan_queries(self.app_ctx, self.user_ctx, self.app_ctx.settings.queries_folder)
@@ -1476,6 +1496,12 @@ class App(tk.Toplevel):
 
 
 def app_start(mode: AppMode | None = None):
+    try:
+        prepare_user_folders()  # before any user file is opened
+    except UserFolderError as e:
+        log(f"{e}", logging.WARNING)
+        show_user_folder_warning(e)
+
     mode = mode or detect_client_mode()
     if mode == AppMode.HYBRID and not secret_key_available():
         show_hybrid_unavailable()
@@ -1527,6 +1553,21 @@ def show_hybrid_unavailable():
         " installation pour pouvoir l'utiliser."
         "\nVous pouvez aussi lancer l'application depuis un dossier sans Pytre.db pour vous en servir"
         " en tant que client pur.",
+        parent=root,
+    )
+    root.destroy()
+
+
+def show_user_folder_warning(error: UserFolderError):
+    """Warns that the user's files couldn't be moved or their folder created - the client starts anyway"""
+    root = tk.Tk()
+    root.withdraw()
+    messagebox.showwarning(
+        APP_NAME,
+        f"Le dossier des données utilisateur n'a pas pu être préparé :\n{error}"
+        f"\n\nVos données restent dans {get_config_folder()} pour cette session. Le déplacement sera"
+        f" retenté au prochain démarrage : vérifiez qu'aucune autre fenêtre de {APP_NAME} n'est ouverte"
+        " et que vous avez les droits d'écriture sur ces dossiers.",
         parent=root,
     )
     root.destroy()

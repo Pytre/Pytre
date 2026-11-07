@@ -19,8 +19,6 @@ if __name__ == "__main__":
     app_ctx = AppContext()
     user_ctx = UserContext(app_ctx.users)
 
-    APP_PATH = app_ctx.settings.app_path
-
     # queries, errors = get_queries(Path(app_settings.queries_folder))
 
     sql_script = list(Path(app_ctx.settings.queries_folder).glob("*.sql"))[0]

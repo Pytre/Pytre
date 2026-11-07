@@ -61,7 +61,10 @@ python -m Pytre_Client
 
 In hybrid mode, the queries folder should contain `_version_min.json` (see `templates/`). It is used to make sure no one is using an old version when implementing new restrictions.
 
-User preferences, remotes and cache are stored in the user's home folder (`~/Pytre`).
+User preferences, remotes, local logs and cache are stored in the local application data folder:
+- on Windows: `%LOCALAPPDATA%\Pytre`,
+- on Linux: `~/.local/share/Pytre` (or `$XDG_DATA_HOME/Pytre`),
+- on macOS: `~/Library/Application Support/Pytre`.
 
 ### Server
 

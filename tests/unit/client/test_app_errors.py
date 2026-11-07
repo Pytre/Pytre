@@ -58,3 +58,55 @@ def test_ensure_admin_exists_keeps_the_admin_right_once_saved():
 
     assert app.user_ctx.user.admin is True
     messagebox.showerror.assert_not_called()
+
+
+@pytest.mark.unit
+def test_open_folder_shows_an_error_when_the_folder_cant_be_opened(tmp_path):
+    """e.g. a queries folder on a network share that is offline"""
+    folder = tmp_path / "offline_share"
+
+    with (
+        patch("Pytre_Client.app.get_cache_folder", return_value=tmp_path / "cache"),
+        patch("Pytre_Client.app.utils.showfile", side_effect=FileNotFoundError(f"{folder} does not exist")),
+        patch("Pytre_Client.app.messagebox.showerror") as showerror,
+    ):
+        App.open_folder(Mock(), folder)  # must not raise
+
+    showerror.assert_called_once()
+    assert str(folder) in showerror.call_args.args[1]
+
+
+@pytest.mark.unit
+def test_open_cache_folder_creates_it_when_missing(tmp_path):
+    """The cache folder is created on first extraction: it may not exist yet"""
+    cache = tmp_path / "cache"
+    app = Mock(output_file=None)
+
+    with (
+        patch("Pytre_Client.app.get_cache_folder", return_value=cache),
+        patch("Pytre_Client.app.utils.showfile") as showfile,
+    ):
+        App.open_folder(app, cache)
+
+    assert cache.is_dir()
+    showfile.assert_called_once_with(cache)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("extract_exists", [True, False])
+def test_open_cache_folder_selects_the_last_extract_only_if_it_still_exists(tmp_path, extract_exists):
+    """The last extract may have been deleted by the cache cleanup or by the user"""
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    extract = cache / "query_20261107.csv"
+    if extract_exists:
+        extract.write_text("a;b", encoding="utf-8")
+    app = Mock(output_file=extract)
+
+    with (
+        patch("Pytre_Client.app.get_cache_folder", return_value=cache),
+        patch("Pytre_Client.app.utils.showfile") as showfile,
+    ):
+        App.open_folder(app, cache)
+
+    showfile.assert_called_once_with(extract if extract_exists else cache)

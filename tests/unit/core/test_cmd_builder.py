@@ -6,7 +6,7 @@ import pytest
 from pathlib import Path
 from unittest.mock import Mock
 
-from Pytre_Core.user_prefs import CsvFormat, DisplayFormat, PrefEnum
+from Pytre_Core.user_prefs import CsvFormat, DisplayFormat
 from Pytre_Core.sql_query.cmd_builder import CmdBuilder
 from Pytre_Core.sql_query.parameters import SqlParameters
 
@@ -23,17 +23,17 @@ def mock_user():
     return mock
 
 
-@pytest.fixture
-def prefs_values(tmp_path) -> dict:
-    """Values returned by mock_user_prefs.get() - tests can change them before building a CmdBuilder"""
-    return {PrefEnum.CACHE_FOLDER: tmp_path}
+@pytest.fixture(autouse=True)
+def cache_folder(tmp_path, monkeypatch) -> Path:
+    """Extract files are planned in tmp_path instead of the real user's cache folder"""
+    monkeypatch.setattr("Pytre_Core.sql_query.cmd_builder.get_cache_folder", lambda: tmp_path)
+    return tmp_path
 
 
 @pytest.fixture
-def mock_user_prefs(prefs_values):
+def mock_user_prefs():
     """Mock UserPrefs for CmdBuilder"""
     prefs = Mock()
-    prefs.get = Mock(side_effect=lambda key: prefs_values[key])
     prefs.csv_format = CsvFormat()
     return prefs
 
@@ -134,7 +134,7 @@ SELECT @num, @text
 
 
 @pytest.mark.unit
-def test_cmd_builder_build_exec_config_with_file_output(mock_user, mock_user_prefs, tmp_path):
+def test_cmd_builder_build_exec_config_with_file_output(mock_user, mock_user_prefs, cache_folder):
     sql_content = "DECLARE\n@p as int = 10  -- Param\n;\nSELECT @p"
     params = SqlParameters(DisplayFormat(), mock_user, sql_content)
     builder = CmdBuilder(mock_user_prefs, "SELECT @p", params)
@@ -143,7 +143,7 @@ def test_cmd_builder_build_exec_config_with_file_output(mock_user, mock_user_pre
 
     assert config.query_id == "MY_QUERY"
     assert config.server_id == "SRV1"
-    assert config.extract_file.parent == tmp_path
+    assert config.extract_file.parent == cache_folder
     assert config.extract_file.name.startswith("MY_QUERY_")
     assert config.csv_format == CsvFormat()
     assert "@p" in config.params_metadata

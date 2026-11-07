@@ -5,11 +5,10 @@ from contextlib import closing
 from datetime import datetime
 from pathlib import Path
 
-from Pytre_Core import user_prefs
+from Pytre_Core.app_folders import get_config_folder, USER_DB_FILENAME
 from Pytre_Core.logs_base import BaseLogs
 from Pytre_Core.utils import log as _log, setup_standalone_logging
 
-USER_DB: Path = user_prefs.CONFIG_FOLDER / "Pytre_Logs.db"
 LATEST_VERSION: int = 2  # latest version model of user database
 LOG_MAX: int = 2500
 
@@ -82,8 +81,8 @@ class LogStats:
 
 
 class UserLogs(BaseLogs):
-    def __init__(self, user_db: Path | str = USER_DB, log_max: int = LOG_MAX):
-        super().__init__(Path(user_db))
+    def __init__(self, user_db: Path | str | None = None, log_max: int = LOG_MAX):
+        super().__init__(Path(user_db) if user_db else get_config_folder() / USER_DB_FILENAME)
 
         self.log_max = log_max
         self.latest_version: int = LATEST_VERSION

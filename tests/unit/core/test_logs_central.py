@@ -58,11 +58,11 @@ def test_central_logs_initialization(temp_logs_folder):
 
 
 @pytest.mark.unit
-def test_central_logs_instances_are_independent():
+def test_central_logs_instances_are_independent(temp_logs_folder):
     """CentralLogs no longer uses the singleton pattern (removed, see AppContext refactor)"""
 
-    logs1 = CentralLogs()
-    logs2 = CentralLogs()
+    logs1 = CentralLogs(temp_logs_folder)
+    logs2 = CentralLogs(temp_logs_folder)
 
     assert logs1 is not logs2
 
@@ -658,9 +658,9 @@ def test_db_uri_escapes_special_characters_so_the_database_lands_where_expected(
 
 
 @pytest.mark.unit
-def test_db_uri_gives_a_unc_path_an_empty_authority():
+def test_db_uri_gives_a_unc_path_an_empty_authority(temp_logs_folder):
     """SQLite rejects any URI authority but localhost, which is where as_uri() puts a UNC server name"""
-    logs = CentralLogs()
+    logs = CentralLogs(temp_logs_folder)
     unc_path = Mock()
     unc_path.resolve.return_value.as_uri.return_value = "file://srv/share/logs/Pytre_Central_Logs.db"
     logs.db_path = unc_path

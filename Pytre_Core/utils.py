@@ -3,23 +3,10 @@ import logging
 import os
 import subprocess
 import platform
-import sys
 
 from pathlib import Path
 
 LOGGER_ROOT_NAME = "Pytre"
-
-
-def get_app_path() -> Path:
-    # If app is run as a bundle then PyInstaller bootloader
-    # extends sys with a flag frozen = True and sets app path into _MEIPASS
-
-    if getattr(sys, "frozen", False):
-        application_path: str = getattr(sys, "_MEIPASS")
-    else:
-        application_path: str = os.path.dirname(os.path.abspath(__file__))
-
-    return Path(application_path)
 
 
 def log(msg: str | object, level: int = logging.INFO, sublogger: str = "") -> None:

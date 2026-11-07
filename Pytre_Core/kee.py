@@ -7,12 +7,13 @@ from pykeepass import PyKeePass
 from pykeepass.exceptions import CredentialsError
 from pykeepass.group import Group
 
-from Pytre_Core.utils import get_app_path, log as _log
+from Pytre_Core.app_folders import get_install_folder, get_resources_folder
+from Pytre_Core.utils import log as _log
 from Pytre_Core.credentials import crypted_file_pwd_get, crypted_file_pwd_change
 
 
-KEE_FILE: Path = Path().cwd() / "Pytre.db"
-BLANK_FILE: str = "res/blank.db"  # relative path for blank db
+KEE_FILE: Path = get_install_folder() / "Pytre.db"
+BLANK_FILE: str = "blank.db"  # in resources folder
 BLANK_PWD: str = "password"  # password for blank db
 
 
@@ -102,7 +103,7 @@ class Kee:
 
         log("Creating new settings database...")
 
-        self.db = PyKeePass(get_app_path() / BLANK_FILE, password=BLANK_PWD)
+        self.db = PyKeePass(get_resources_folder() / BLANK_FILE, password=BLANK_PWD)
         self.db.filename = self.file
         self.pwd_change(password, True)
 

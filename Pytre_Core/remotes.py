@@ -13,14 +13,14 @@ from uuid import uuid4
 
 import httpx2
 
+from Pytre_Core.app_folders import get_config_folder, REMOTES_FILENAME
 from Pytre_Core.keyring import KeyringCatalog
 from Pytre_Core.remote_protocol import decode_row_value, StreamKey
-from Pytre_Core.user_prefs import CONFIG_FOLDER, DisplayFormat
+from Pytre_Core.user_prefs import DisplayFormat
 from Pytre_Core.users import AuthType
 from Pytre_Core.utils import detect_encoding, log as _log
 
 
-REMOTES_FILE: Path = CONFIG_FOLDER / "Pytre_Remotes.json"  # file for loading and saving remotes
 REMOTES_CIPHER: KeyringCatalog = KeyringCatalog.REMOTES_ENCRYPTION_KEY
 
 _REQUEST_TIMEOUT = 5  # seconds - timeout for short operations
@@ -118,8 +118,8 @@ def detail_from_response(response: JsonResponse | None, fallback: str) -> str:
 class Remotes:
     """Manages configured remotes of an user. Servers are not fetched on initialization."""
 
-    def __init__(self, remotes_file: Path = REMOTES_FILE):
-        self.remotes_file: Path = remotes_file
+    def __init__(self, remotes_file: Path | None = None):
+        self.remotes_file: Path = remotes_file or get_config_folder() / REMOTES_FILENAME
         self.remotes_dict: dict[str, Remote] = {}
         self.servers_dict: dict[str, RemoteServer] = {}
 

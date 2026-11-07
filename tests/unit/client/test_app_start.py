@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, Mock, patch
 import pytest
 
 from Pytre_Client.app import app_start, install_update
+from Pytre_Core.app_folders import UserFolderError
 from Pytre_Core.context import AppMode
 from Pytre_Core.updater import UpdateError
 
@@ -23,6 +24,13 @@ def mock_updater():
         updater.is_updatable.return_value = False
         updater.current_exe.return_value = CURRENT_EXE
         yield updater
+
+
+@pytest.fixture(autouse=True)
+def mock_prepare_user_folders():
+    """Never let app_start() move or create user folders - tested on their own in test_app_folders.py"""
+    with patch("Pytre_Client.app.prepare_user_folders") as prepare:
+        yield prepare
 
 
 @pytest.fixture(autouse=True)
@@ -202,3 +210,34 @@ def test_install_update_failure_shows_an_error_and_does_not_restart(mock_updater
     mock_showerror.assert_called_once()
     assert "Pytre.exe is locked" in mock_showerror.call_args.args[1]
     mock_tk.return_value.destroy.assert_called_once()
+
+
+@pytest.mark.unit
+def test_app_start_prepares_user_folders_before_opening_the_app(mock_prepare_user_folders, app_without_pending_update):
+    """The user's files must be in their folder before App opens any of them"""
+    app_created_before: list[bool] = []
+    mock_prepare_user_folders.side_effect = lambda: app_created_before.append(app_without_pending_update.called)
+
+    with patch("Pytre_Client.app.detect_client_mode", return_value=AppMode.CLIENT):
+        app_start()
+
+    assert app_created_before == [False]
+    app_without_pending_update.assert_called_once()
+
+
+@pytest.mark.unit
+def test_app_start_warns_and_starts_anyway_when_user_folders_cant_be_prepared(
+    mock_prepare_user_folders, app_without_pending_update
+):
+    """The user's files stay in the former folder for the session: nothing blocks the client"""
+    error = UserFolderError("Couldn't move ~/Pytre: file in use")
+    mock_prepare_user_folders.side_effect = error
+
+    with (
+        patch("Pytre_Client.app.show_user_folder_warning") as show_warning,
+        patch("Pytre_Client.app.detect_client_mode", return_value=AppMode.CLIENT),
+    ):
+        app_start()
+
+    show_warning.assert_called_once_with(error)
+    app_without_pending_update.assert_called_once_with(AppMode.CLIENT)

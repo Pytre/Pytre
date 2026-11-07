@@ -1,8 +1,10 @@
 from pathlib import Path
 from cryptography.fernet import Fernet
 
+from Pytre_Core.app_folders import get_install_folder
 
-KEY_FILE = Path().cwd() / "Pytre.key"
+
+KEY_FILE = get_install_folder() / "Pytre.key"
 
 
 def _secret_key() -> bytes:

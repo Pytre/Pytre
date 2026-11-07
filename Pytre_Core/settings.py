@@ -7,11 +7,12 @@ from pathlib import Path, PureWindowsPath
 from pykeepass.entry import Entry
 from pykeepass.group import Group
 
+from Pytre_Core.app_folders import get_install_folder
 from Pytre_Core.kee import Kee
-from Pytre_Core.utils import detect_encoding, get_app_path, log as _log, setup_standalone_logging
+from Pytre_Core.utils import detect_encoding, log as _log, setup_standalone_logging
 
-DEFAULT_QUERIES_FOLDER = Path.home() / "Queries"
-DEFAULT_LOGS_FOLDER = Path.home() / "Logs"
+DEFAULT_QUERIES_FOLDER = get_install_folder() / "Queries"
+DEFAULT_LOGS_FOLDER = get_install_folder() / "Logs"
 
 
 def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__) -> None:
@@ -33,8 +34,6 @@ class Settings:
     def __init__(self, kee: Kee):
         self.kee: Kee = kee
         self.kee_grp: Group | None = None
-
-        self.app_path: Path = get_app_path()
 
         self.settings_version: str = ""  # version actuelle des settings
         self.queries_folder: Path = DEFAULT_QUERIES_FOLDER  # répertoire des requêtes SQL

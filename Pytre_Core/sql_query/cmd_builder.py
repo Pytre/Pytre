@@ -3,8 +3,9 @@ import re
 from datetime import datetime
 from pathlib import Path
 
+from Pytre_Core.app_folders import get_cache_folder
 from Pytre_Core.remotes import RemoteServer
-from Pytre_Core.user_prefs import UserPrefs, PrefEnum
+from Pytre_Core.user_prefs import UserPrefs
 from Pytre_Core.sql_query.parameters import SqlParam, SqlParameters
 from Pytre_Core.sql_query.execute_config import LocalExecuteCfg, RemoteExecuteCfg
 
@@ -39,7 +40,7 @@ class CmdBuilder:
         extract_file: Path = Path()
         if file_output:
             file_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            extract_file = self.user_prefs.get(PrefEnum.CACHE_FOLDER) / (f"{query_id}_{file_stamp}.csv")
+            extract_file = get_cache_folder() / f"{query_id}_{file_stamp}.csv"
 
         # metadata des paramètres
         params_metadata: dict = {}

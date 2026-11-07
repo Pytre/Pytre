@@ -11,7 +11,8 @@ from pathlib import Path
 from datetime import datetime, timedelta
 from unittest.mock import patch
 
-from Pytre_Core.logs_user import UserLogs, LogRecord, LogStats, LATEST_VERSION
+from Pytre_Core.app_folders import get_config_folder
+from Pytre_Core.logs_user import UserLogs, LogRecord, LogStats, LATEST_VERSION, USER_DB_FILENAME
 
 
 # ================================================================================
@@ -158,13 +159,19 @@ def test_user_db_initialization(temp_user_db):
 
 
 @pytest.mark.unit
-def test_user_db_instances_are_independent():
+def test_user_db_instances_are_independent(temp_user_db):
     """UserLogs no longer uses the singleton pattern (removed, see AppContext refactor)"""
 
-    db1 = UserLogs()
-    db2 = UserLogs()
+    db1 = UserLogs(user_db=temp_user_db)
+    db2 = UserLogs(user_db=temp_user_db)
 
     assert db1 is not db2
+
+
+@pytest.mark.unit
+def test_user_db_defaults_to_the_file_of_the_user_config_folder():
+    """Resolved when UserLogs is built, not at import: follows the folder of the running platform"""
+    assert UserLogs().db_path == get_config_folder() / USER_DB_FILENAME
 
 
 # ================================================================================

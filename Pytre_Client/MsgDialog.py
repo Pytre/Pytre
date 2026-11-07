@@ -1,7 +1,7 @@
 import tkinter as tk
 from tkinter import Event, ttk, font
 
-from Pytre_Core.settings import get_app_path
+from Pytre_Core.app_folders import get_resources_folder
 
 import Pytre_Client.ui_utils as ui_utils
 from Pytre_Client.app_theme import set_theme
@@ -60,7 +60,7 @@ class MsgDialog(tk.Toplevel):
         ui_utils.ui_center(self, parent)
 
     def _setup_msg(self, msg):
-        icon_file = get_app_path() / "res" / "msg_question.png"
+        icon_file = get_resources_folder() / "msg_question.png"
         self.icon_img = tk.PhotoImage(file=icon_file)
 
         label_icon = ttk.Label(self.msg_frame, image=self.icon_img, anchor=tk.CENTER)

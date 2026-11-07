@@ -1,10 +1,9 @@
 import re
 from dataclasses import dataclass
 from enum import IntEnum
-from pathlib import Path
 from typing import ClassVar
 
-from Pytre_Core.utils import get_app_path
+from Pytre_Core.app_folders import get_resources_folder
 
 
 class AppStage(IntEnum):
@@ -101,7 +100,7 @@ class AppVersion:
 
 def get_license_text() -> str:
     try:
-        return Path(get_app_path() / "res" / "about_license.txt").read_text()
+        return (get_resources_folder() / "about_license.txt").read_text()
     except OSError as e:
         return f"Error, license unavailable : {e}"
 

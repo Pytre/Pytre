@@ -6,11 +6,14 @@ REGRESSION TESTS:
 """
 
 import dataclasses
-import pytest
 import json
+import logging
+
+import pytest
 from pathlib import Path
 
 from Pytre_Core.about import AppStage, AppVersion
+from Pytre_Core.app_folders import get_config_folder
 from Pytre_Core.user_prefs import (
     DEFAULT_CACHE_DAYS,
     DEFAULT_CSV_DELIMITER,
@@ -18,31 +21,21 @@ from Pytre_Core.user_prefs import (
     DEFAULT_CSV_QUOTECHAR,
     DEFAULT_DATE_FORMAT,
     DEFAULT_DECIMAL_SEPARATOR,
-    CACHE_FOLDER,
     CsvFormat,
     DisplayFormat,
+    SETTINGS_FILENAME,
     PrefEnum,
     UserPrefs,
 )
+from Pytre_Core.utils import LOGGER_ROOT_NAME
 
 
 @pytest.fixture
-def isolated_paths(tmp_path, monkeypatch):
-    """
-    Fully isolate CONFIG_FOLDER/CACHE_FOLDER/SETTING_FILE inside tmp_path, so migration/folder-
-    creation scenarios can be exercised without ever touching the real ~/Pytre_Core.
-    Returns (config_folder, cache_folder, setting_file); none of them exist yet.
-    """
-    config_folder = tmp_path / "Pytre"
-    config_folder.mkdir()
-    cache_folder = config_folder / ".temp_cache"
-    setting_file = config_folder / "Pytre_Settings.json"
-
-    monkeypatch.setattr("Pytre_Core.user_prefs.CONFIG_FOLDER", config_folder)
-    monkeypatch.setattr("Pytre_Core.user_prefs.CACHE_FOLDER", cache_folder)
-    monkeypatch.setattr("Pytre_Core.user_prefs.SETTING_FILE", setting_file)
-
-    return config_folder, cache_folder, setting_file
+def setting_file() -> Path:
+    """The user's settings file, in the folders isolated for every unit test - doesn't exist yet"""
+    file = get_config_folder() / SETTINGS_FILENAME
+    file.parent.mkdir(parents=True, exist_ok=True)
+    return file
 
 
 # ================================================================================
@@ -79,24 +72,6 @@ def test_set_save_as_folder_accepts_valid_directory(tmp_path):
     assert prefs.get(PrefEnum.SAVE_AS_FOLDER) == valid_dir
 
 
-@pytest.mark.regression
-def test_set_cache_folder_nonexistent_raises_error(tmp_path):
-    """
-    cache_folder is an app-internal folder (renamed from extract_folder to make that
-    explicit) - unlike save_as_folder it used to be silently created if missing, but
-    set() now requires it to already exist and raises ValueError otherwise. Creation
-    is only attempted internally, during UserPrefs.__init__ (see
-    test_change_cache_folder_creation_failure_falls_back_to_default below).
-    """
-    prefs = UserPrefs()
-    new_folder = tmp_path / "new_cache"
-
-    with pytest.raises(ValueError, match="Dossier non valide"):
-        prefs.set(PrefEnum.CACHE_FOLDER, new_folder, save=False)
-
-    assert not new_folder.exists()
-
-
 # ================================================================================
 # PrefsEnum Validation
 # ================================================================================
@@ -121,7 +96,6 @@ def test_get_invalid_key_raises_typeerror():
 
 
 @pytest.mark.unit
-@pytest.mark.usefixtures("isolated_paths")
 @pytest.mark.parametrize("pref", list(PrefEnum), ids=lambda pref: pref.name)
 def test_pref_enum_matches_user_prefs(pref):
     """Each member must point to an existing UserPrefs attribute and be saved under its json_name"""
@@ -169,16 +143,6 @@ def test_get_with_default():
 
 
 @pytest.mark.unit
-def test_set_cache_folder_empty_uses_default(tmp_path):
-    """Empty cache_folder should use default CACHE_FOLDER"""
-    prefs = UserPrefs()
-
-    prefs.set(PrefEnum.CACHE_FOLDER, None, save=False)
-
-    assert prefs.get(PrefEnum.CACHE_FOLDER) == CACHE_FOLDER
-
-
-@pytest.mark.unit
 def test_set_save_as_folder_empty_uses_home():
     """Empty save_as_folder should use home directory"""
     prefs = UserPrefs()
@@ -201,7 +165,6 @@ def test_to_json_returns_dict():
     result = prefs.to_json()
 
     assert isinstance(result, dict)
-    assert "cache_folder" in result
     assert "save_as_folder" in result
     assert "last_server" in result
     assert "date_format" in result
@@ -244,7 +207,6 @@ def test_load_reads_json_file(tmp_path, monkeypatch):
     # Create test file
     test_file = tmp_path / "test_prefs.json"
     test_data = {
-        "cache_folder": str(tmp_path / "cache"),
         "save_as_folder": str(tmp_path),
         "last_server": "LOADED_SERVER",
     }
@@ -379,7 +341,7 @@ def test_repr_returns_dict_string():
     result = repr(prefs)
 
     assert isinstance(result, str)
-    assert "cache_folder" in result
+    assert "cache_days" in result
 
 
 @pytest.mark.unit
@@ -391,7 +353,7 @@ def test_str_returns_json_string():
     assert isinstance(result, str)
     # Should be valid JSON
     parsed = json.loads(result)
-    assert "cache_folder" in parsed
+    assert "cache_days" in parsed
 
 
 # ================================================================================
@@ -425,56 +387,22 @@ def test_save_handles_permission_error(tmp_path, monkeypatch):
         readonly_dir.chmod(0o755)
 
 
-@pytest.mark.unit
-def test_change_cache_folder_creation_failure_falls_back_to_default(tmp_path, monkeypatch):
-    """
-    If cache folder creation fails during init (init_load=True), should fall back to
-    the CACHE_FOLDER default. This is the internal resilience path exercised at
-    UserPrefs() startup - the public set() never reaches mkdir (see
-    test_set_cache_folder_nonexistent_raises_error above), so it's tested directly
-    against _change_cache_folder with init_load=True.
-    """
-    prefs = UserPrefs()
-
-    # Force a stale, nonexistent current cache folder so the fallback isn't a no-op
-    prefs._cache_folder = tmp_path / "stale_nonexistent"
-
-    def mock_mkdir(*args, **kwargs):
-        raise PermissionError("Access denied")
-
-    monkeypatch.setattr(Path, "mkdir", mock_mkdir)
-
-    bad_path = tmp_path / "forbidden"
-    prefs._change_cache_folder(bad_path, init_load=True)
-
-    assert prefs.get(PrefEnum.CACHE_FOLDER) == CACHE_FOLDER
-
-
 @pytest.mark.regression
-def test_legacy_cache_folder_equal_to_config_folder_triggers_migration(isolated_paths):
-    """
-    Regression test - migrating from an old version where cache_folder (formerly
-    extract_folder) was persisted as CONFIG_FOLDER itself.
+def test_legacy_cache_folder_pref_is_ignored_then_dropped_on_save(setting_file, caplog):
+    """cache_folder used to be a preference: a settings file still holding it loads without any warning,
+    and the key is gone once the preferences are saved again"""
+    legacy = {"cache_folder": str(setting_file.parent / ".temp_cache"), "last_server": "LEGACY_SERVER"}
+    setting_file.write_text(json.dumps(legacy), encoding="utf-8")
 
-    On load, UserPrefs should detect this legacy value, create the new default
-    CACHE_FOLDER, and move any CSV files sitting in CONFIG_FOLDER into it - instead
-    of just rejecting the value as invalid and leaving the CSVs (and the migration)
-    behind.
-    """
-    config_folder, cache_folder, setting_file = isolated_paths
+    with caplog.at_level(logging.WARNING, logger=LOGGER_ROOT_NAME):
+        prefs = UserPrefs()
 
-    setting_file.write_text(
-        json.dumps({"cache_folder": str(config_folder), "save_as_folder": str(Path.home()), "last_server": ""})
-    )
-    old_export = config_folder / "old_export.csv"
-    old_export.write_text("a,b,c")
+    assert prefs.get(PrefEnum.LAST_SERVER) == "LEGACY_SERVER"
+    assert [r.message for r in caplog.records if r.levelno >= logging.WARNING] == []
 
-    prefs = UserPrefs()
+    prefs.save()
 
-    assert cache_folder.exists(), "the new default cache folder should have been created"
-    assert not old_export.exists(), "the CSV should have been moved out of CONFIG_FOLDER"
-    assert (cache_folder / "old_export.csv").exists(), "the CSV should now live in the cache folder"
-    assert prefs.get(PrefEnum.CACHE_FOLDER) == cache_folder
+    assert "cache_folder" not in json.loads(setting_file.read_text(encoding="utf-8"))
 
 
 # ================================================================================
@@ -556,7 +484,6 @@ def test_display_format_rejects_invalid_values_on_creation():
 
 
 @pytest.mark.unit
-@pytest.mark.usefixtures("isolated_paths")
 def test_display_format_defaults_when_not_in_prefs_file():
     prefs = UserPrefs()
 
@@ -564,7 +491,6 @@ def test_display_format_defaults_when_not_in_prefs_file():
 
 
 @pytest.mark.unit
-@pytest.mark.usefixtures("isolated_paths")
 def test_set_date_format_and_decimal_separator_updates_display_format():
     prefs = UserPrefs()
 
@@ -577,7 +503,6 @@ def test_set_date_format_and_decimal_separator_updates_display_format():
 
 
 @pytest.mark.unit
-@pytest.mark.usefixtures("isolated_paths")
 def test_set_invalid_date_format_raises_and_keeps_previous_value():
     prefs = UserPrefs()
 
@@ -588,7 +513,6 @@ def test_set_invalid_date_format_raises_and_keeps_previous_value():
 
 
 @pytest.mark.unit
-@pytest.mark.usefixtures("isolated_paths")
 def test_set_invalid_decimal_separator_raises_and_keeps_previous_value():
     prefs = UserPrefs()
 
@@ -599,8 +523,7 @@ def test_set_invalid_decimal_separator_raises_and_keeps_previous_value():
 
 
 @pytest.mark.unit
-def test_date_format_and_decimal_separator_saved_and_reloaded(isolated_paths):
-    _config_folder, _cache_folder, setting_file = isolated_paths
+def test_date_format_and_decimal_separator_saved_and_reloaded(setting_file):
 
     prefs = UserPrefs()
     prefs.set(PrefEnum.DATE_FORMAT, "%Y-%m-%d", save=False)
@@ -616,9 +539,8 @@ def test_date_format_and_decimal_separator_saved_and_reloaded(isolated_paths):
 
 
 @pytest.mark.unit
-def test_load_invalid_date_format_and_decimal_separator_use_defaults(isolated_paths):
+def test_load_invalid_date_format_and_decimal_separator_use_defaults(setting_file):
     """Invalid values in the prefs file are ignored, defaults are kept"""
-    _config_folder, _cache_folder, setting_file = isolated_paths
     setting_file.write_text(json.dumps({"date_format": "yyyy-MM-dd", "decimal_separator": ",,"}), encoding="utf-8")
 
     prefs = UserPrefs()
@@ -684,7 +606,6 @@ def test_validate_cache_expiration_days_invalid_raises_error(days):
 
 
 @pytest.mark.unit
-@pytest.mark.usefixtures("isolated_paths")
 def test_csv_format_and_cache_expiration_defaults():
     prefs = UserPrefs()
 
@@ -695,7 +616,6 @@ def test_csv_format_and_cache_expiration_defaults():
 
 
 @pytest.mark.unit
-@pytest.mark.usefixtures("isolated_paths")
 @pytest.mark.parametrize(
     ("key", "value"),
     [
@@ -716,7 +636,6 @@ def test_set_invalid_csv_format_or_cache_expiration_raises_and_keeps_previous_va
 
 
 @pytest.mark.unit
-@pytest.mark.usefixtures("isolated_paths")
 def test_set_csv_chars_individually_allows_swapping_them():
     """Delimiter and quote character are only checked together by CsvFormat.validate_dialect(), so they can be
     swapped one after the other without the first set() being rejected"""
@@ -763,7 +682,6 @@ def test_csv_format_is_frozen():
 
 
 @pytest.mark.unit
-@pytest.mark.usefixtures("isolated_paths")
 def test_user_prefs_csv_format_reflects_prefs():
     prefs = UserPrefs()
     prefs.set(PrefEnum.CSV_DELIMITER, "|", save=False)
@@ -774,7 +692,6 @@ def test_user_prefs_csv_format_reflects_prefs():
 
 
 @pytest.mark.unit
-@pytest.mark.usefixtures("isolated_paths")
 def test_user_prefs_csv_format_falls_back_to_defaults_on_unusable_dialect():
     """Delimiter and quote character are set one at a time, so they can be momentarily unusable together -
     csv_format must still return a usable format rather than raise"""
@@ -785,7 +702,6 @@ def test_user_prefs_csv_format_falls_back_to_defaults_on_unusable_dialect():
 
 
 @pytest.mark.unit
-@pytest.mark.usefixtures("isolated_paths")
 def test_set_cache_expiration_days_converts_to_int():
     prefs = UserPrefs()
 
@@ -795,8 +711,7 @@ def test_set_cache_expiration_days_converts_to_int():
 
 
 @pytest.mark.unit
-def test_csv_format_and_cache_expiration_saved_and_reloaded(isolated_paths):
-    _config_folder, _cache_folder, setting_file = isolated_paths
+def test_csv_format_and_cache_expiration_saved_and_reloaded(setting_file):
 
     prefs = UserPrefs()
     prefs.set(PrefEnum.CSV_DELIMITER, "|", save=False)
@@ -819,9 +734,8 @@ def test_csv_format_and_cache_expiration_saved_and_reloaded(isolated_paths):
 
 
 @pytest.mark.unit
-def test_load_unusable_csv_dialect_uses_defaults(isolated_paths):
+def test_load_unusable_csv_dialect_uses_defaults(setting_file):
     """Delimiter and quote character valid on their own but not together fall back to defaults"""
-    _config_folder, _cache_folder, setting_file = isolated_paths
     setting_file.write_text(json.dumps({"csv_delimiter": "'", "csv_quotechar": "'"}), encoding="utf-8")
 
     prefs = UserPrefs()
@@ -831,8 +745,7 @@ def test_load_unusable_csv_dialect_uses_defaults(isolated_paths):
 
 
 @pytest.mark.unit
-def test_load_invalid_csv_encoding_and_cache_expiration_use_defaults(isolated_paths):
-    _config_folder, _cache_folder, setting_file = isolated_paths
+def test_load_invalid_csv_encoding_and_cache_expiration_use_defaults(setting_file):
     setting_file.write_text(json.dumps({"csv_encoding": "not-a-real-encoding", "cache_days": "abc"}), encoding="utf-8")
 
     prefs = UserPrefs()
@@ -847,7 +760,6 @@ def test_load_invalid_csv_encoding_and_cache_expiration_use_defaults(isolated_pa
 
 
 @pytest.mark.unit
-@pytest.mark.usefixtures("isolated_paths")
 def test_update_prefs_defaults():
     prefs = UserPrefs()
 
@@ -857,7 +769,6 @@ def test_update_prefs_defaults():
 
 
 @pytest.mark.unit
-@pytest.mark.usefixtures("isolated_paths")
 @pytest.mark.parametrize(
     "value, expected",
     [(AppStage.BETA, AppStage.BETA), ("BETA", AppStage.BETA), ("rc", AppStage.RC), (1, AppStage.ALPHA)],
@@ -871,7 +782,6 @@ def test_set_update_channel_accepts_a_stage_its_name_or_its_number(value, expect
 
 
 @pytest.mark.unit
-@pytest.mark.usefixtures("isolated_paths")
 @pytest.mark.parametrize("value", ["gamma", "", 9])
 def test_set_invalid_update_channel_raises_and_keeps_previous_value(value):
     prefs = UserPrefs()
@@ -884,7 +794,6 @@ def test_set_invalid_update_channel_raises_and_keeps_previous_value(value):
 
 
 @pytest.mark.unit
-@pytest.mark.usefixtures("isolated_paths")
 @pytest.mark.parametrize("value", [True, False])
 def test_set_update_check_accepts_booleans(value):
     prefs = UserPrefs()
@@ -895,7 +804,6 @@ def test_set_update_check_accepts_booleans(value):
 
 
 @pytest.mark.unit
-@pytest.mark.usefixtures("isolated_paths")
 @pytest.mark.parametrize("value", ["false", "True", 0, 1, None])
 def test_set_update_check_rejects_non_booleans(value):
     prefs = UserPrefs()
@@ -907,7 +815,6 @@ def test_set_update_check_rejects_non_booleans(value):
 
 
 @pytest.mark.unit
-@pytest.mark.usefixtures("isolated_paths")
 @pytest.mark.parametrize(
     "value, expected",
     [("2.0.0-beta.3", "2.0.0-beta.3"), ("2.1.0", "2.1.0"), ("", ""), (None, "")],
@@ -923,7 +830,6 @@ def test_set_update_skipped_accepts_a_version_or_nothing(value, expected):
 
 
 @pytest.mark.unit
-@pytest.mark.usefixtures("isolated_paths")
 @pytest.mark.parametrize("value", ["not a version", "2.0", "2.0.0_BETA.2"])
 def test_set_invalid_update_skipped_raises_and_keeps_previous_value(value):
     prefs = UserPrefs()
@@ -936,9 +842,8 @@ def test_set_invalid_update_skipped_raises_and_keeps_previous_value(value):
 
 
 @pytest.mark.unit
-def test_update_prefs_saved_and_reloaded(isolated_paths):
+def test_update_prefs_saved_and_reloaded(setting_file):
     """The channel is saved by name, never by its number"""
-    _config_folder, _cache_folder, setting_file = isolated_paths
 
     prefs = UserPrefs()
     prefs.set(PrefEnum.UPDATE_CHECK, False, save=False)
@@ -958,8 +863,7 @@ def test_update_prefs_saved_and_reloaded(isolated_paths):
 
 
 @pytest.mark.unit
-def test_load_invalid_update_prefs_use_defaults(isolated_paths):
-    _config_folder, _cache_folder, setting_file = isolated_paths
+def test_load_invalid_update_prefs_use_defaults(setting_file):
     invalid = {"update_check": "no", "update_channel": "nightly", "update_skipped": "v.2.0.0_BETA.2"}
     setting_file.write_text(json.dumps(invalid), encoding="utf-8")
 

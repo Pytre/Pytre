@@ -566,6 +566,8 @@ def test_policy_disables_updates_when_the_file_can_not_be_read(tmp_path, monkeyp
 
 
 def test_policy_is_read_next_to_the_executable_by_default(tmp_path, monkeypatch):
+    """By default in the install folder, which is the executable's folder only once frozen"""
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
     monkeypatch.setattr(sys, "executable", str(tmp_path / "Pytre_Client.exe"))
     write_policy(tmp_path, '{"update_policy": "disabled"}')
 

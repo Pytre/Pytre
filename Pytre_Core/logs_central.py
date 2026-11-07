@@ -19,6 +19,7 @@ from socket import gethostname
 from threading import Thread, Event
 
 
+from Pytre_Core.app_folders import get_config_folder
 from Pytre_Core.logs_base import BaseLogs
 from Pytre_Core.utils import log as _log, setup_standalone_logging
 
@@ -73,7 +74,7 @@ def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__)
 
 
 class CentralLogs(BaseLogs):
-    def __init__(self, logs_folder: Path | str = Path.cwd() / "logs", logs_filename: str = CENTRAL_DB):
+    def __init__(self, logs_folder: Path | str, logs_filename: str = CENTRAL_DB):
         super().__init__(Path(logs_folder) / logs_filename)
         self.sync_thread: Thread | None = None
         self.logs_folder: Path = Path(logs_folder)
@@ -252,7 +253,7 @@ class ClientDriven(CentralLogs):
     Reads unsynced rows from a user SQLite file and syncs them into a shared central database.
     Uses file-based locking with a rotating export-folder queue as several instances may write concurrently."""
 
-    def __init__(self, logs_folder: Path = Path.cwd() / "logs", logs_filename: str = CENTRAL_DB):
+    def __init__(self, logs_folder: Path, logs_filename: str = CENTRAL_DB):
         super().__init__(logs_folder, logs_filename=logs_filename)
 
         self.user_id: str = ""
@@ -860,7 +861,7 @@ class ServerDriven(CentralLogs):
     Receives execution records directly through a dedicated background thread using an in-memory queue.
     Only one process writes to its own central database, so no cross-process locking is needed"""
 
-    def __init__(self, logs_folder: Path | str = Path.cwd() / "logs", logs_filename: str = SERVER_DB):
+    def __init__(self, logs_folder: Path | str, logs_filename: str = SERVER_DB):
         super().__init__(logs_folder, logs_filename=logs_filename)
 
         self.queue: Queue[ExecutionLogEntry] = Queue()
@@ -1022,7 +1023,7 @@ class ServerDriven(CentralLogs):
 if __name__ == "__main__":
     setup_standalone_logging()
 
-    Path_Home: Path = Path.home() / "Pytre"
+    Path_Home: Path = get_config_folder()
     central_log = ClientDriven(Path_Home)
     central_log.trigger_sync(Path_Home / "Pytre_Logs.db", "id_test", "name_test")
     for i in range(10):

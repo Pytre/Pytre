@@ -12,6 +12,7 @@ import logging
 from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
 
+from Pytre_Core.app_folders import get_install_folder
 from Pytre_Core.settings import Settings, DEFAULT_QUERIES_FOLDER, DEFAULT_LOGS_FOLDER
 
 
@@ -474,3 +475,10 @@ def test_load_handles_db_open_failure(mock_kee):
     # Settings should keep the __init__ defaults, since load() bailed out early
     assert settings.settings_version == ""
     assert settings.queries_folder == DEFAULT_QUERIES_FOLDER
+
+
+@pytest.mark.unit
+def test_default_folders_are_next_to_the_application():
+    """Shared settings: a default in each user's home would give each workstation its own queries and logs"""
+    assert DEFAULT_QUERIES_FOLDER.parent == get_install_folder()
+    assert DEFAULT_LOGS_FOLDER.parent == get_install_folder()

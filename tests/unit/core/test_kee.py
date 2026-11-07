@@ -12,7 +12,8 @@ from unittest.mock import Mock, patch, MagicMock
 
 from pykeepass.group import Group
 
-from Pytre_Core.kee import Kee, get_app_path, KEE_FILE, BLANK_FILE, BLANK_PWD
+from Pytre_Core.app_folders import get_resources_folder
+from Pytre_Core.kee import Kee, KEE_FILE, BLANK_FILE, BLANK_PWD
 
 
 # ================================================================================
@@ -303,7 +304,7 @@ def test_create_db_opens_blank_template_and_redirects_filename(mock_pykeepass, m
         kee.create_db(password="new_password")
 
         # Verify: opened the blank template with BLANK_PWD, not the target password
-        MockPyKeePass.assert_called_once_with(get_app_path() / BLANK_FILE, password=BLANK_PWD)
+        MockPyKeePass.assert_called_once_with(get_resources_folder() / BLANK_FILE, password=BLANK_PWD)
 
         # Verify: save target redirected to the real database file
         assert mock_pykeepass.filename == kee.file
@@ -559,25 +560,6 @@ def test_pwd_change_rekeys_and_saves_even_if_password_looks_unchanged_when_force
         assert mock_pykeepass.save.called
 
 
-# ================================================================================
-# get_app_path Functionality
-# ================================================================================
-
-
 @pytest.mark.unit
-def test_get_app_path_frozen_app():
-    """get_app_path should return _MEIPASS for frozen app"""
-    with patch("sys.frozen", True, create=True), patch("sys._MEIPASS", "/frozen/path", create=True):
-        result = get_app_path()
-
-        assert result == Path("/frozen/path")
-
-
-@pytest.mark.unit
-def test_get_app_path_normal_app():
-    """get_app_path should return __file__ directory for normal app"""
-    result = get_app_path()
-
-    # Should be the directory containing kee.py
-    assert result.exists()
-    assert result.is_dir()
+def test_blank_template_ships_with_the_resources():
+    assert (get_resources_folder() / BLANK_FILE).is_file()

@@ -11,8 +11,10 @@ import httpx2
 import jwt
 import pytest
 
+from Pytre_Core.app_folders import get_config_folder
 from Pytre_Core.remotes import (
     REMOTES_CIPHER,
+    REMOTES_FILENAME,
     Remote,
     RemoteAddress,
     RemoteAuthError,
@@ -2220,3 +2222,9 @@ def test_execute_raises_remote_request_error_if_relogin_fails_due_to_network(rem
     with pytest.raises(RemoteRequestError):
         with remote_server.execute("Q1", "hash1", DisplayFormat(), {}):
             pass
+
+
+@pytest.mark.unit
+def test_remotes_default_to_the_file_of_the_user_config_folder():
+    """Resolved when Remotes is built, not at import: follows the folder of the running platform"""
+    assert Remotes().remotes_file == get_config_folder() / REMOTES_FILENAME

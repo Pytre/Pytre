@@ -156,9 +156,18 @@ class Updater:
         self.repo: str = repo
 
     @staticmethod
+    def is_onedir() -> bool:
+        """True for a onedir build: its bundled files sit in the executable folder (`_internal` by default),
+        while a onefile build unpacks them in a temporary folder"""
+        bundle = getattr(sys, "_MEIPASS", None)
+        return bundle is not None and Path(bundle).is_relative_to(Path(sys.executable).parent)
+
+    @staticmethod
     def is_updatable() -> bool:
-        """True for a frozen executable and without credentials_secrets.py."""
-        return bool(getattr(sys, "frozen", False)) and not secret_key_available()
+        """True for a frozen onefile executable without credentials_secrets.py. A onedir build is deployed and updated
+        by its installer, never by itself."""
+        frozen = bool(getattr(sys, "frozen", False))
+        return frozen and not Updater.is_onedir() and not secret_key_available()
 
     @staticmethod
     def current_exe() -> Path:

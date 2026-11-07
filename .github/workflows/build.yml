@@ -69,7 +69,7 @@ jobs:
     name: Build ${{ matrix.name }}
     needs: [version, test]
     runs-on: windows-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     permissions:
       contents: read
       id-token: write
@@ -115,17 +115,37 @@ jobs:
           version="${version#.}"
           version="${version//\//-}"
           mv "dist/${{ matrix.name }}.exe" "dist/${{ matrix.name }}_${version}.exe"
+          echo "ASSET_VERSION=${version}" >> "$GITHUB_ENV"
+
+      # Folder build for managed deployments, never updates itself - zipped with its Pytre_Client/ root folder
+      - name: Build client folder and zip it
+        if: matrix.name == 'Pytre_Client'
+        run: |
+          pyinstaller --noconfirm --workpath build/onedir ${{ matrix.spec }} -- --onedir
+          test -f "dist/${{ matrix.name }}/${{ matrix.name }}.exe"
+          test -d "dist/${{ matrix.name }}/_internal"
+          python - <<'EOF'
+          import os, shutil
+          name, version = os.environ["NAME"], os.environ["ASSET_VERSION"]
+          shutil.make_archive(f"dist/{name}_{version}", "zip", root_dir="dist", base_dir=name)
+          EOF
+        env:
+          NAME: ${{ matrix.name }}
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ matrix.name }}
-          path: dist/${{ matrix.name }}_*.exe
+          path: |
+            dist/${{ matrix.name }}_*.exe
+            dist/${{ matrix.name }}_*.zip
           if-no-files-found: error
 
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         if: startsWith(github.ref, 'refs/tags/')
         with:
-          subject-path: dist/${{ matrix.name }}_*.exe
+          subject-path: |
+            dist/${{ matrix.name }}_*.exe
+            dist/${{ matrix.name }}_*.zip
 
   release:
     needs: [version, build]
@@ -141,7 +161,9 @@ jobs:
           merge-multiple: true
 
       - name: Compute checksums
-        run: cd dist && sha256sum *.exe > SHA256SUMS.txt
+        run: |
+          shopt -s nullglob
+          cd dist && sha256sum *.exe *.zip *.msi > SHA256SUMS.txt
 
       - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         id: release
@@ -149,13 +171,16 @@ jobs:
           draft: true
           files: |
             dist/*.exe
+            dist/*.zip
+            dist/*.msi
             dist/SHA256SUMS.txt
           prerelease: ${{ needs.version.outputs.prerelease == 'true' }}
           generate_release_notes: true
           body: |
-            Portable Windows executables, no installation needed: download and run.
-            - `Pytre_Client_*.exe`: desktop client (pure client mode only, see README)
-            - `Pytre_Server_*.exe`: server (console application)
+            Windows builds, see README for details:
+            - `Pytre_Client_*.exe`: desktop client, portable single executable (pure client mode only)
+            - `Pytre_Client_*.zip`: the same client as a folder, for managed deployments (never updates itself)
+            - `Pytre_Server_*.exe`: server, portable single executable (console application)
 
             To verify a download: compare its hash with `SHA256SUMS.txt` (`Get-FileHash <file>` in PowerShell),
             or check its build provenance with `gh attestation verify <file> --repo Pytre/Pytre`.

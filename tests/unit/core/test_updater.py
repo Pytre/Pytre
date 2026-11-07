@@ -430,9 +430,39 @@ def test_is_updatable_only_for_a_frozen_build_without_the_key(monkeypatch, froze
         monkeypatch.setattr(sys, "frozen", True, raising=False)
     else:
         monkeypatch.delattr(sys, "frozen", raising=False)
+    monkeypatch.delattr(sys, "_MEIPASS", raising=False)
     monkeypatch.setattr(updater_module, "secret_key_available", lambda: key_available)
 
     assert Updater.is_updatable() is expected
+
+
+@pytest.mark.parametrize(
+    "bundle, expected",
+    [
+        pytest.param("app/_internal", True, id="onedir default contents folder"),
+        pytest.param("app", True, id="onedir contents in the executable folder"),
+        pytest.param("temp/_MEI12345", False, id="onefile temporary folder"),
+        pytest.param(None, False, id="not frozen"),
+    ],
+)
+def test_is_onedir_when_the_bundle_sits_in_the_executable_folder(monkeypatch, tmp_path, bundle, expected):
+    monkeypatch.setattr(sys, "executable", str(tmp_path / "app" / "Pytre_Client.exe"))
+    if bundle is None:
+        monkeypatch.delattr(sys, "_MEIPASS", raising=False)
+    else:
+        monkeypatch.setattr(sys, "_MEIPASS", str(tmp_path / bundle), raising=False)
+
+    assert Updater.is_onedir() is expected
+
+
+def test_onedir_build_is_never_updatable(monkeypatch, tmp_path):
+    """A onedir build is deployed and updated by its installer, even without the key"""
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", str(tmp_path / "Pytre_Client.exe"))
+    monkeypatch.setattr(sys, "_MEIPASS", str(tmp_path / "_internal"), raising=False)
+    monkeypatch.setattr(updater_module, "secret_key_available", lambda: False)
+
+    assert Updater.is_updatable() is False
 
 
 def test_current_exe_is_the_running_executable(monkeypatch, tmp_path):
@@ -595,3 +625,21 @@ def test_spec_files_name_executables_from_about(spec_file, constant):
     spec = (ROOT / spec_file).read_text(encoding="utf-8")
 
     assert f"name={constant}," in spec
+
+
+def test_build_workflow_builds_the_client_folder_with_the_spec_option():
+    """The workflow passes --onedir to the client spec, which must declare it - an unknown option fails the build"""
+    workflow = (ROOT / ".github" / "workflows" / "build.yml").read_text(encoding="utf-8")
+    spec = (ROOT / "Pytre_Client.spec").read_text(encoding="utf-8")
+
+    assert "-- --onedir" in workflow
+    assert 'add_argument("--onedir"' in spec
+
+
+def test_release_publishes_and_checksums_the_client_zip():
+    """The zip is verified like the executables: published with the release and listed in SHA256SUMS.txt"""
+    workflow = (ROOT / ".github" / "workflows" / "build.yml").read_text(encoding="utf-8")
+    checksums_line = next(line for line in workflow.splitlines() if "> SHA256SUMS.txt" in line)
+
+    assert "dist/*.zip" in workflow
+    assert "*.zip" in checksums_line

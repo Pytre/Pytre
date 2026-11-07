@@ -23,13 +23,30 @@ The client runs in one of two modes, detected at startup:
 
 ## Download
 
-Windows executables of the client (`Pytre_Client_<version>.exe`) and the server (`Pytre_Server_<version>.exe`) are published on the [Releases](https://github.com/Pytre/Pytre/releases) page. They are portable: no installation is needed, just download and run them. As they are not signed, Windows SmartScreen may show a warning on first launch (*More info > Run anyway*).
+Windows builds of the client (`Pytre_Client_<version>.exe`, also as a folder in `Pytre_Client_<version>.zip`) and the server (`Pytre_Server_<version>.exe`) are published on the [Releases](https://github.com/Pytre/Pytre/releases) page. The executables are portable: no installation is needed, just download and run them. As they are not signed, Windows SmartScreen may show a warning on first launch (*More info > Run anyway*).
 
 The prebuilt client only runs as a pure client: hybrid mode needs `Pytre_Core/credentials_secrets.py` with your own key, so the client has to be built from source.
 
 ## Enterprise deployment
 
-To deploy the client yourself and control its updates, put a `Pytre.policy.json` file next to the client executable:
+Two formats suit a managed deployment:
+
+- `Pytre_Client_<version>.zip` (recommended): the client as a folder, which never updates itself
+- `Pytre_Client_<version>.exe` with a `Pytre.policy.json` file to control its updates
+
+Releases are immutable and each one publishes `SHA256SUMS.txt`, so a file can be checked before being deployed, e.g. with `Get-FileHash <file> -Algorithm SHA256` in PowerShell.
+
+### Folder (zip)
+
+- Extract the zip into a folder users can't write to, such as `C:\Program Files`: a `Pytre_Client` folder will be created there. If the zip was downloaded with a browser, run `Unblock-File` on it first.
+- To update: close Pytre, delete the folder, then extract the new zip. Never extract over a previous version: files it no longer uses would stay behind.
+- User data lives in `%LOCALAPPDATA%\Pytre` and is left untouched.
+- To detect the installed version, read the file version of `Pytre_Client.exe`: `2.0.0.400` for 2.0.0, pre-releases being lower (`2.0.0.204` for 2.0.0-beta.4).
+- This build never checks for updates, so `Pytre.policy.json` isn't needed.
+
+### Executable with an update policy
+
+Put a `Pytre.policy.json` file next to the client executable:
 
 ```json
 { "update_policy": "disabled" }
@@ -42,8 +59,8 @@ To deploy the client yourself and control its updates, put a `Pytre.policy.json`
 
 - Values are case insensitive. Without the file, or without `update_policy`, the client behaves as `allowed`.
 - A file that can't be read, isn't valid JSON or holds an unknown value disables updates, and a warning is logged.
-- The policy only binds if users can't modify the file: install the executable and `Pytre.policy.json` in a folder users can't write to, such as `C:\Program Files\Pytre`.
-- Releases are immutable and each one publishes `SHA256SUMS.txt`, so an executable can be checked before being deployed, e.g. with `Get-FileHash Pytre_Client_<version>.exe -Algorithm SHA256` in PowerShell.
+- The policy only binds if users can't modify the file: install the executable and `Pytre.policy.json` in a folder users can't write to, such as `C:\Program Files\Pytre_Client`.
+- Keep `Pytre.policy.json` next to the executable if the deployment recreates the folder or uses a new one for each version.
 
 ## Setup from source
 

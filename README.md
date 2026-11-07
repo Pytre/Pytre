@@ -27,6 +27,24 @@ Windows executables of the client (`Pytre_Client_<version>.exe`) and the server 
 
 The prebuilt client only runs as a pure client: hybrid mode needs `Pytre_Core/credentials_secrets.py` with your own key, so the client has to be built from source.
 
+## Enterprise deployment
+
+To deploy the client yourself and control its updates, put a `Pytre.policy.json` file next to the client executable:
+
+```json
+{ "update_policy": "disabled" }
+```
+
+| `update_policy` | Behaviour |
+|---|---|
+| `allowed` | Checks for updates at startup if the user allows it, and on demand from the `?` menu |
+| `disabled` | Never checks for updates, the update menu is hidden |
+
+- Values are case insensitive. Without the file, or without `update_policy`, the client behaves as `allowed`.
+- A file that can't be read, isn't valid JSON or holds an unknown value disables updates, and a warning is logged.
+- The policy only binds if users can't modify the file: install the executable and `Pytre.policy.json` in a folder users can't write to, such as `C:\Program Files\Pytre`.
+- Releases are immutable and each one publishes `SHA256SUMS.txt`, so an executable can be checked before being deployed, e.g. with `Get-FileHash Pytre_Client_<version>.exe -Algorithm SHA256` in PowerShell.
+
 ## Setup from source
 
 Requires Python 3.14 or later (tested with 3.14).
@@ -75,7 +93,7 @@ Pytre is licensed under GNU Affero General Public License 3. You can find the li
 ## Main libraries used
 
 - Client: [pymssql](https://github.com/pymssql/pymssql), [psycopg2](https://github.com/psycopg/psycopg2), [httpx2](https://github.com/pydantic/httpx2)
-- Server: [FastAPI](https://github.com/fastapi/fastapi), [uvicorn](https://github.com/encode/uvicorn), [fastmssql](https://github.com/Rivendael/FastMssql), [asyncpg](https://github.com/MagicStack/asyncpg), [Authlib](https://github.com/authlib/authlib), [PyJWT](https://github.com/jpadilla/pyjwt), [argon2-cffi](https://github.com/hynek/argon2-cffi), [Jinja2](https://github.com/pallets/jinja)
+- Server: [FastAPI](https://github.com/fastapi/fastapi), [uvicorn](https://github.com/encode/uvicorn), [pymssql](https://github.com/pymssql/pymssql), [fastmssql](https://github.com/Rivendael/FastMssql), [asyncpg](https://github.com/MagicStack/asyncpg), [Authlib](https://github.com/authlib/authlib), [PyJWT](https://github.com/jpadilla/pyjwt), [argon2-cffi](https://github.com/hynek/argon2-cffi), [Jinja2](https://github.com/pallets/jinja)
 - Both: [pykeepass](https://github.com/libkeepass/pykeepass), [cryptography](https://github.com/pyca/cryptography), [keyring](https://github.com/jaraco/keyring)
 
 ## Credits

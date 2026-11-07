@@ -19,7 +19,7 @@ from Pytre_Core.logs_central import ClientDriven as CentralLogs
 from Pytre_Core.old_files import delete_files, list_old_files
 from Pytre_Core.remotes import RemoteServer, RemoteAuthError, RemoteSsoRequiredError
 from Pytre_Core.servers import Server
-from Pytre_Core.updater import Release, Updater, UpdateError
+from Pytre_Core.updater import Release, UpdatePolicy, Updater, UpdateError
 from Pytre_Core.user_prefs import PrefEnum
 
 from Pytre_Core.sql_query.execution_runner import ExecutionRunner
@@ -99,6 +99,7 @@ class App(tk.Toplevel):
         self.ensure_admin_exists()  # on hybrid mode create an admin if none exists
 
         self.updatable: bool = Updater.is_updatable()
+        self.update_policy: UpdatePolicy = UpdatePolicy.load() if self.updatable else UpdatePolicy.ALLOWED
         self.pending_update: Path | None = None  # downloaded executable, installed once the UI loop has ended
         self.restart_after_update: bool = False
 
@@ -359,9 +360,9 @@ class App(tk.Toplevel):
         menu_about = tk.Menu(menubar, tearoff=False)
         menu_about.add_command(label="Ouvrir la console...", command=self.console)
         menu_about.add_separator()
-        if self.updatable:
+        if self.updatable and self.update_policy is UpdatePolicy.ALLOWED:
             menu_about.add_command(
-                label="Rechercher mise à jour...", command=lambda: self.check_for_update(manual=True)
+                label="Recherche de mise à jour...", command=lambda: self.check_for_update(manual=True)
             )
         menu_about.add_command(label=f"À propos de {APP_NAME}...", command=self.about_info)
         menubar.add_cascade(label="?", menu=menu_about)
@@ -1129,12 +1130,19 @@ class App(tk.Toplevel):
     # Mise à jour de l'application
     # ------------------------------------------------------------------------------------------
     def check_for_update_at_startup(self):
-        if self.updatable and self.user_ctx.user_prefs.get(PrefEnum.UPDATE_CHECK):
+        if (
+            self.updatable
+            and self.user_ctx.user_prefs.get(PrefEnum.UPDATE_CHECK)
+            and self.update_policy is UpdatePolicy.ALLOWED
+        ):
             self.check_for_update(manual=False)
 
     def check_for_update(self, manual: bool = False):
         """Looks for a newer release in a background thread. The automatic check stays silent unless an
         update is found and skips the version the user chose to ignore - the manual one reports every outcome."""
+        if self.update_policy is UpdatePolicy.DISABLED:
+            return
+
         user_prefs = self.user_ctx.user_prefs
 
         updater = Updater(CLIENT_BASENAME, AppVersion.current(), user_prefs.get(PrefEnum.UPDATE_CHANNEL))
@@ -1464,7 +1472,7 @@ class App(tk.Toplevel):
         self.console_app.deiconify()
 
     def about_info(self):
-        AboutWindow(parent=self, user_prefs=self.user_ctx.user_prefs)
+        AboutWindow(parent=self, user_prefs=self.user_ctx.user_prefs, update_policy=self.update_policy)
 
 
 def app_start(mode: AppMode | None = None):

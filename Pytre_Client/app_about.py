@@ -1,10 +1,10 @@
 import tkinter as tk
 import webbrowser
-from tkinter import ttk, Event, font
+from tkinter import ttk, font
 
 from Pytre_Core import about
 from Pytre_Core.settings import get_app_path
-from Pytre_Core.updater import Updater
+from Pytre_Core.updater import UpdatePolicy, Updater
 from Pytre_Core.user_prefs import PrefEnum, UserPrefs
 from Pytre_Core.utils import get_system
 
@@ -13,7 +13,12 @@ from Pytre_Client.app_theme import set_theme
 
 
 class AboutWindow(tk.Toplevel):
-    def __init__(self, parent: tk.Toplevel | None = None, user_prefs: UserPrefs | None = None):
+    def __init__(
+        self,
+        parent: tk.Toplevel | None = None,
+        user_prefs: UserPrefs | None = None,
+        update_policy: UpdatePolicy = UpdatePolicy.ALLOWED,
+    ):
         super().__init__()
         self.parent: tk.Toplevel | None = parent
         if self.parent:
@@ -27,6 +32,7 @@ class AboutWindow(tk.Toplevel):
         self.user_prefs: UserPrefs = user_prefs or UserPrefs()
 
         self.updatable: bool = Updater.is_updatable()
+        self.update_policy: UpdatePolicy = update_policy
         self.update_check: bool = self.user_prefs.get(PrefEnum.UPDATE_CHECK)
         self.update_channel: about.AppStage = self.user_prefs.get(PrefEnum.UPDATE_CHANNEL)
         self.channels: list[str] = [stage.name for stage in sorted(about.AppStage, reverse=True)]
@@ -132,7 +138,13 @@ class AboutWindow(tk.Toplevel):
         self.bottom_frame.columnconfigure(1, weight=1)
         self.bottom_frame.columnconfigure(2, weight=0)
 
-        if self.updatable:
+        if not self.updatable:
+            pass
+        elif self.update_policy is UpdatePolicy.DISABLED:
+            upd_label = ttk.Label(self.bottom_frame, text="Mises à jour gérées par votre organisation")
+            upd_label.configure(font=("TkDefaultFont", 8, "normal"))
+            upd_label.grid(row=0, column=0, padx=4, pady=4, sticky="nswe")
+        else:
             self.upd_checkbox_var = tk.BooleanVar(value=self.update_check)
             upd_checkbox = ttk.Checkbutton(self.bottom_frame, text="Mise à jour auto, canal : ")
             upd_checkbox.configure(variable=self.upd_checkbox_var)
@@ -143,20 +155,24 @@ class AboutWindow(tk.Toplevel):
             upd_checkbox.grid(row=0, column=0, padx=4, pady=4, sticky="nswe")
             self.upd_combo.grid(row=0, column=1, padx=4, pady=4, sticky="nswe")
 
-        ok_btn = ttk.Button(self.bottom_frame, text="Ok", command=self.app_exit)
+        ok_btn = ttk.Button(self.bottom_frame, text="Ok", command=lambda: self.app_exit(save_prefs=True))
         ok_btn.grid(row=0, column=2, padx=4, pady=4, sticky="nswe")
 
     # ------------------------------------------------------------------------------------------
     # Définition des évènements générer par les traitements
     # ------------------------------------------------------------------------------------------
     def _events_binds(self):
-        self.protocol("WM_DELETE_WINDOW", self.app_exit)  # arrêter le programme quand fermeture de la fenêtre
+        self.protocol("WM_DELETE_WINDOW", lambda: self.app_exit(save_prefs=False))
 
     # ------------------------------------------------------------------------------------------
     # Autres traitements
     # ------------------------------------------------------------------------------------------
     def save_channel(self):
         changed: bool = False
+
+        # do nothing if updates are disabled
+        if self.update_policy is UpdatePolicy.DISABLED:
+            return
 
         # update_check
         selected_check = self.upd_checkbox_var.get()
@@ -177,8 +193,8 @@ class AboutWindow(tk.Toplevel):
         if changed:
             self.user_prefs.save()
 
-    def app_exit(self, _: Event | None = None):
-        if self.updatable:
+    def app_exit(self, save_prefs: bool):
+        if save_prefs and self.updatable:
             self.save_channel()
 
         if self.parent:

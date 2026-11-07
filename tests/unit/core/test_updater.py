@@ -4,6 +4,8 @@ httpx2.get / httpx2.stream are replaced by fakes returning real httpx2.Response 
 """
 
 import hashlib
+import json
+import logging
 import re
 import sys
 from contextlib import contextmanager
@@ -16,7 +18,17 @@ import pytest
 
 from Pytre_Core import updater as updater_module
 from Pytre_Core.about import CLIENT_BASENAME, SERVER_BASENAME, AppStage, AppVersion
-from Pytre_Core.updater import CHECKSUMS_ASSET, NEW_SUFFIX, OLD_SUFFIX, Release, Updater, UpdateError
+from Pytre_Core.updater import (
+    CHECKSUMS_ASSET,
+    NEW_SUFFIX,
+    OLD_SUFFIX,
+    POLICY_FILE,
+    Release,
+    Updater,
+    UpdateError,
+    UpdatePolicy,
+)
+from Pytre_Core.utils import LOGGER_ROOT_NAME
 
 pytestmark = pytest.mark.unit
 
@@ -435,6 +447,129 @@ def test_can_replace_exe_in_a_writable_folder(running_exe):
 
 def test_can_not_replace_exe_in_an_unusable_folder(tmp_path):
     assert Updater.can_replace_exe(tmp_path / "missing" / "Pytre.exe") is False
+
+
+# ================================================================================
+# Enterprise update policy
+# ================================================================================
+
+
+def write_policy(folder: Path, content: str, encoding: str = "utf-8") -> Path:
+    policy_file = folder / POLICY_FILE
+    policy_file.write_text(content, encoding=encoding)
+    return policy_file
+
+
+def warnings_logged(caplog) -> list[str]:
+    return [r.message for r in caplog.records if r.levelno == logging.WARNING]
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [("allowed", UpdatePolicy.ALLOWED), ("DISABLED", UpdatePolicy.DISABLED), ("Disabled", UpdatePolicy.DISABLED)],
+)
+def test_policy_from_value_ignores_case(value, expected):
+    assert UpdatePolicy.from_value(value) is expected
+
+
+def test_policy_from_value_rejects_an_unknown_name():
+    with pytest.raises(ValueError, match="manual"):
+        UpdatePolicy.from_value("manual")
+
+
+def test_policy_is_ordered_from_least_to_most_restrictive():
+    assert UpdatePolicy.ALLOWED < UpdatePolicy.DISABLED
+
+
+def test_policy_allows_updates_without_policy_file(tmp_path, caplog):
+    with caplog.at_level(logging.INFO, logger=LOGGER_ROOT_NAME):
+        assert UpdatePolicy.load(tmp_path) is UpdatePolicy.ALLOWED
+
+    assert caplog.records == []
+
+
+def test_policy_allows_updates_when_the_file_has_no_update_policy(tmp_path, caplog):
+    write_policy(tmp_path, json.dumps({"other_setting": True}))
+
+    with caplog.at_level(logging.INFO, logger=LOGGER_ROOT_NAME):
+        assert UpdatePolicy.load(tmp_path) is UpdatePolicy.ALLOWED
+
+    assert warnings_logged(caplog) == []
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        ("allowed", UpdatePolicy.ALLOWED),
+        ("disabled", UpdatePolicy.DISABLED),
+        ("DISABLED", UpdatePolicy.DISABLED),
+    ],
+)
+def test_policy_reads_update_policy_from_the_file(tmp_path, value, expected):
+    write_policy(tmp_path, json.dumps({"update_policy": value}))
+
+    assert UpdatePolicy.load(tmp_path) is expected
+
+
+def test_policy_logs_the_applied_policy_and_its_file(tmp_path, caplog):
+    policy_file = write_policy(tmp_path, '{"update_policy": "disabled"}')
+
+    with caplog.at_level(logging.INFO, logger=LOGGER_ROOT_NAME):
+        UpdatePolicy.load(tmp_path)
+
+    assert any("disabled" in r.message and str(policy_file) in r.message for r in caplog.records)
+
+
+@pytest.mark.parametrize("encoding", ["utf-8", "utf-8-sig", "cp1252"])
+def test_policy_reads_files_in_the_usual_encodings(tmp_path, encoding):
+    write_policy(tmp_path, '{"comment": "géré par le service informatique", "update_policy": "disabled"}', encoding)
+
+    assert UpdatePolicy.load(tmp_path) is UpdatePolicy.DISABLED
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        pytest.param('{"update_policy": "allowed"', id="invalid json"),
+        pytest.param("", id="empty file"),
+        pytest.param('["allowed"]', id="list root"),
+        pytest.param('"allowed"', id="string root"),
+        pytest.param('{"update_policy": "manual"}', id="unknown value"),
+        pytest.param('{"update_policy": ""}', id="empty value"),
+        pytest.param('{"update_policy": true}', id="boolean value"),
+        pytest.param('{"update_policy": 1}', id="number value"),
+        pytest.param('{"update_policy": null}', id="null value"),
+    ],
+)
+def test_policy_disables_updates_when_the_file_is_invalid(tmp_path, caplog, content):
+    """An invalid policy must never let updates through, nor stop the client from starting"""
+    write_policy(tmp_path, content)
+
+    with caplog.at_level(logging.WARNING, logger=LOGGER_ROOT_NAME):
+        assert UpdatePolicy.load(tmp_path) is UpdatePolicy.DISABLED
+
+    assert warnings_logged(caplog)
+
+
+def test_policy_disables_updates_when_the_file_can_not_be_read(tmp_path, monkeypatch, caplog):
+    write_policy(tmp_path, '{"update_policy": "allowed"}')
+
+    def denied_open(*args, **kwargs):
+        raise PermissionError("access denied")
+
+    monkeypatch.setattr("builtins.open", denied_open)
+
+    with caplog.at_level(logging.WARNING, logger=LOGGER_ROOT_NAME):
+        assert UpdatePolicy.load(tmp_path) is UpdatePolicy.DISABLED
+
+    assert any("access denied" in message for message in warnings_logged(caplog))
+
+
+def test_policy_is_read_next_to_the_executable_by_default(tmp_path, monkeypatch):
+    monkeypatch.setattr(sys, "executable", str(tmp_path / "Pytre_Client.exe"))
+    write_policy(tmp_path, '{"update_policy": "disabled"}')
+
+    assert UpdatePolicy.load() is UpdatePolicy.DISABLED
 
 
 # ================================================================================

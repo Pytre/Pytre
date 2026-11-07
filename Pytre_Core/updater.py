@@ -1,4 +1,5 @@
 import hashlib
+import json
 import logging
 import os
 import subprocess
@@ -6,6 +7,7 @@ import sys
 import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
+from enum import IntEnum
 from pathlib import Path
 from typing import Any, cast
 
@@ -13,8 +15,10 @@ import httpx2
 
 from Pytre_Core.about import REPO, AppStage, AppVersion
 from Pytre_Core.credentials import secret_key_available
-from Pytre_Core.utils import log as _log
+from Pytre_Core.utils import detect_encoding, log as _log
 
+
+POLICY_FILE: str = "Pytre.policy.json"  # enterprise policy, next to the executable
 
 CHECKSUMS_ASSET: str = "SHA256SUMS.txt"  # published with every release by the build workflow
 NEW_SUFFIX: str = ".new"  # downloaded executable, next to the running one until swapped
@@ -31,6 +35,55 @@ def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__)
 
 class UpdateError(Exception):
     """Raised when the releases can't be retrieved or an update can't be downloaded, verified or applied"""
+
+
+class UpdatePolicy(IntEnum):
+    """Updates allowed by the enterprise policy file, from least to most restrictive"""
+
+    ALLOWED = 1  # the user pref decides on the startup check, manual check available
+    DISABLED = 2  # no check at all, no network call
+
+    @classmethod
+    def from_value(cls, value: str) -> UpdatePolicy:
+        """Policy from its name (case insensitive). Raises ValueError otherwise."""
+        try:
+            return cls[str(value).upper()]
+        except KeyError:
+            raise ValueError(f"Unknown UpdatePolicy: {value}") from None
+
+    @staticmethod
+    def load(folder: Path | None = None) -> UpdatePolicy:
+        """Update policy set by `POLICY_FILE` in `folder` (when None then executable folder by default).
+        ALLOWED without the file or without `update_policy`, DISABLED when the file can't be read or holds an
+        unknown policy. Never raises."""
+
+        folder = folder or Path(sys.executable).parent
+        file_src = folder / POLICY_FILE
+
+        if not file_src.exists():
+            return UpdatePolicy.ALLOWED
+
+        try:
+            encoding = detect_encoding(file_src)
+            if not encoding:
+                raise ValueError("unknown encoding")
+
+            with open(file_src, mode="r", encoding=encoding) as f:
+                json_dict = json.load(f)
+
+            if not isinstance(json_dict, dict):
+                raise ValueError("root must be a JSON object")
+            elif "update_policy" not in json_dict:
+                log("No update_policy defined, updates allowed.", logging.INFO)
+                policy = UpdatePolicy.ALLOWED
+            else:
+                policy = UpdatePolicy.from_value(json_dict["update_policy"])
+        except (OSError, ValueError) as e:
+            log(f"Invalid update policy {file_src.name}, updates disabled: {e}", logging.WARNING)
+            policy = UpdatePolicy.DISABLED
+
+        log(f"Update policy: {policy.name.lower()} ({file_src})", logging.INFO)
+        return policy
 
 
 @dataclass(frozen=True)
@@ -118,7 +171,7 @@ class Updater:
         Raises UpdateError if GitHub can't be reached."""
         data = self._fetch_releases()
         candidates = self._candidates(data, skipped=skipped)
-        return max(candidates, key=lambda release: cast(Release, release).version, default=None)
+        return max(candidates, key=lambda release: release.version, default=None)
 
     def _fetch_releases(self) -> list[dict[str, Any]]:
         """Latest releases of `repo`, newest first. Raises UpdateError if GitHub can't be reached."""

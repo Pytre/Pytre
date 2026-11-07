@@ -132,12 +132,48 @@ jobs:
         env:
           NAME: ${{ matrix.name }}
 
+      # Stable releases only, as MSI versions can't tell pre-releases apart - a manual run builds one to test it
+      - name: Build client installer
+        if: matrix.name == 'Pytre_Client' && (needs.version.outputs.prerelease == 'false' || github.event_name == 'workflow_dispatch')
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          dotnet tool install --global wix --version 7.0.1
+          $env:PATH = "$env:USERPROFILE\.dotnet\tools;$env:PATH"
+          $version, $manufacturer, $homepage = python -c "from Pytre_Core.about import AUTHOR, HOMEPAGE_LINK, AppVersion; print(AppVersion.current().base_version); print(AUTHOR); print(HOMEPAGE_LINK)"
+          wix build Pytre_Client.wxs -arch x64 -acceptEula wix7 `
+            -d "Version=$version" -d "Manufacturer=$manufacturer" -d "HomepageLink=$homepage" `
+            -bindpath "Client=$PWD\dist\Pytre_Client" `
+            -o "dist\Pytre_Client_$env:ASSET_VERSION.msi"
+
+      # The runner is an administrator: install and uninstall for real
+      - name: Test client installer
+        if: matrix.name == 'Pytre_Client' && (needs.version.outputs.prerelease == 'false' || github.event_name == 'workflow_dispatch')
+        shell: pwsh
+        run: |
+          $msi = (Resolve-Path "dist\Pytre_Client_$env:ASSET_VERSION.msi").Path
+          $exe = "$env:ProgramFiles\Pytre_Client\Pytre_Client.exe"
+          $install = Start-Process msiexec -ArgumentList "/i `"$msi`" /qn /l*v msi_install.log" -Wait -PassThru
+          if ($install.ExitCode -ne 0) { throw "Install failed with exit code $($install.ExitCode)" }
+          if (-not (Test-Path $exe)) { throw "$exe wasn't installed" }
+          $uninstall = Start-Process msiexec -ArgumentList "/x `"$msi`" /qn /l*v msi_uninstall.log" -Wait -PassThru
+          if ($uninstall.ExitCode -ne 0) { throw "Uninstall failed with exit code $($uninstall.ExitCode)" }
+          if (Test-Path $exe) { throw "$exe is still there after uninstall" }
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: failure() && matrix.name == 'Pytre_Client'
+        with:
+          name: msi-logs
+          path: msi_*.log
+          if-no-files-found: ignore
+
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ matrix.name }}
           path: |
             dist/${{ matrix.name }}_*.exe
             dist/${{ matrix.name }}_*.zip
+            dist/${{ matrix.name }}_*.msi
           if-no-files-found: error
 
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
@@ -146,6 +182,7 @@ jobs:
           subject-path: |
             dist/${{ matrix.name }}_*.exe
             dist/${{ matrix.name }}_*.zip
+            dist/${{ matrix.name }}_*.msi
 
   release:
     needs: [version, build]
@@ -178,8 +215,9 @@ jobs:
           generate_release_notes: true
           body: |
             Windows builds, see README for details:
-            - `Pytre_Client_*.exe`: desktop client, portable single executable (pure client mode only)
-            - `Pytre_Client_*.zip`: the same client as a folder, for managed deployments (never updates itself)
+            - `Pytre_Client_*.exe`: desktop client, portable single executable (pure client mode only), the only build that updates itself unless an enterprise policy turns it off
+            - `Pytre_Client_*.zip`: the same client as a folder, for managed deployments
+            - `Pytre_Client_*.msi`: the same folder as a Windows installer (stable releases only)
             - `Pytre_Server_*.exe`: server, portable single executable (console application)
 
             To verify a download: compare its hash with `SHA256SUMS.txt` (`Get-FileHash <file>` in PowerShell),

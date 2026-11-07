@@ -10,6 +10,15 @@ It's a personal project and development is slow: I am working on it when I have 
 
 I am not looking for contributions but if you have any questions I would be happy to answer them.
 
+## Contents
+
+- [Architecture](#architecture)
+- [Download](#download)
+- [Enterprise deployment](#enterprise-deployment): MSI, zip, update policy
+- [Server security](#server-security): how queries are run, web administration
+- [Setup from source](#setup-from-source)
+- [License](#license)
+
 ## Architecture
 
 - **Pytre_Core**: shared code (queries, settings, users, SQL drivers...).
@@ -23,18 +32,37 @@ The client runs in one of two modes, detected at startup:
 
 ## Download
 
-Windows builds of the client (`Pytre_Client_<version>.exe`, also as a folder in `Pytre_Client_<version>.zip`) and the server (`Pytre_Server_<version>.exe`) are published on the [Releases](https://github.com/Pytre/Pytre/releases) page. The executables are portable: no installation is needed, just download and run them. As they are not signed, Windows SmartScreen may show a warning on first launch (*More info > Run anyway*).
+Windows builds are published on the [Releases](https://github.com/Pytre/Pytre/releases) page:
+- client builds
+    - `Pytre_Client_<version>.exe`: the client as a single portable executable, the only build that updates itself (can be disabled, see [update policy](#executable-with-an-update-policy))
+    - `Pytre_Client_<version>.zip`: the client as a folder
+    - `Pytre_Client_<version>.msi`: the same folder as a Windows installer (stable releases only)
+- server build
+    - `Pytre_Server_<version>.exe`: the server as a single portable executable (console application)
+
+The executables need no installation: just download and run them. As they are not signed, Windows SmartScreen may show a warning on first launch (*More info > Run anyway*). The zip and the MSI are meant for managed deployments, see [Enterprise deployment](#enterprise-deployment).
 
 The prebuilt client only runs as a pure client: hybrid mode needs `Pytre_Core/credentials_secrets.py` with your own key, so the client has to be built from source.
 
 ## Enterprise deployment
 
-Two formats suit a managed deployment:
+All three formats of the client suit a managed deployment. The server is only published as a single executable.
 
-- `Pytre_Client_<version>.zip` (recommended): the client as a folder, which never updates itself
+- `Pytre_Client_<version>.msi` (recommended, stable releases only): installs the client folder, which never updates itself
+- `Pytre_Client_<version>.zip`: the same folder, to extract yourself, also published for pre-releases
 - `Pytre_Client_<version>.exe` with a `Pytre.policy.json` file to control its updates
 
 Releases are immutable and each one publishes `SHA256SUMS.txt`, so a file can be checked before being deployed, e.g. with `Get-FileHash <file> -Algorithm SHA256` in PowerShell.
+
+### Installer (MSI)
+
+- Silent install, with administrator rights: `msiexec /i Pytre_Client_<version>.msi /qn`. The client is installed for all users in `C:\Program Files\Pytre_Client`, with a Start menu shortcut.
+- A newer version replaces the installed one. Installing an older version is refused.
+- To go back to an older version: uninstall the client, then install the older MSI.
+- To uninstall: "Installed apps" in Windows settings, or `msiexec /x Pytre_Client_<version>.msi /qn`.
+- User data lives in `%LOCALAPPDATA%\Pytre` and is left untouched.
+- The upgrade code `{66048ACB-7CC6-4AEE-9BC4-C0F307486C78}` stays the same across versions, for detection rules.
+- This build never checks for updates, so `Pytre.policy.json` isn't needed.
 
 ### Folder (zip)
 
@@ -54,13 +82,42 @@ Put a `Pytre.policy.json` file next to the client executable:
 
 | `update_policy` | Behaviour |
 |---|---|
-| `allowed` | Checks for updates at startup if the user allows it, and on demand from the `?` menu |
-| `disabled` | Never checks for updates, the update menu is hidden |
+| `allowed` | Checks for updates at startup by default, and on demand from the `?` menu. Users can turn off the startup check and choose the update channel in the About window |
+| `disabled` | Never checks for updates: the update menu is hidden, and the About window says updates are managed by the organization instead of showing the update settings |
 
 - Values are case insensitive. Without the file, or without `update_policy`, the client behaves as `allowed`.
 - A file that can't be read, isn't valid JSON or holds an unknown value disables updates, and a warning is logged.
 - The policy only binds if users can't modify the file: install the executable and `Pytre.policy.json` in a folder users can't write to, such as `C:\Program Files\Pytre_Client`.
 - Keep `Pytre.policy.json` next to the executable if the deployment recreates the folder or uses a new one for each version.
+
+## Server security
+
+### Running queries
+
+A client never sends SQL to a server. For each execution, it only sends the server and query identifiers, picked from the lists the server gave it, the hash of its version of the query, and the parameter values. The server then:
+
+- reads the query from its own queries folder, and checks if the user is allowed to run it on that server,
+- refuses the execution if the client's version of the query differs from its own: the client has to refresh its list,
+- checks the parameter names match the query and their values are valid (type, allowed values, pattern),
+- replaces hidden parameters with the values it computes itself, unless the user is an admin,
+- caps the number of executions running at once for each user, and logs each execution with its parameters.
+
+Values are passed to the database as query parameters, except for `@!` parameters, which are written into the SQL text and only accept a value from the query's list of allowed values.
+
+Database credentials stay on the server: a client only ever gets the identifier and description of each SQL server.
+
+### Web administration
+
+The web administration is served at `/admin`, by the same process and on the same port as the client API. Opening the server's address in a browser redirects to it.
+
+- Only admin users can sign in, with their password or through SSO. The first admin account can only be created from the server itself (localhost).
+- Repeated failed sign-ins are throttled, and each failure is logged.
+- A session ends after 1 hour of inactivity and after 8 hours in any case, or as soon as the user loses admin rights or changes their password.
+- Queries are files in the server's queries folder: the web administration lists them, reloads them from disk, and can exempt one from the version check for a limited time.
+- An admin can reveal, replace or delete the master password of the settings database stored in the keyring, and re-encrypt the database with a new one. Each of these actions is logged as a warning.
+
+The server listens on `127.0.0.1` by default and doesn't handle HTTPS itself: put it behind a reverse proxy that terminates TLS (see `--forwarded-allow-ips`).  
+As the web administration shares its port with the client API, the proxy can also restrict `/admin` to the networks admins work from.
 
 ## Setup from source
 
@@ -100,11 +157,14 @@ Queries are `.sql` files with a header describing them (code, description, allow
 
 ```
 pip install -r requirements-build.lock
-pyinstaller Pytre_Client.spec
+pyinstaller Pytre_Client.spec                                      # single executable
+pyinstaller --workpath build/onedir Pytre_Client.spec -- --onedir  # folder, used for the zip and the MSI
 pyinstaller Pytre_Server.spec
 ```
 
-Executables are written to `dist/`. `requirements-build.lock` pins the exact versions used for releases, regenerate it with `requirements-update_lock.sh` after changing `requirements*.txt`.
+Executables are written to `dist/`, the client folder to `dist/Pytre_Client/`.  
+The MSI is built from that folder with WiX 7 and `Pytre_Client.wxs`, see the "Build client installer" step of `.github/workflows/build.yml`.  
+`requirements-build.lock` pins the exact versions used for releases, regenerate it with `requirements-update_lock.sh` after changing `requirements*.txt`.
 
 ## License
 

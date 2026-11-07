@@ -1,0 +1,32 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <!-- UpgradeCode identifies the product across versions: never change it, or a new version would be
+       installed next to the previous one instead of replacing it -->
+  <Package Name="Pytre Client" Manufacturer="$(Manufacturer)" Version="$(Version)"
+           UpgradeCode="{66048ACB-7CC6-4AEE-9BC4-C0F307486C78}" Scope="perMachine" Compressed="yes">
+
+    <!-- MSI versions have 3 numbers only: a rebuild of the same version replaces the installed one -->
+    <MajorUpgrade AllowSameVersionUpgrades="yes"
+                  DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Icon Id="app.ico" SourceFile="!(bindpath.Client)\_internal\res\app.ico" />
+    <Property Id="ARPPRODUCTICON" Value="app.ico" />
+    <Property Id="ARPURLINFOABOUT" Value="$(HomepageLink)" />
+
+    <!-- The whole onedir build, which never updates itself -->
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="Pytre_Client">
+        <Files Include="!(bindpath.Client)\**" />
+      </Directory>
+    </StandardDirectory>
+
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Component Id="StartMenuShortcut">
+        <Shortcut Id="StartMenuShortcut" Name="Pytre Client" Target="[INSTALLFOLDER]Pytre_Client.exe"
+                  WorkingDirectory="INSTALLFOLDER" />
+        <RegistryValue Root="HKLM" Key="Software\Pytre\Pytre_Client" Name="StartMenuShortcut"
+                       Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </StandardDirectory>
+  </Package>
+</Wix>

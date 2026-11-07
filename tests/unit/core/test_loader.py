@@ -64,7 +64,7 @@ def mock_app_ctx(mock_settings):
 def mock_user_ctx(mock_user, mock_user_prefs):
     """Mock UserContext for Query/QueryExecute"""
     ctx = Mock()
-    ctx.current_user = mock_user
+    ctx.user = mock_user
     ctx.user_prefs = mock_user_prefs
     ctx.display_format = mock_user_prefs.display_format
     return ctx
@@ -417,7 +417,7 @@ def _user_ctx_knowing_dept(mock_user_prefs, dept: str) -> UserContext:
 
 
 def _user_info_mock(ctx: UserContext) -> Mock:
-    """The Mock behind ctx.current_user.user_info, to assert on how the local user was consulted"""
+    """The Mock behind ctx.user.user_info, to assert on how the local user was consulted"""
     return cast(Mock, ctx.user).user_info
 
 

@@ -216,8 +216,8 @@ def _make_state(heartbeat_secs: float, chunk_size: int = 10) -> Mock:
 
 def _make_user_ctx(username: str = "alice", display_name: str = "Alice A") -> Mock:
     user_ctx = Mock()
-    user_ctx.current_user.username = username
-    user_ctx.current_user.display_name = display_name
+    user_ctx.user.username = username
+    user_ctx.user.display_name = display_name
     return user_ctx
 
 
@@ -255,6 +255,37 @@ async def test_run_query_streams_result_on_success():
     assert events == ["enter", "close", "exit"]  # the driver stays in use until the result is closed
     assert result.close_calls == 1
     assert not semaphore.locked()
+
+
+@pytest.mark.unit
+@pytest.mark.anyio
+async def test_run_query_logs_the_execution_with_the_user_id_and_display_name():
+    async def execute_impl():
+        return _FakeResult([("1",)])
+
+    resources = _make_resources(_FakeDriver(execute_impl))
+    resources.execution_logs = Mock()
+    semaphore = asyncio.Semaphore(1)
+    await semaphore.acquire()
+
+    await _collect(
+        _run_query(
+            _make_state(heartbeat_secs=30),
+            resources,
+            _make_request({}),
+            _make_user_ctx(username="jdoe", display_name="John Doe"),
+            "template",
+            {},
+            semaphore,
+            _FakeDisconnectRequest(),
+        )
+    )
+
+    resources.execution_logs.log_execution.assert_called_once()
+    entry = resources.execution_logs.log_execution.call_args.args[0]
+    assert entry.user_id == "jdoe"
+    assert entry.user_display_name == "John Doe"
+    assert entry.nb_rows == 1
 
 
 @pytest.mark.unit

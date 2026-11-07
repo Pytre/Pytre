@@ -81,9 +81,9 @@ def exec_user_ctx():
     ctx = Mock()
     ctx.user_logs = Mock()
     ctx.user_logs.db_path = "/fake/path/Pytre_Logs.db"  # must stay picklable (goes through a real mp.Queue)
-    ctx.current_user = Mock()
-    ctx.current_user.username = "u1"
-    ctx.current_user.display_name = "User One"
+    ctx.user = Mock()
+    ctx.user.username = "u1"
+    ctx.user.display_name = "User One"
     ctx.display_format = DisplayFormat()
     return ctx
 
@@ -437,7 +437,9 @@ def test_execute_end_writes_user_log_and_central_log_if_enabled(qe, exec_app_ctx
     messages = []
     while not qe.queue.empty():
         messages.append(qe.queue.get())
-    assert any(m[0] == "central_log" for m in messages)
+    central_log_infos = next(m[1] for m in messages if m[0] == "central_log")
+    assert central_log_infos["user_id"] == "u1"
+    assert central_log_infos["user_display_name"] == "User One"
 
 
 @pytest.mark.unit

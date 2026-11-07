@@ -22,7 +22,7 @@ def mock_app_ctx():
 def mock_user_ctx():
     """Mock UserContext - enough for build_queries_from_parsers() (via with_build_errors()) to run."""
     ctx = Mock()
-    ctx.current_user = Mock()
+    ctx.user = Mock()
     ctx.user_prefs = Mock()
     ctx.display_format = DisplayFormat()
     return ctx

@@ -2,9 +2,11 @@ import hashlib
 import json
 import logging
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
+import zipfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import IntEnum
@@ -24,6 +26,8 @@ POLICY_FILE: str = "Pytre.policy.json"  # enterprise policy, next to the executa
 CHECKSUMS_ASSET: str = "SHA256SUMS.txt"  # published with every release by the build workflow
 NEW_SUFFIX: str = ".new"  # downloaded executable, next to the running one until swapped
 OLD_SUFFIX: str = ".old"  # previous executable, deleted on next start
+DOWNLOAD_SUFFIX: str = ".part"  # downloaded zip of the onedir build, deleted once extracted
+CONTENTS_PREFIX: str = "_internal_"  # contents folder of the onedir build, followed by its full version
 
 _API_HEADERS = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}
 _REQUEST_TIMEOUT = 10  # seconds - releases list and checksums file
@@ -91,35 +95,48 @@ class UpdatePolicy(IntEnum):
 class Release:
     version: AppVersion
     page_url: str  # release page on GitHub, for a manual download
-    exe_name: str
-    exe_url: str
-    exe_size: int
-    checksums_url: str
+    basename: str  # name of the executable in the releases, e.g. CLIENT_BASENAME
+    asset_name: str  # file to download: the executable, or the zip of the onedir build
+    asset_url: str  # url of the file to download
+    asset_size: int  # size of the file to download
+    checksums_url: str  # url of the checksums file to verify download
+    onedir: bool = False  # whether asset is the zip of the onedir build
 
     def retrieve_expected_hash(self) -> str:
-        """Downloads checkshums from `checksums_url` and return hash for `exe_name`"""
+        """Downloads checksums from `checksums_url` and return hash for `asset_name`"""
         response = httpx2.get(self.checksums_url, follow_redirects=True, timeout=_REQUEST_TIMEOUT)
         response.raise_for_status()
 
         for line in response.text.splitlines():
             parts = line.split()
-            if len(parts) == 2 and parts[1].lstrip("*") == self.exe_name:
+            if len(parts) == 2 and parts[1].lstrip("*") == self.asset_name:
                 return parts[0].lower()
 
-        raise UpdateError(f"{self.exe_name} missing from checksums asset: {self.checksums_url}")
+        raise UpdateError(f"{self.asset_name} missing from checksums asset: {self.checksums_url}")
 
-    def download_exe(self, target_exe: Path, on_progress: Callable[[int, int], None] | None = None) -> Path:
-        """Downloads the executable next to `target_exe` and checks its size and SHA-256.
+    def download_update(self, current_exe: Path, on_progress: Callable[[int, int], None] | None = None) -> Path:
+        """Downloads the release and puts the new version next to `current_exe`. Returns the executable that
+        Updater.install() swaps in once the UI loop has ended. Raises UpdateError, leaving no new file behind."""
+        if not self.onedir:
+            return self.download(current_exe.with_name(current_exe.name + NEW_SUFFIX), on_progress)
+
+        zip_file = self.download(current_exe.with_name(self.asset_name + DOWNLOAD_SUFFIX), on_progress)
+        try:
+            return Updater.extract_onedir(zip_file, current_exe, self.basename, self.version)
+        finally:
+            Updater.remove_quietly(zip_file)
+
+    def download(self, new_file: Path, on_progress: Callable[[int, int], None] | None = None) -> Path:
+        """Downloads the asset to `new_file` and checks its size and SHA-256.
         `on_progress(received_bytes, total_bytes)` is called after each chunk.
         Returns the downloaded file. Raises UpdateError, leaving no partial file behind."""
-        new_file = target_exe.with_name(target_exe.name + NEW_SUFFIX)
         digest = hashlib.sha256()
         received = 0
 
         try:
             expected_hash = self.retrieve_expected_hash()
 
-            with httpx2.stream("GET", self.exe_url, follow_redirects=True, timeout=_DOWNLOAD_TIMEOUT) as response:
+            with httpx2.stream("GET", self.asset_url, follow_redirects=True, timeout=_DOWNLOAD_TIMEOUT) as response:
                 response.raise_for_status()
                 with open(new_file, "wb") as f:
                     for chunk in response.iter_bytes():
@@ -127,10 +144,10 @@ class Release:
                         digest.update(chunk)
                         received += len(chunk)
                         if on_progress:
-                            on_progress(received, self.exe_size)
+                            on_progress(received, self.asset_size)
 
-            if received != self.exe_size:
-                raise UpdateError(f"Unexpected file bytes size: {received} received, {self.exe_size} expected")
+            if received != self.asset_size:
+                raise UpdateError(f"Unexpected file bytes size: {received} received, {self.asset_size} expected")
             if digest.hexdigest() != expected_hash:
                 raise UpdateError("Hash from downloaded file does not match expected hash")
         except (httpx2.HTTPError, OSError, UpdateError) as e:
@@ -147,27 +164,27 @@ class Release:
 
 
 class Updater:
-    def __init__(self, basename: str, version: AppVersion, channel: AppStage = AppStage.RELEASE, repo: str = REPO):
-        """`basename`: name of the executable in the releases, e.g. CLIENT_BASENAME.
-        `repo` is the repo "owner/name"."""
+    def __init__(self, basename: str, channel: AppStage = AppStage.RELEASE, repo: str = REPO):
+        """Looks for updates of the running build. `basename`: name of the executable in the releases,
+        e.g. CLIENT_BASENAME. `repo` is the repo "owner/name"."""
         self.basename: str = basename
-        self.version: AppVersion = version
         self.channel: AppStage = channel
         self.repo: str = repo
+        self.version: AppVersion = AppVersion.current()
 
     @staticmethod
     def is_onedir() -> bool:
-        """True for a onedir build: its bundled files sit in the executable folder (`_internal` by default),
+        """True for a onedir build: its bundled files sit in a folder next to the executable (`_internal_<version>`),
         while a onefile build unpacks them in a temporary folder"""
         bundle = getattr(sys, "_MEIPASS", None)
         return bundle is not None and Path(bundle).is_relative_to(Path(sys.executable).parent)
 
     @staticmethod
     def is_updatable() -> bool:
-        """True for a frozen onefile executable without credentials_secrets.py. A onedir build is deployed and updated
-        by its installer, never by itself."""
+        """True for a frozen build without credentials_secrets.py.
+        A managed deployment turns updates off with the policy file, as the MSI does."""
         frozen = bool(getattr(sys, "frozen", False))
-        return frozen and not Updater.is_onedir() and not secret_key_available()
+        return frozen and not secret_key_available()
 
     @staticmethod
     def current_exe() -> Path:
@@ -216,7 +233,8 @@ class Updater:
         return candidates
 
     def _build_release_info(self, data: dict[str, Any]) -> Release | None:
-        """None for a tag with unknown format, or a release without an executable and checksums"""
+        """None for a tag with unknown format, or a release without checksums or the asset of the running build:
+        the executable, or the zip for a onedir build"""
         version_str = data.get("tag_name", "")
         assets_list = data.get("assets", [])
         page_url = data.get("html_url", "")
@@ -227,20 +245,24 @@ class Updater:
             return None
 
         assets = {asset.get("name"): asset for asset in assets_list}
-        exe_name = f"{self.basename}_{version}.exe"
-        exe_asset = assets.get(exe_name)
+
+        onedir = Updater.is_onedir()  # a folder build is updated from the release zip
+        asset_name = f"{self.basename}_{version}.{'zip' if onedir else 'exe'}"
+        asset = assets.get(asset_name)
         checksums_asset = assets.get(CHECKSUMS_ASSET)
 
-        if exe_asset is None or checksums_asset is None:
+        if asset is None or checksums_asset is None:
             return None
 
         return Release(
             version=version,
             page_url=page_url,
-            exe_name=exe_name,
-            exe_url=exe_asset["browser_download_url"],
-            exe_size=exe_asset["size"],
+            basename=self.basename,
+            asset_name=asset_name,
+            asset_url=asset["browser_download_url"],
+            asset_size=asset["size"],
             checksums_url=checksums_asset["browser_download_url"],
+            onedir=onedir,
         )
 
     # ------------------------------------------------------------------------------------------
@@ -275,6 +297,60 @@ class Updater:
         log(f"Executable replaced: {new_exe.name} -> {current_exe.name}")
 
     @staticmethod
+    def extract_onedir(zip_file: Path, current_exe: Path, basename: str, version: AppVersion) -> Path:
+        """Extracts the onedir build of `version` next to `current_exe`: its contents folder `_internal_<version>`,
+        then its executable as `<name>.new`, the one install() swaps in. The zip holds a `<basename>/` root folder
+        (see the build workflow): any other entry, or one leaving its target folder, makes it fail. On failure the
+        contents folder and the executable are both removed. Returns the new executable. Raises UpdateError."""
+        contents_folder = current_exe.parent / f"{CONTENTS_PREFIX}{version}"
+        new_exe = current_exe.with_name(current_exe.name + NEW_SUFFIX)
+        root_entry = f"{basename}/"
+        exe_entry = f"{basename}/{basename}.exe"
+        contents_entry = f"{basename}/{contents_folder.name}/"
+
+        try:
+            Updater.remove_quietly(contents_folder, new_exe)  # leftovers of a failed attempt
+            if contents_folder.exists() or new_exe.exists():
+                raise UpdateError(f"Couldn't delete the leftovers of a previous attempt in {current_exe.parent}")
+
+            with zipfile.ZipFile(zip_file) as archive:
+                zip_entries = [entry for entry in archive.infolist() if entry.filename != root_entry]
+                zip_exe_entry = next((entry for entry in zip_entries if entry.filename == exe_entry), None)
+                if zip_exe_entry is None:
+                    raise UpdateError(f"{exe_entry} missing from {zip_file.name}")
+                zip_entries.remove(zip_exe_entry)
+
+                for zip_entry in zip_entries:
+                    if not zip_entry.filename.startswith(contents_entry):
+                        raise UpdateError(f"Unexpected entry in {zip_file.name}: {zip_entry.filename}")
+
+                    target = contents_folder / zip_entry.filename.removeprefix(contents_entry)
+                    if not target.resolve().is_relative_to(contents_folder.resolve()):
+                        raise UpdateError(f"Entry leaving its folder in {zip_file.name}: {zip_entry.filename}")
+
+                    if zip_entry.is_dir():
+                        target.mkdir(parents=True, exist_ok=True)
+                    else:
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        with archive.open(zip_entry) as source, open(target, "wb") as dest:
+                            shutil.copyfileobj(source, dest)
+
+                # the executable last: install() only finds a .new once its contents folder is complete
+                with archive.open(zip_exe_entry) as source, open(new_exe, "wb") as dest:
+                    shutil.copyfileobj(source, dest)
+        except (OSError, EOFError, zipfile.BadZipFile, UpdateError) as e:
+            Updater.remove_quietly(contents_folder, new_exe)
+            if isinstance(e, UpdateError):
+                log(f"{e}", logging.DEBUG)
+                raise
+            msg = f"Failed to extract app update: {e}"
+            log(msg, logging.DEBUG)
+            raise UpdateError(msg) from e
+
+        log(f"Update {version} extracted: {contents_folder.name}, {new_exe.name}")
+        return new_exe
+
+    @staticmethod
     def restart(exe_path: Path) -> None:
         """Starts `exe_path` as an independent new instance - the reset tells the PyInstaller bootloader not to
         reuse the unpacked files of the current process"""
@@ -283,13 +359,41 @@ class Updater:
         subprocess.Popen([str(exe_path)], env=env, close_fds=True)
 
     @staticmethod
-    def cleanup_previous(exe_path: Path) -> None:
-        """Deletes the executable left by a previous update - retried on next start if still locked"""
+    def cleanup_previous(exe_path: Path) -> bool:
+        """Deletes the executable left by a previous update - retried on next start if still locked.
+        True once there is none left: no window of the previous version is still running."""
         old_file = exe_path.with_name(exe_path.name + OLD_SUFFIX)
         try:
             old_file.unlink(missing_ok=True)
+            return True
         except OSError as e:
             log(f"Couldn't delete {old_file} yet: {e}", logging.DEBUG)
+            return False
+
+    @staticmethod
+    def cleanup_contents_folders(exe_path: Path, version: AppVersion) -> None:
+        """Deletes the contents folders of the versions older than `version` next to `exe_path`. Call it only once
+        cleanup_previous() succeeded: a window of an older version could still be running otherwise. Never touches
+        the running version, a newer one (another window may be extracting it) or a name without a version."""
+        for folder in exe_path.parent.glob(f"{CONTENTS_PREFIX}*"):
+            try:
+                folder_version = AppVersion.build_from_string(folder.name.removeprefix(CONTENTS_PREFIX))
+            except ValueError:
+                continue
+            if folder.is_dir() and folder_version < version:
+                Updater.remove_quietly(folder)
+
+    @staticmethod
+    def remove_quietly(*paths: Path) -> None:
+        """Deletes files and folders that may not exist, logging those that can't be deleted"""
+        for path in paths:
+            try:
+                if path.is_dir():
+                    shutil.rmtree(path)
+                else:
+                    path.unlink(missing_ok=True)
+            except OSError as e:
+                log(f"Couldn't delete {path}: {e}", logging.DEBUG)
 
     @staticmethod
     def can_replace_exe(exe_path: Path) -> bool:

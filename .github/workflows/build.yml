@@ -123,7 +123,7 @@ jobs:
         run: |
           pyinstaller --noconfirm --workpath build/onedir ${{ matrix.spec }} -- --onedir
           test -f "dist/${{ matrix.name }}/${{ matrix.name }}.exe"
-          test -d "dist/${{ matrix.name }}/_internal"
+          compgen -G "dist/${{ matrix.name }}/_internal_*" > /dev/null
           python - <<'EOF'
           import os, shutil
           name, version = os.environ["NAME"], os.environ["ASSET_VERSION"]
@@ -144,6 +144,8 @@ jobs:
           wix build Pytre_Client.wxs -arch x64 -acceptEula wix7 `
             -d "Version=$version" -d "Manufacturer=$manufacturer" -d "HomepageLink=$homepage" `
             -bindpath "Client=$PWD\dist\Pytre_Client" `
+            -bindpath "Res=$PWD\Pytre_Core\res" `
+            -bindpath "Templates=$PWD\templates" `
             -o "dist\Pytre_Client_$env:ASSET_VERSION.msi"
 
       # The runner is an administrator: install and uninstall for real
@@ -156,6 +158,7 @@ jobs:
           $install = Start-Process msiexec -ArgumentList "/i `"$msi`" /qn /l*v msi_install.log" -Wait -PassThru
           if ($install.ExitCode -ne 0) { throw "Install failed with exit code $($install.ExitCode)" }
           if (-not (Test-Path $exe)) { throw "$exe wasn't installed" }
+          if (-not (Test-Path "$env:ProgramFiles\Pytre_Client\Pytre.policy.json")) { throw "Update policy wasn't installed" }
           $uninstall = Start-Process msiexec -ArgumentList "/x `"$msi`" /qn /l*v msi_uninstall.log" -Wait -PassThru
           if ($uninstall.ExitCode -ne 0) { throw "Uninstall failed with exit code $($uninstall.ExitCode)" }
           if (Test-Path $exe) { throw "$exe is still there after uninstall" }
@@ -215,10 +218,13 @@ jobs:
           generate_release_notes: true
           body: |
             Windows builds, see README for details:
-            - `Pytre_Client_*.exe`: desktop client, portable single executable (pure client mode only), the only build that updates itself unless an enterprise policy turns it off
-            - `Pytre_Client_*.zip`: the same client as a folder, for managed deployments
-            - `Pytre_Client_*.msi`: the same folder as a Windows installer (stable releases only)
+            - `Pytre_Client_*.exe`: desktop client, portable single executable (pure client mode only)
+            - `Pytre_Client_*.zip`: the same client as a folder, which starts faster
+            - `Pytre_Client_*.msi`: the same folder as a Windows installer (stable releases only), which never updates itself
             - `Pytre_Server_*.exe`: server, portable single executable (console application)
+
+            The client executable and the zip update themselves, unless an enterprise policy turns updates off.
+            The MSI installs a policy file that disables updates.
 
             To verify a download: compare its hash with `SHA256SUMS.txt` (`Get-FileHash <file>` in PowerShell),
             or check its build provenance with `gh attestation verify <file> --repo Pytre/Pytre`.

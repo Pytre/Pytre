@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, Mock, patch
 import pytest
 
 from Pytre_Client.app import app_start, install_update
+from Pytre_Core.about import AppVersion
 from Pytre_Core.app_folders import UserFolderError
 from Pytre_Core.context import AppMode
 from Pytre_Core.updater import UpdateError
@@ -22,6 +23,8 @@ def mock_updater():
     """Never let app_start() rename or restart the real sys.executable - not an official build by default"""
     with patch("Pytre_Client.app.Updater") as updater:
         updater.is_updatable.return_value = False
+        updater.is_onedir.return_value = False
+        updater.cleanup_previous.return_value = True
         updater.current_exe.return_value = CURRENT_EXE
         yield updater
 
@@ -127,6 +130,29 @@ def test_app_start_deletes_the_previous_executable_of_an_official_build(mock_upd
         mock_updater.cleanup_previous.assert_called_once_with(CURRENT_EXE)
     else:
         mock_updater.cleanup_previous.assert_not_called()
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "onedir, previous_deleted, cleaned",
+    [(True, True, True), (True, False, False), (False, True, False)],
+    ids=["onedir build", "previous version still running", "single executable"],
+)
+def test_app_start_deletes_the_older_contents_folders_of_a_onedir_build(
+    mock_updater, onedir, previous_deleted, cleaned
+):
+    """Only once the previous executable is deleted: no window of an older version can still use its folder"""
+    mock_updater.is_updatable.return_value = True
+    mock_updater.is_onedir.return_value = onedir
+    mock_updater.cleanup_previous.return_value = previous_deleted
+
+    with patch("Pytre_Client.app.detect_client_mode", return_value=AppMode.CLIENT):
+        app_start()
+
+    if cleaned:
+        mock_updater.cleanup_contents_folders.assert_called_once_with(CURRENT_EXE, AppVersion.current())
+    else:
+        mock_updater.cleanup_contents_folders.assert_not_called()
 
 
 @pytest.mark.unit

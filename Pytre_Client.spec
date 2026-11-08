@@ -5,7 +5,7 @@ import sys
 from PyInstaller.utils.hooks import collect_all
 
 sys.path.insert(0, SPECPATH)
-from Pytre_Core.about import CLIENT_BASENAME
+from Pytre_Core.about import CLIENT_BASENAME, full_version
 
 if sys.platform == "win32":
     from version_info import version_info
@@ -56,8 +56,10 @@ exe_options = dict(
 )
 
 if options.onedir:
-    # dist/Pytre_Client/: the executable and its _internal/ folder, deployed and updated by an installer
-    exe = EXE(pyz, a.scripts, [], exclude_binaries=True, **exe_options)
+    # dist/Pytre_Client/: the executable and its _internal_<version>/ folder. The folder name is written into the
+    # executable, so a new version can be put next to the running one without touching its files
+    contents_directory = f"_internal_{full_version()}"
+    exe = EXE(pyz, a.scripts, [], exclude_binaries=True, contents_directory=contents_directory, **exe_options)
     coll = COLLECT(exe, a.binaries, a.datas, name=CLIENT_BASENAME, strip=False, upx=False, upx_exclude=[])
 else:
     # dist/Pytre_Client.exe: a single executable, unpacked in a temporary folder at each start

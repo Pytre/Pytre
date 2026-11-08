@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from Pytre_Core.about import CLIENT_BASENAME, AppVersion
+from Pytre_Core.updater import POLICY_FILE
 
 pytestmark = pytest.mark.unit
 
@@ -87,6 +88,21 @@ def test_installer_is_installed_for_all_users(package):
     assert package.get("Scope") == "perMachine"
 
 
+def test_installer_turns_off_the_updates_of_the_installed_client(package):
+    """The installed files must stay those of the MSI: deployments install new versions, never the client"""
+    install_folder = package.find(".//wix:Directory[@Id='INSTALLFOLDER']", WIX_NS)
+    sources = [file.get("Source") for file in install_folder.iterfind(".//wix:File", WIX_NS)]
+
+    assert f"!(bindpath.Templates)\\{POLICY_FILE}" in sources
+
+
+def test_installer_icon_does_not_depend_on_the_versioned_contents_folder(package):
+    icon = package.find("wix:Icon", WIX_NS)
+
+    assert icon is not None and icon.get("SourceFile") == "!(bindpath.Res)\\app.ico"
+    assert (ROOT / "Pytre_Core" / "res" / "app.ico").is_file()
+
+
 # ================================================================================
 # Consistency with the build workflow
 # ================================================================================
@@ -107,6 +123,16 @@ def test_workflow_defines_every_bind_path_of_the_installer(wxs_text, workflow_te
 
     assert used
     assert used == defined
+
+
+def test_workflow_bind_paths_to_repository_folders_exist(workflow_text):
+    """The client build output isn't in the repository, every other bind path must point to one of its folders"""
+    bind_paths = dict(re.findall(r'-bindpath "(\w+)=\$PWD\\([^"]+)"', workflow_text))
+    repository_paths = {name: path for name, path in bind_paths.items() if not path.startswith("dist\\")}
+
+    assert repository_paths
+    for name, path in repository_paths.items():
+        assert (ROOT / Path(*path.split("\\"))).is_dir(), name
 
 
 def test_workflow_builds_the_installer_from_its_file(workflow_text):

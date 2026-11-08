@@ -9,14 +9,17 @@
                   DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
     <MediaTemplate EmbedCab="yes" />
 
-    <Icon Id="app.ico" SourceFile="!(bindpath.Client)\_internal\res\app.ico" />
+    <Icon Id="app.ico" SourceFile="!(bindpath.Res)\app.ico" />
     <Property Id="ARPPRODUCTICON" Value="app.ico" />
     <Property Id="ARPURLINFOABOUT" Value="$(HomepageLink)" />
 
-    <!-- The whole onedir build, which never updates itself -->
+    <!-- The whole onedir build, with a policy file turning off its own updates: deployments install new versions -->
     <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="INSTALLFOLDER" Name="Pytre_Client">
         <Files Include="!(bindpath.Client)\**" />
+        <Component Id="UpdatePolicy">
+          <File Id="UpdatePolicy" Source="!(bindpath.Templates)\Pytre.policy.json" KeyPath="yes" />
+        </Component>
       </Directory>
     </StandardDirectory>
 

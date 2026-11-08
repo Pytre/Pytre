@@ -1165,7 +1165,7 @@ class App(tk.Toplevel):
 
         user_prefs = self.user_ctx.user_prefs
 
-        updater = Updater(CLIENT_BASENAME, AppVersion.current(), user_prefs.get(PrefEnum.UPDATE_CHANNEL))
+        updater = Updater(CLIENT_BASENAME, user_prefs.get(PrefEnum.UPDATE_CHANNEL))
 
         skipped_txt: str = user_prefs.get(PrefEnum.UPDATE_SKIPPED)
         skipped = AppVersion.build_from_string(skipped_txt) if skipped_txt and not manual else None
@@ -1243,13 +1243,18 @@ class App(tk.Toplevel):
         def show_progress():
             if progress["done"]:
                 return
-            percent = progress["received"] * 100 // max(release.exe_size, 1)
-            overlay.update_msg(f"{title} {percent} %")
+
+            if release.onedir and progress["received"] >= release.asset_size:
+                overlay.update_msg(f"Installation de la version {release.version}...")
+            else:
+                percent = progress["received"] * 100 // max(release.asset_size, 1)
+                overlay.update_msg(f"{title} {percent} %")
+
             self.after(250, show_progress)
 
         def worker():
             try:
-                dl_file: Path = release.download_exe(current_exe, on_progress=on_progress)
+                dl_file: Path = release.download_update(current_exe, on_progress=on_progress)
                 result_queue.put((dl_file, None))
             except UpdateError as e:
                 result_queue.put((None, e))
@@ -1509,7 +1514,9 @@ def app_start(mode: AppMode | None = None):
 
     updatable = Updater.is_updatable()
     if updatable:
-        Updater.cleanup_previous(Updater.current_exe())
+        current_exe = Updater.current_exe()
+        if Updater.cleanup_previous(current_exe) and Updater.is_onedir():
+            Updater.cleanup_contents_folders(current_exe, AppVersion.current())
 
     pending_update: Path | None = None
     restart = False

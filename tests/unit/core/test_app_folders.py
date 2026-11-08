@@ -258,7 +258,7 @@ def test_migration_leaves_the_executable_and_its_files_in_place(isolated_user_fo
     make_legacy_folder(folders)
     install = folders.legacy / exe_folder
     install.mkdir(exist_ok=True)
-    app_files = ["Pytre_Client.exe", "Pytre.policy.json", "Pytre.db", "Pytre.key", "_internal/python314.dll"]
+    app_files = ["Pytre_Client.exe", "Pytre.policy.json", "Pytre.db", "Pytre.key", "_internal_2.0.0/python314.dll"]
     for name in app_files:
         (install / name).parent.mkdir(parents=True, exist_ok=True)
         (install / name).write_text("app", encoding="utf-8")

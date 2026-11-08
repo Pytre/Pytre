@@ -34,13 +34,13 @@ The client runs in one of two modes, detected at startup:
 
 Windows builds are published on the [Releases](https://github.com/Pytre/Pytre/releases) page:
 - client builds
-    - `Pytre_Client_<version>.exe`: the client as a single portable executable, the only build that updates itself (can be disabled, see [update policy](#executable-with-an-update-policy))
-    - `Pytre_Client_<version>.zip`: the client as a folder
-    - `Pytre_Client_<version>.msi`: the same folder as a Windows installer (stable releases only)
+    - `Pytre_Client_<version>.exe`: the client as a single portable executable
+    - `Pytre_Client_<version>.zip`: the client as a folder, which starts faster
+    - `Pytre_Client_<version>.msi`: the same folder as a Windows installer (stable releases only), with a policy file turning updates off
 - server build
-    - `Pytre_Server_<version>.exe`: the server as a single portable executable (console application)
+    - `Pytre_Server_<version>.exe`: the server as a single portable executable (console application with no automatic updates)
 
-The executables need no installation: just download and run them. As they are not signed, Windows SmartScreen may show a warning on first launch (*More info > Run anyway*). The zip and the MSI are meant for managed deployments, see [Enterprise deployment](#enterprise-deployment).
+The executables and the zip need no installation: run the executable, or extract the zip in a folder you can write to and run `Pytre_Client.exe` inside it. The client executable and the zip update themselves, unless an [update policy](#update-policy) turns updates off. As they are not signed, Windows SmartScreen may show a warning on first launch (*More info > Run anyway*). The MSI is meant for managed deployments, see [Enterprise deployment](#enterprise-deployment).
 
 The prebuilt client only runs as a pure client: hybrid mode needs `Pytre_Core/credentials_secrets.py` with your own key, so the client has to be built from source.
 
@@ -50,7 +50,9 @@ All three formats of the client suit a managed deployment. The server is only pu
 
 - `Pytre_Client_<version>.msi` (recommended, stable releases only): installs the client folder, which never updates itself
 - `Pytre_Client_<version>.zip`: the same folder, to extract yourself, also published for pre-releases
-- `Pytre_Client_<version>.exe` with a `Pytre.policy.json` file to control its updates
+- `Pytre_Client_<version>.exe`: the client as a single executable
+
+The zip and the executable update themselves: deploy them with a `Pytre.policy.json` file to control their updates, see [Update policy](#update-policy).
 
 Releases are immutable and each one publishes `SHA256SUMS.txt`, so a file can be checked before being deployed, e.g. with `Get-FileHash <file> -Algorithm SHA256` in PowerShell.
 
@@ -62,7 +64,7 @@ Releases are immutable and each one publishes `SHA256SUMS.txt`, so a file can be
 - To uninstall: "Installed apps" in Windows settings, or `msiexec /x Pytre_Client_<version>.msi /qn`.
 - User data lives in `%LOCALAPPDATA%\Pytre` and is left untouched.
 - The upgrade code `{66048ACB-7CC6-4AEE-9BC4-C0F307486C78}` stays the same across versions, for detection rules.
-- This build never checks for updates, so `Pytre.policy.json` isn't needed.
+- It installs a `Pytre.policy.json` file turning updates off: new versions are deployed with a new MSI.
 
 ### Folder (zip)
 
@@ -70,9 +72,9 @@ Releases are immutable and each one publishes `SHA256SUMS.txt`, so a file can be
 - To update: close Pytre, delete the folder, then extract the new zip. Never extract over a previous version: files it no longer uses would stay behind.
 - User data lives in `%LOCALAPPDATA%\Pytre` and is left untouched.
 - To detect the installed version, read the file version of `Pytre_Client.exe`: `2.0.0.400` for 2.0.0, pre-releases being lower (`2.0.0.204` for 2.0.0-beta.4).
-- This build never checks for updates, so `Pytre.policy.json` isn't needed.
+- Add a `Pytre.policy.json` file next to `Pytre_Client.exe` to turn updates off. Without it, the client checks for new versions and, as it can't replace itself in a folder users can't write to, offers to open the download page.
 
-### Executable with an update policy
+### Update policy
 
 Put a `Pytre.policy.json` file next to the client executable:
 
@@ -162,7 +164,7 @@ pyinstaller --workpath build/onedir Pytre_Client.spec -- --onedir  # folder, use
 pyinstaller Pytre_Server.spec
 ```
 
-Executables are written to `dist/`, the client folder to `dist/Pytre_Client/`.  
+Executables are written to `dist/`, the client folder to `dist/Pytre_Client/`: `Pytre_Client.exe` and its `_internal_<version>` folder, a new version being extracted next to the running one when the client updates itself.  
 The MSI is built from that folder with WiX 7 and `Pytre_Client.wxs`, see the "Build client installer" step of `.github/workflows/build.yml`.  
 `requirements-build.lock` pins the exact versions used for releases, regenerate it with `requirements-update_lock.sh` after changing `requirements*.txt`.
 

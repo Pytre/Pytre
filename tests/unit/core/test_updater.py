@@ -1,5 +1,5 @@
 """
-Tests for Pytre_Core/updater.py - finding, downloading and installing a release, without network:
+Tests for Pytre_Core/updater.py - finding, downloading, extracting (onedir build) and installing a release, without network:
 httpx2.get / httpx2.stream are replaced by fakes returning real httpx2.Response objects
 """
 
@@ -7,7 +7,10 @@ import hashlib
 import json
 import logging
 import re
+import shutil
 import sys
+import zipfile
+from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -17,9 +20,11 @@ import httpx2
 import pytest
 
 from Pytre_Core import updater as updater_module
-from Pytre_Core.about import CLIENT_BASENAME, SERVER_BASENAME, AppStage, AppVersion
+from Pytre_Core.about import CLIENT_BASENAME, SERVER_BASENAME, AppStage, AppVersion, expected_git_tag, full_version
 from Pytre_Core.updater import (
     CHECKSUMS_ASSET,
+    CONTENTS_PREFIX,
+    DOWNLOAD_SUFFIX,
     NEW_SUFFIX,
     OLD_SUFFIX,
     POLICY_FILE,
@@ -47,10 +52,16 @@ def make_response(status: int = 200, url: str = "https://example.test", **kwargs
     return httpx2.Response(status, request=httpx2.Request("GET", url), **kwargs)
 
 
-def api_release(tag: str, basename: str = CLIENT_BASENAME, draft: bool = False, assets: bool = True) -> dict:
+def api_release(
+    tag: str,
+    basename: str = CLIENT_BASENAME,
+    draft: bool = False,
+    assets: bool = True,
+    formats: tuple[str, ...] = ("exe", "zip"),
+) -> dict:
     """A release as returned by the GitHub API, with the assets published by the build workflow"""
     version = tag.removeprefix("v.")
-    names = [f"{basename}_{version}.exe", CHECKSUMS_ASSET] if assets else []
+    names = [f"{basename}_{version}.{extension}" for extension in formats] + [CHECKSUMS_ASSET] if assets else []
     return {
         "tag_name": tag,
         "draft": draft,
@@ -61,8 +72,19 @@ def api_release(tag: str, basename: str = CLIENT_BASENAME, draft: bool = False, 
     }
 
 
-def updater_for(current: str, channel: AppStage = AppStage.RELEASE, basename: str = CLIENT_BASENAME) -> Updater:
-    return Updater(basename, AppVersion.build_from_string(current), channel)
+@pytest.fixture
+def updater_for(monkeypatch) -> Callable[..., Updater]:
+    """Builds an Updater for a running build of version `current`, a single executable unless `onedir`"""
+
+    def build(
+        current: str, channel: AppStage = AppStage.RELEASE, basename: str = CLIENT_BASENAME, onedir: bool = False
+    ) -> Updater:
+        running = AppVersion.build_from_string(current)
+        monkeypatch.setattr(AppVersion, "current", classmethod(lambda _cls: running))
+        monkeypatch.setattr(Updater, "is_onedir", staticmethod(lambda: onedir))
+        return Updater(basename, channel)
+
+    return build
 
 
 def found_version(updater: Updater, releases: list[dict], skipped: str | None = None) -> str | None:
@@ -72,14 +94,18 @@ def found_version(updater: Updater, releases: list[dict], skipped: str | None = 
     return str(release.version) if release else None
 
 
-def make_release(content: bytes = EXE_CONTENT, size: int | None = None) -> Release:
+def make_release(
+    content: bytes = EXE_CONTENT, size: int | None = None, onedir: bool = False, version: str = "2.0.0"
+) -> Release:
     return Release(
-        version=AppVersion.build_from_string("2.0.0"),
-        page_url="https://github.com/Pytre/Pytre/releases/tag/v.2.0.0",
-        exe_name="Pytre_Client_2.0.0.exe",
-        exe_url=EXE_URL,
-        exe_size=len(content) if size is None else size,
+        version=AppVersion.build_from_string(version),
+        page_url=f"https://github.com/Pytre/Pytre/releases/tag/v.{version}",
+        basename=CLIENT_BASENAME,
+        asset_name=f"{CLIENT_BASENAME}_{version}.{'zip' if onedir else 'exe'}",
+        asset_url=EXE_URL,
+        asset_size=len(content) if size is None else size,
         checksums_url=CHECKSUMS_URL,
+        onedir=onedir,
     )
 
 
@@ -125,66 +151,66 @@ def running_exe(tmp_path) -> Path:
 # ================================================================================
 
 
-def test_release_channel_on_a_release_only_offers_releases():
+def test_release_channel_on_a_release_only_offers_releases(updater_for):
     releases = [api_release("v.2.1.0-beta.1"), api_release("v.2.0.1"), api_release("v.2.0.0")]
 
     assert found_version(updater_for("2.0.0"), releases) == "2.0.1"
 
 
-def test_newest_matching_release_is_returned_whatever_the_api_order():
+def test_newest_matching_release_is_returned_whatever_the_api_order(updater_for):
     releases = [api_release("v.2.0.1"), api_release("v.2.0.3"), api_release("v.2.0.2")]
 
     assert found_version(updater_for("2.0.0"), releases) == "2.0.3"
 
 
-def test_a_prerelease_keeps_receiving_prereleases_of_its_stage():
+def test_a_prerelease_keeps_receiving_prereleases_of_its_stage(updater_for):
     releases = [api_release("v.2.0.0-beta.3"), api_release("v.2.0.0-alpha.9")]
 
     assert found_version(updater_for("2.0.0-beta.2"), releases) == "2.0.0-beta.3"
 
 
-def test_a_prerelease_receives_the_release_once_published():
+def test_a_prerelease_receives_the_release_once_published(updater_for):
     releases = [api_release("v.2.0.0"), api_release("v.2.0.0-rc.1"), api_release("v.2.0.0-beta.3")]
 
     assert found_version(updater_for("2.0.0-beta.2"), releases) == "2.0.0"
 
 
-def test_a_beta_channel_offers_betas_from_a_release():
+def test_a_beta_channel_offers_betas_from_a_release(updater_for):
     releases = [api_release("v.2.1.0-beta.1"), api_release("v.2.1.0-alpha.1")]
 
     assert found_version(updater_for("2.0.0", channel=AppStage.BETA), releases) == "2.1.0-beta.1"
 
 
-def test_no_update_when_nothing_is_newer():
+def test_no_update_when_nothing_is_newer(updater_for):
     releases = [api_release("v.2.0.0"), api_release("v.1.9.0")]
 
     assert found_version(updater_for("2.0.0"), releases) is None
 
 
-def test_no_update_when_there_is_no_release_at_all():
+def test_no_update_when_there_is_no_release_at_all(updater_for):
     assert found_version(updater_for("2.0.0"), []) is None
 
 
-def test_skipped_version_and_older_ones_are_not_offered():
+def test_skipped_version_and_older_ones_are_not_offered(updater_for):
     releases = [api_release("v.2.0.2"), api_release("v.2.0.1")]
 
     assert found_version(updater_for("2.0.0"), releases, skipped="2.0.2") is None
     assert found_version(updater_for("2.0.0"), releases, skipped="2.0.1") == "2.0.2"
 
 
-def test_drafts_are_ignored():
+def test_drafts_are_ignored(updater_for):
     releases = [api_release("v.2.0.1", draft=True)]
 
     assert found_version(updater_for("2.0.0"), releases) is None
 
 
-def test_tags_in_an_older_or_unknown_format_are_ignored():
+def test_tags_in_an_older_or_unknown_format_are_ignored(updater_for):
     releases = [api_release("v.2.1.0_RC.1"), api_release("v.2.0.0_BETA.2"), api_release("not-a-version")]
 
     assert found_version(updater_for("1.9.0"), releases) is None
 
 
-def test_releases_without_the_executable_or_checksums_are_ignored():
+def test_releases_without_the_executable_or_checksums_are_ignored(updater_for):
     without_checksums = api_release("v.2.0.2")
     without_checksums["assets"] = [a for a in without_checksums["assets"] if a["name"] != CHECKSUMS_ASSET]
     releases = [without_checksums, api_release("v.2.0.1", assets=False)]
@@ -192,31 +218,49 @@ def test_releases_without_the_executable_or_checksums_are_ignored():
     assert found_version(updater_for("2.0.0"), releases) is None
 
 
-def test_only_the_executable_of_the_given_basename_is_looked_for():
+def test_only_the_executable_of_the_given_basename_is_looked_for(updater_for):
     releases = [api_release("v.2.0.1", basename=SERVER_BASENAME)]
 
     assert found_version(updater_for("2.0.0", basename=CLIENT_BASENAME), releases) is None
     assert found_version(updater_for("2.0.0", basename=SERVER_BASENAME), releases) == "2.0.1"
 
 
-def test_found_release_carries_its_assets():
+@pytest.mark.parametrize("onedir, extension", [(False, "exe"), (True, "zip")], ids=["onefile", "onedir"])
+def test_found_release_carries_the_asset_of_the_running_build(updater_for, onedir, extension):
+    """A single executable is replaced by the release executable, a folder build by the release zip"""
     releases = [api_release("v.2.0.1")]
     with patch.object(updater_module.httpx2, "get", return_value=make_response(json=releases)):
-        release = updater_for("2.0.0").find_update()
+        release = updater_for("2.0.0", onedir=onedir).find_update()
 
     assert release == Release(
         version=AppVersion((2, 0, 1)),
         page_url="https://github.com/Pytre/Pytre/releases/tag/v.2.0.1",
-        exe_name="Pytre_Client_2.0.1.exe",
-        exe_url="https://example.test/Pytre_Client_2.0.1.exe",
-        exe_size=1234,
+        basename=CLIENT_BASENAME,
+        asset_name=f"Pytre_Client_2.0.1.{extension}",
+        asset_url=f"https://example.test/Pytre_Client_2.0.1.{extension}",
+        asset_size=1234,
         checksums_url=f"https://example.test/{CHECKSUMS_ASSET}",
+        onedir=onedir,
     )
+
+
+@pytest.mark.parametrize("onedir, published", [(False, ("zip",)), (True, ("exe",))], ids=["onefile", "onedir"])
+def test_releases_without_the_asset_of_the_running_build_are_ignored(updater_for, onedir, published):
+    releases = [api_release("v.2.0.1", formats=published)]
+
+    assert found_version(updater_for("2.0.0", onedir=onedir), releases) is None
+
+
+def test_updater_looks_for_updates_of_the_running_version(monkeypatch):
+    running = AppVersion((2, 0, 0), AppStage.BETA, 4)
+    monkeypatch.setattr(AppVersion, "current", classmethod(lambda _cls: running))
+
+    assert Updater(CLIENT_BASENAME).version == running
 
 
 def test_releases_are_fetched_from_the_configured_repository():
     with patch.object(updater_module.httpx2, "get", return_value=make_response(json=[])) as mock_get:
-        Updater(CLIENT_BASENAME, AppVersion((2, 0, 0)), repo="Owner/Name").find_update()
+        Updater(CLIENT_BASENAME, repo="Owner/Name").find_update()
 
     assert mock_get.call_args.args[0] == "https://api.github.com/repos/Owner/Name/releases"
 
@@ -229,7 +273,7 @@ def test_releases_are_fetched_from_the_configured_repository():
         httpx2.ConnectError("unreachable"),
     ],
 )
-def test_unreachable_or_invalid_api_raises_update_error(response_or_error):
+def test_unreachable_or_invalid_api_raises_update_error(updater_for, response_or_error):
     kwargs = {"side_effect": response_or_error} if isinstance(response_or_error, Exception) else {}
     with patch.object(updater_module.httpx2, "get", return_value=response_or_error, **kwargs):
         with pytest.raises(UpdateError):
@@ -260,7 +304,7 @@ def test_expected_hash_missing_from_checksums_raises_update_error():
 
 
 def test_download_writes_the_verified_executable_next_to_the_target(fake_download, running_exe):
-    new_file = make_release().download_exe(running_exe)
+    new_file = make_release().download_update(running_exe)
 
     assert new_file == running_exe.with_name(running_exe.name + NEW_SUFFIX)
     assert new_file.read_bytes() == EXE_CONTENT
@@ -271,7 +315,7 @@ def test_download_reports_its_progress(fake_download, running_exe):
     fake_download.exe_chunks = [EXE_CONTENT[:5], EXE_CONTENT[5:]]
     progress: list[tuple[int, int]] = []
 
-    make_release().download_exe(running_exe, on_progress=lambda received, total: progress.append((received, total)))
+    make_release().download_update(running_exe, on_progress=lambda received, total: progress.append((received, total)))
 
     assert progress[-1] == (len(EXE_CONTENT), len(EXE_CONTENT))
     assert [received for received, _ in progress] == sorted(received for received, _ in progress)
@@ -281,20 +325,20 @@ def test_download_overwrites_a_leftover_partial_file(fake_download, running_exe)
     leftover = running_exe.with_name(running_exe.name + NEW_SUFFIX)
     leftover.write_bytes(b"partial")
 
-    assert make_release().download_exe(running_exe).read_bytes() == EXE_CONTENT
+    assert make_release().download_update(running_exe).read_bytes() == EXE_CONTENT
 
 
 def test_download_with_a_wrong_hash_raises_and_leaves_no_file(fake_download, running_exe):
     fake_download.checksums = checksums_for(b"another content")
 
     with pytest.raises(UpdateError, match="does not match"):
-        make_release().download_exe(running_exe)
+        make_release().download_update(running_exe)
     assert not running_exe.with_name(running_exe.name + NEW_SUFFIX).exists()
 
 
 def test_download_with_a_wrong_size_raises_and_leaves_no_file(fake_download, running_exe):
     with pytest.raises(UpdateError, match="Unexpected file bytes size"):
-        make_release(size=len(EXE_CONTENT) + 1).download_exe(running_exe)
+        make_release(size=len(EXE_CONTENT) + 1).download_update(running_exe)
     assert not running_exe.with_name(running_exe.name + NEW_SUFFIX).exists()
 
 
@@ -302,19 +346,227 @@ def test_download_http_error_raises_update_error_and_leaves_no_file(fake_downloa
     fake_download.exe_status = 404
 
     with pytest.raises(UpdateError, match="Failed to download"):
-        make_release().download_exe(running_exe)
+        make_release().download_update(running_exe)
     assert not running_exe.with_name(running_exe.name + NEW_SUFFIX).exists()
 
 
 def test_download_network_error_on_checksums_raises_update_error(fake_download, running_exe):
     with patch.object(updater_module.httpx2, "get", side_effect=httpx2.ConnectError("unreachable")):
         with pytest.raises(UpdateError, match="Failed to download"):
-            make_release().download_exe(running_exe)
+            make_release().download_update(running_exe)
 
 
 def test_download_into_a_missing_folder_raises_update_error(fake_download, tmp_path):
     with pytest.raises(UpdateError, match="Failed to download"):
-        make_release().download_exe(tmp_path / "missing" / "Pytre.exe")
+        make_release().download_update(tmp_path / "missing" / "Pytre.exe")
+
+
+# ================================================================================
+# Onedir build - extracting the release zip next to the running version
+# ================================================================================
+
+ONEDIR_EXE_CONTENT = b"new onedir executable"
+NEW_VERSION = AppVersion((2, 0, 1))
+
+
+@pytest.fixture
+def onedir_exe(tmp_path) -> Path:
+    """Running onedir build of version 2.0.0: its executable and contents folder"""
+    exe = tmp_path / "app" / f"{CLIENT_BASENAME}.exe"
+    contents = exe.parent / f"{CONTENTS_PREFIX}2.0.0"
+    contents.mkdir(parents=True)
+    (contents / "python314.dll").write_bytes(b"running dll")
+    exe.write_bytes(b"current executable")
+    return exe
+
+
+@pytest.fixture
+def downloads(tmp_path) -> Path:
+    folder = tmp_path / "downloads"
+    folder.mkdir()
+    return folder
+
+
+def make_onedir_zip(
+    folder: Path, version: str = "2.0.1", with_exe: bool = True, extra: dict[str, bytes] | None = None
+) -> Path:
+    """Zip of a onedir build made like the build workflow does, with its `<basename>/` root folder"""
+    build = folder / "build" / CLIENT_BASENAME
+    contents = build / f"{CONTENTS_PREFIX}{version}"
+    (contents / "res").mkdir(parents=True)
+    (contents / "python314.dll").write_bytes(b"dll")
+    (contents / "res" / "app.ico").write_bytes(b"icon")
+    if with_exe:
+        (build / f"{CLIENT_BASENAME}.exe").write_bytes(ONEDIR_EXE_CONTENT)
+
+    archive_base = str(folder / f"{CLIENT_BASENAME}_{version}")
+    zip_file = Path(shutil.make_archive(archive_base, "zip", root_dir=build.parent, base_dir=CLIENT_BASENAME))
+    if extra:
+        with zipfile.ZipFile(zip_file, "a") as archive:
+            for name, content in extra.items():
+                archive.writestr(name, content)
+    return zip_file
+
+
+def extracted_paths(onedir_exe: Path) -> tuple[Path, Path]:
+    """Contents folder and executable of version 2.0.1 once extracted next to `onedir_exe`"""
+    return onedir_exe.parent / f"{CONTENTS_PREFIX}2.0.1", onedir_exe.with_name(onedir_exe.name + NEW_SUFFIX)
+
+
+def assert_nothing_extracted(onedir_exe: Path) -> None:
+    contents, new_exe = extracted_paths(onedir_exe)
+    assert not contents.exists()
+    assert not new_exe.exists()
+    assert onedir_exe.read_bytes() == b"current executable"
+    assert (onedir_exe.parent / f"{CONTENTS_PREFIX}2.0.0" / "python314.dll").read_bytes() == b"running dll"
+
+
+def locked_rmtree(_path, *_args, **_kwargs):
+    raise PermissionError("file in use")
+
+
+def test_extract_onedir_puts_the_new_version_next_to_the_running_one(onedir_exe, downloads):
+    new_exe = Updater.extract_onedir(make_onedir_zip(downloads), onedir_exe, CLIENT_BASENAME, NEW_VERSION)
+
+    contents, expected_exe = extracted_paths(onedir_exe)
+    assert new_exe == expected_exe
+    assert new_exe.read_bytes() == ONEDIR_EXE_CONTENT
+    assert (contents / "python314.dll").read_bytes() == b"dll"
+    assert (contents / "res" / "app.ico").read_bytes() == b"icon"
+    assert onedir_exe.read_bytes() == b"current executable"
+    assert (onedir_exe.parent / f"{CONTENTS_PREFIX}2.0.0" / "python314.dll").read_bytes() == b"running dll"
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [f"{CLIENT_BASENAME}/{POLICY_FILE}", "other/readme.txt", f"{CLIENT_BASENAME}/{CONTENTS_PREFIX}1.0.0/old.dll"],
+    ids=["file next to the executable", "other root folder", "contents folder of another version"],
+)
+def test_extract_onedir_refuses_an_unexpected_entry(onedir_exe, downloads, entry):
+    zip_file = make_onedir_zip(downloads, extra={entry: b"unexpected"})
+
+    with pytest.raises(UpdateError, match="Unexpected entry"):
+        Updater.extract_onedir(zip_file, onedir_exe, CLIENT_BASENAME, NEW_VERSION)
+    assert_nothing_extracted(onedir_exe)
+
+
+def test_extract_onedir_refuses_an_entry_leaving_its_folder(onedir_exe, downloads, tmp_path):
+    """Entries extracted before it are removed too"""
+    zip_file = make_onedir_zip(downloads, extra={f"{CLIENT_BASENAME}/{CONTENTS_PREFIX}2.0.1/../../evil.txt": b"!"})
+
+    with pytest.raises(UpdateError, match="leaving its folder"):
+        Updater.extract_onedir(zip_file, onedir_exe, CLIENT_BASENAME, NEW_VERSION)
+    assert not (tmp_path / "evil.txt").exists()
+    assert_nothing_extracted(onedir_exe)
+
+
+def test_extract_onedir_without_the_executable_raises_update_error(onedir_exe, downloads):
+    zip_file = make_onedir_zip(downloads, with_exe=False)
+
+    with pytest.raises(UpdateError, match="missing from"):
+        Updater.extract_onedir(zip_file, onedir_exe, CLIENT_BASENAME, NEW_VERSION)
+    assert_nothing_extracted(onedir_exe)
+
+
+def test_extract_onedir_of_a_corrupted_zip_raises_update_error(onedir_exe, downloads):
+    zip_file = downloads / "Pytre_Client_2.0.1.zip"
+    zip_file.write_bytes(b"not a zip")
+
+    with pytest.raises(UpdateError, match="Failed to extract"):
+        Updater.extract_onedir(zip_file, onedir_exe, CLIENT_BASENAME, NEW_VERSION)
+    assert_nothing_extracted(onedir_exe)
+
+
+def test_extract_onedir_failing_on_the_executable_removes_the_new_contents_folder(monkeypatch, onedir_exe, downloads):
+    zip_file = make_onedir_zip(downloads)
+    real_copy = shutil.copyfileobj
+
+    def copy(source, dest, *args, **kwargs):
+        if str(dest.name).endswith(NEW_SUFFIX):
+            raise OSError("disk full")
+        return real_copy(source, dest, *args, **kwargs)
+
+    monkeypatch.setattr(updater_module.shutil, "copyfileobj", copy)
+
+    with pytest.raises(UpdateError, match="disk full"):
+        Updater.extract_onedir(zip_file, onedir_exe, CLIENT_BASENAME, NEW_VERSION)
+    assert_nothing_extracted(onedir_exe)
+
+
+def test_extract_onedir_replaces_the_leftovers_of_a_failed_attempt(onedir_exe, downloads):
+    contents, new_exe = extracted_paths(onedir_exe)
+    contents.mkdir()
+    (contents / "stale.dll").write_bytes(b"stale")
+    new_exe.write_bytes(b"partial")
+
+    Updater.extract_onedir(make_onedir_zip(downloads), onedir_exe, CLIENT_BASENAME, NEW_VERSION)
+
+    assert not (contents / "stale.dll").exists()
+    assert (contents / "python314.dll").read_bytes() == b"dll"
+    assert new_exe.read_bytes() == ONEDIR_EXE_CONTENT
+
+
+def test_extract_onedir_stops_when_the_leftovers_can_not_be_deleted(monkeypatch, onedir_exe, downloads):
+    contents, new_exe = extracted_paths(onedir_exe)
+    contents.mkdir()
+    zip_file = make_onedir_zip(downloads)
+    monkeypatch.setattr(updater_module.shutil, "rmtree", locked_rmtree)
+
+    with pytest.raises(UpdateError, match="leftovers"):
+        Updater.extract_onedir(zip_file, onedir_exe, CLIENT_BASENAME, NEW_VERSION)
+    assert not new_exe.exists()
+
+
+def test_download_update_of_a_onedir_build_extracts_the_zip_then_deletes_it(fake_download, onedir_exe, downloads):
+    zip_content = make_onedir_zip(downloads).read_bytes()
+    release = make_release(zip_content, onedir=True, version="2.0.1")
+    fake_download.exe_chunks = [zip_content]
+    fake_download.checksums = checksums_for(zip_content, release.asset_name)
+
+    new_exe = release.download_update(onedir_exe)
+
+    contents, expected_exe = extracted_paths(onedir_exe)
+    assert new_exe == expected_exe
+    assert new_exe.read_bytes() == ONEDIR_EXE_CONTENT
+    assert (contents / "python314.dll").is_file()
+    assert not onedir_exe.with_name(release.asset_name + DOWNLOAD_SUFFIX).exists()
+
+
+def test_download_update_of_a_onedir_build_failing_to_extract_leaves_no_file(fake_download, onedir_exe):
+    content = b"not a zip"
+    release = make_release(content, onedir=True, version="2.0.1")
+    fake_download.exe_chunks = [content]
+    fake_download.checksums = checksums_for(content, release.asset_name)
+
+    with pytest.raises(UpdateError, match="Failed to extract"):
+        release.download_update(onedir_exe)
+    assert sorted(path.name for path in onedir_exe.parent.iterdir()) == [
+        f"{CLIENT_BASENAME}.exe",
+        f"{CONTENTS_PREFIX}2.0.0",
+    ]
+
+
+def test_cleanup_contents_folders_deletes_only_the_older_versions(onedir_exe):
+    """The running version, a newer one (maybe being extracted), a name without version and a file are kept"""
+    install = onedir_exe.parent
+    for version in ("1.9.0", "2.0.0-beta.4", "2.0.1", "custom"):
+        (install / f"{CONTENTS_PREFIX}{version}").mkdir()
+    (install / f"{CONTENTS_PREFIX}1.0.0").write_bytes(b"a file, not a folder")
+
+    Updater.cleanup_contents_folders(onedir_exe, AppVersion((2, 0, 0)))
+
+    kept = [f"{CONTENTS_PREFIX}{version}" for version in ("1.0.0", "2.0.0", "2.0.1", "custom")]
+    assert sorted(path.name for path in install.iterdir()) == sorted([onedir_exe.name, *kept])
+
+
+def test_cleanup_contents_folders_ignores_a_folder_still_in_use(monkeypatch, onedir_exe):
+    older = onedir_exe.parent / f"{CONTENTS_PREFIX}1.9.0"
+    older.mkdir()
+    monkeypatch.setattr(updater_module.shutil, "rmtree", locked_rmtree)
+
+    Updater.cleanup_contents_folders(onedir_exe, AppVersion((2, 0, 0)))  # must not raise
+
+    assert older.is_dir()
 
 
 # ================================================================================
@@ -393,14 +645,14 @@ def test_cleanup_previous_deletes_the_old_executable(running_exe):
     old_file = running_exe.with_name(running_exe.name + OLD_SUFFIX)
     old_file.write_bytes(b"previous")
 
-    Updater.cleanup_previous(running_exe)
+    assert Updater.cleanup_previous(running_exe) is True
 
     assert not old_file.exists()
     assert running_exe.exists()
 
 
 def test_cleanup_previous_without_old_executable_does_nothing(running_exe):
-    Updater.cleanup_previous(running_exe)
+    assert Updater.cleanup_previous(running_exe) is True
 
     assert running_exe.exists()
 
@@ -413,7 +665,7 @@ def test_cleanup_previous_ignores_a_still_locked_file(monkeypatch, running_exe):
 
     monkeypatch.setattr(Path, "unlink", locked_unlink)
 
-    Updater.cleanup_previous(running_exe)  # must not raise
+    assert Updater.cleanup_previous(running_exe) is False  # must not raise: a previous version is still running
 
 
 # ================================================================================
@@ -439,7 +691,7 @@ def test_is_updatable_only_for_a_frozen_build_without_the_key(monkeypatch, froze
 @pytest.mark.parametrize(
     "bundle, expected",
     [
-        pytest.param("app/_internal", True, id="onedir default contents folder"),
+        pytest.param("app/_internal_2.0.0", True, id="onedir versioned contents folder"),
         pytest.param("app", True, id="onedir contents in the executable folder"),
         pytest.param("temp/_MEI12345", False, id="onefile temporary folder"),
         pytest.param(None, False, id="not frozen"),
@@ -455,14 +707,14 @@ def test_is_onedir_when_the_bundle_sits_in_the_executable_folder(monkeypatch, tm
     assert Updater.is_onedir() is expected
 
 
-def test_onedir_build_is_never_updatable(monkeypatch, tmp_path):
-    """A onedir build is deployed and updated by its installer, even without the key"""
+def test_onedir_build_is_updatable_without_the_key(monkeypatch, tmp_path):
+    """The zip updates itself like the executable - a deployment turns it off with the policy file"""
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     monkeypatch.setattr(sys, "executable", str(tmp_path / "Pytre_Client.exe"))
-    monkeypatch.setattr(sys, "_MEIPASS", str(tmp_path / "_internal"), raising=False)
+    monkeypatch.setattr(sys, "_MEIPASS", str(tmp_path / "_internal_2.0.0"), raising=False)
     monkeypatch.setattr(updater_module, "secret_key_available", lambda: False)
 
-    assert Updater.is_updatable() is False
+    assert Updater.is_updatable() is True
 
 
 def test_current_exe_is_the_running_executable(monkeypatch, tmp_path):
@@ -634,6 +886,36 @@ def test_build_workflow_builds_the_client_folder_with_the_spec_option():
 
     assert "-- --onedir" in workflow
     assert 'add_argument("--onedir"' in spec
+
+
+def test_client_folder_build_names_its_contents_folder_after_the_version():
+    """Each version has its own folder: a new one can be extracted next to the running one"""
+    spec = (ROOT / "Pytre_Client.spec").read_text(encoding="utf-8")
+
+    assert f'contents_directory = f"{CONTENTS_PREFIX}{{full_version()}}"' in spec
+    assert "contents_directory=contents_directory" in spec
+
+
+def test_update_extracts_the_contents_folder_named_by_the_build():
+    """The spec names the folder from about.py, the update from the release tag: both must give the same name"""
+    tag_version = AppVersion.build_from_string(expected_git_tag())
+
+    assert f"{CONTENTS_PREFIX}{tag_version}" == f"{CONTENTS_PREFIX}{full_version()}"
+
+
+def test_build_workflow_zips_the_client_folder_under_its_basename():
+    """extract_onedir() expects a `<basename>/` root folder in the zip"""
+    workflow = (ROOT / ".github" / "workflows" / "build.yml").read_text(encoding="utf-8")
+
+    assert "base_dir=name" in workflow
+    assert "NAME: ${{ matrix.name }}" in workflow
+
+
+def test_policy_template_installed_by_the_msi_disables_updates():
+    template_folder = ROOT / "templates"
+
+    assert (template_folder / POLICY_FILE).is_file()
+    assert UpdatePolicy.load(template_folder) is UpdatePolicy.DISABLED
 
 
 def test_release_publishes_and_checksums_the_client_zip():

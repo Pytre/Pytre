@@ -13,6 +13,7 @@ I am not looking for contributions but if you have any questions I would be happ
 ## Contents
 
 - [Architecture](#architecture)
+- [Queries](#queries): writing them, where they are read from
 - [Download](#download)
 - [Enterprise deployment](#enterprise-deployment): MSI, zip, update policy
 - [Server security](#server-security): reverse proxy, how queries are run, web administration
@@ -30,6 +31,13 @@ The client runs in one of two modes, detected at startup:
 
 - **Hybrid**: the client sits next to a shared settings database (`Pytre.db`, typically on a network drive used by everyone). It connects directly to SQL servers, reads queries from a shared folder and can also use remote servers.
 - **Pure client**: no settings database next to the client (typically installed on the user's computer). Queries are only run through one or more Pytre_Server instances ("remotes").
+
+## Queries
+
+Users run prepackaged queries: `.sql` files with a header describing them (name, description, allowed groups and servers...) and a `DECLARE` block for their parameters, which users fill in from the client. See [Writing queries](docs/queries.md) for their format.
+
+- A hybrid client reads the queries from the shared queries folder, a server from its own one. The folder is set in the settings, from the client's settings window or the web administration: a `Queries` folder next to the application by default.
+- In hybrid mode, the queries folder should contain `_version_min.json` (see `templates/`). It is used to make sure no one is using an old version when implementing new restrictions.
 
 ## Download
 
@@ -116,7 +124,7 @@ A client never sends SQL to a server. For each execution, it only sends the serv
 
 - reads the query from its own queries folder, and checks if the user is allowed to run it on that server,
 - refuses the execution if the client's version of the query differs from its own: the client has to refresh its list,
-- checks the parameter names match the query and their values are valid (type, allowed values, pattern),
+- checks the parameter names match the query and their values are valid (type, size, allowed values),
 - replaces hidden parameters with the values it computes itself, unless the user is an admin,
 - caps the number of executions running at once for each user, and logs each execution with its parameters.
 
@@ -173,7 +181,7 @@ python -m Pytre_Client
 - Without `Pytre.db` next to the application, the client starts as a pure client: add remotes from *Préférences > Remotes...*.
 - To set up a new shared (hybrid) installation, copy `templates/credentials_secrets.py` to `Pytre_Core/` and change its key, then launch the client once with `--init-hybrid`: `Pytre.db` and `Pytre.key` (the database password, encrypted with that key) are created and the current user is given admin rights.
 
-In hybrid mode, the queries folder should contain `_version_min.json` (see `templates/`). It is used to make sure no one is using an old version when implementing new restrictions.
+Then put the queries and `_version_min.json` in the queries folder, see [Queries](#queries).
 
 User preferences, remotes, local logs and cache are stored in the local application data folder:
 - on Windows: `%LOCALAPPDATA%\Pytre`,
@@ -188,10 +196,6 @@ python -m Pytre_Server --help
 ```
 
 On first start the master password of the settings database is asked in the terminal and stored in the system keyring (see [Server options](#server-options) to manage it afterwards). The web administration is available at `/admin`; the first admin account can only be created from the server itself (localhost). Behind a reverse proxy, see [Server security](#server-security).
-
-### Queries
-
-Queries are `.sql` files with a header describing them (code, description, allowed groups and servers...) and a `DECLARE` block for their parameters. See `docs/Query Template FR.txt`.
 
 ### Building executables
 

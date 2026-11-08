@@ -1,10 +1,13 @@
 """
-Tests for .github/workflows/build.yml - how builds are uploaded, checksummed and released. Read as text: the jobs
+Tests for .github/workflows/build.yml - how builds are uploaded, checksummed, described and released. Read as
+text: the jobs
 are the keys indented by two spaces under `jobs:`, their steps the items indented by six spaces under `steps:`.
 Consistency with what each build contains is checked next to its code (test_updater.py, test_installer.py).
 """
 
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -108,7 +111,7 @@ def test_checksums_are_uploaded_for_the_release(jobs):
 def test_release_publishes_the_files_checked_by_the_checksums_job(jobs):
     job = jobs["release"]
 
-    assert "needs: [version, checksums]" in job
+    assert "needs: [version, checksums, release-notes]" in job
     assert "if: startsWith(github.ref, 'refs/tags/')" in job
     assert "contents: write" in job
     assert GATHER_FILES in job
@@ -117,7 +120,80 @@ def test_release_publishes_the_files_checked_by_the_checksums_job(jobs):
         assert published in job, published
 
 
+def test_release_uses_the_notes_written_from_the_built_files(jobs):
+    job = jobs["release"]
+
+    assert "body_path: dist/release_notes.md" in job
+    assert "body: |" not in job
+    assert "release_notes.md" not in job.split("files: |", 1)[1].split("prerelease:", 1)[0]  # not attached
+
+
 def test_only_the_release_job_can_write_to_the_repository(jobs):
     writers = [job_id for job_id, job in jobs.items() if "contents: write" in job]
 
     assert writers == ["release"]
+
+
+# ================================================================================
+# Release notes
+# ================================================================================
+
+CHECKSUM = "a" * 64
+
+
+@pytest.fixture(scope="module")
+def write_notes_script(jobs) -> str:
+    """Shell script of the step writing the release notes, unindented"""
+    step = named_step(jobs["release-notes"], "Write release notes")
+    script_lines = step.split("run: |\n", 1)[1].splitlines()
+    return "\n".join(line.removeprefix(" " * 10) for line in script_lines)
+
+
+def test_release_notes_are_written_on_every_run_with_read_only_access(jobs):
+    """Like the checksums: a manual run shows them before a release depends on them"""
+    job = jobs["release-notes"]
+    download = next(step for step in steps_of(job) if "actions/download-artifact@" in step)
+    upload = next(step for step in steps_of(job) if "actions/upload-artifact@" in step)
+
+    assert "needs: checksums" in job
+    assert "\n    if:" not in job
+    assert "permissions:" not in job
+    assert "name: SHA256SUMS.txt" in download
+    assert "skip-decompress: true" in download
+    assert "path: release_notes.md" in upload
+    assert "archive: false" in upload
+
+
+def run_notes_script(script: str, folder: Path, files: list[str] | None) -> subprocess.CompletedProcess:
+    """Runs the script in `folder`, with a SHA256SUMS.txt listing `files` - none at all when None"""
+    if files is not None:
+        lines = [f"{CHECKSUM}  {name}" for name in files]
+        (folder / "SHA256SUMS.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return subprocess.run(
+        ["bash", "-eo", "pipefail", "-c", script], cwd=folder, capture_output=True, text=True, check=False
+    )
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="needs bash, as the workflow runner")
+@pytest.mark.parametrize("with_msi", [True, False], ids=["release", "pre-release"])
+def test_release_notes_only_describe_the_built_files(write_notes_script, tmp_path, with_msi):
+    files = ["Pytre_Client_2.0.0.exe", "Pytre_Client_2.0.0.zip", "Pytre_Server_2.0.0.exe"]
+    files += ["Pytre_Client_2.0.0.msi"] if with_msi else []
+
+    result = run_notes_script(write_notes_script, tmp_path, files)
+    notes = (tmp_path / "release_notes.md").read_text(encoding="utf-8")
+
+    assert result.returncode == 0, result.stderr
+    for pattern in ("Pytre_Client_*.exe", "Pytre_Client_*.zip", "Pytre_Server_*.exe"):
+        assert f"- `{pattern}`:" in notes
+    assert ("- `Pytre_Client_*.msi`:" in notes) is with_msi
+    assert ("The MSI installs a policy file" in notes) is with_msi
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="needs bash, as the workflow runner")
+def test_release_notes_fail_without_the_checksums_file(write_notes_script, tmp_path):
+    """Rather than release empty notes, if the downloaded file lands somewhere else"""
+    result = run_notes_script(write_notes_script, tmp_path, None)
+
+    assert result.returncode != 0
+    assert not (tmp_path / "release_notes.md").exists()

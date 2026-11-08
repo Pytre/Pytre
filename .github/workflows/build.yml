@@ -238,8 +238,46 @@ jobs:
           archive: false
           if-no-files-found: error
 
+  release-notes:
+    name: Release notes
+    needs: checksums
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: SHA256SUMS.txt
+          skip-decompress: true
+
+      # One line per kind of file listed in SHA256SUMS.txt: pre-releases have no MSI
+      - name: Write release notes
+        run: |
+          test -f SHA256SUMS.txt
+          built() { grep -Eq "[ *]$1\$" SHA256SUMS.txt; }  # file name regex
+          describe() { if built "$1"; then echo "- \`$2\`: $3"; fi; }
+          {
+            echo "Windows builds, see README for details:"
+            describe 'Pytre_Client_.*\.exe' "Pytre_Client_*.exe" "desktop client, portable single executable (pure client mode only)"
+            describe 'Pytre_Client_.*\.zip' "Pytre_Client_*.zip" "the same client as a folder, which starts faster"
+            describe 'Pytre_Client_.*\.msi' "Pytre_Client_*.msi" "the same folder as a Windows installer, which never updates itself"
+            describe 'Pytre_Server_.*\.exe' "Pytre_Server_*.exe" "server, portable single executable (console application)"
+            echo
+            echo "The client executable and the zip update themselves, unless an enterprise policy turns updates off."
+            if built '.*\.msi'; then echo "The MSI installs a policy file that disables updates."; fi
+            echo
+            echo "To verify a download: compare its hash with \`SHA256SUMS.txt\` (\`Get-FileHash <file>\` in PowerShell),"
+            echo "or check its build provenance with \`gh attestation verify <file> --repo Pytre/Pytre\`."
+          } > release_notes.md
+          cat release_notes.md
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          path: release_notes.md
+          archive: false
+          if-no-files-found: error
+
   release:
-    needs: [version, checksums]
+    needs: [version, checksums, release-notes]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -270,18 +308,7 @@ jobs:
             dist/SHA256SUMS.txt
           prerelease: ${{ needs.version.outputs.prerelease == 'true' }}
           generate_release_notes: true
-          body: |
-            Windows builds, see README for details:
-            - `Pytre_Client_*.exe`: desktop client, portable single executable (pure client mode only)
-            - `Pytre_Client_*.zip`: the same client as a folder, which starts faster
-            - `Pytre_Client_*.msi`: the same folder as a Windows installer (stable releases only), which never updates itself
-            - `Pytre_Server_*.exe`: server, portable single executable (console application)
-
-            The client executable and the zip update themselves, unless an enterprise policy turns updates off.
-            The MSI installs a policy file that disables updates.
-
-            To verify a download: compare its hash with `SHA256SUMS.txt` (`Get-FileHash <file>` in PowerShell),
-            or check its build provenance with `gh attestation verify <file> --repo Pytre/Pytre`.
+          body_path: dist/release_notes.md
 
       # Immutable releases lock assets on publication: they're attached to the draft above first
       - name: Publish release

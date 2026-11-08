@@ -10,6 +10,9 @@ Gated by require_admin_session (see admin_router.py)
   so the running process keeps working and the next restart still succeeds.
 
 Bootstrap/disaster-recovery tooling, not a routine "change password" action.
+
+Every action, and the form to set a value, only answers local connections (require_local_connection): a stolen
+admin session can't reveal or change the password remotely. The page itself stays visible, without its actions.
 """
 
 import logging
@@ -20,7 +23,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from Pytre_Core.utils import log as _log
 
 from Pytre_Server.master_key import delete_master_key, get_master_key, set_master_key
-from Pytre_Server.routes.admin_auth import require_admin_session
+from Pytre_Server.routes.admin_auth import is_loopback, require_local_connection
 from Pytre_Server.server_state import ServerState, get_server_state
 from Pytre_Server.templating import templates
 
@@ -32,9 +35,10 @@ def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__)
     _log(msg, level=level, sublogger=sublogger)
 
 
-def _context(msg: str | None = None, error: str | None = None) -> dict:
+def _context(msg: str | None = None, error: str | None = None, is_local: bool = True) -> dict:
     return {
         "key_exists": get_master_key() is not None,
+        "is_local": is_local,
         "msg": msg,
         "error": error,
     }
@@ -42,22 +46,23 @@ def _context(msg: str | None = None, error: str | None = None) -> dict:
 
 @router.get("", response_class=HTMLResponse)
 def master_key_page(request: Request, msg: str | None = None, error: str | None = None) -> HTMLResponse:
-    return templates.TemplateResponse(request, "admin/master_key.html", _context(msg=msg, error=error))
+    context = _context(msg=msg, error=error, is_local=is_loopback(request))
+    return templates.TemplateResponse(request, "admin/master_key.html", context)
 
 
-@router.get("/set-form", response_class=HTMLResponse)
+@router.get("/set-form", response_class=HTMLResponse, dependencies=[Depends(require_local_connection)])
 def master_key_set_form(request: Request, error: str | None = None) -> HTMLResponse:
     return templates.TemplateResponse(request, "admin/master_key_set_form.html", {"error": error})
 
 
 @router.post("/reveal")
-def master_key_reveal(admin_username: str = Depends(require_admin_session)) -> dict[str, str | None]:
+def master_key_reveal(admin_username: str = Depends(require_local_connection)) -> dict[str, str | None]:
     log(f"Master key revealed by admin '{admin_username}'", logging.WARNING)
     return {"value": get_master_key()}
 
 
 @router.post("/delete")
-def master_key_delete(admin_username: str = Depends(require_admin_session)) -> RedirectResponse:
+def master_key_delete(admin_username: str = Depends(require_local_connection)) -> RedirectResponse:
     delete_master_key()
     log(f"Master key deleted from keyring by admin '{admin_username}'", logging.WARNING)
     return RedirectResponse(url="/admin/master-key?msg=Master+key+deleted", status_code=status.HTTP_303_SEE_OTHER)
@@ -68,7 +73,7 @@ def master_key_set(
     request: Request,
     password: str = Form(""),
     confirm_password: str = Form(""),
-    admin_username: str = Depends(require_admin_session),
+    admin_username: str = Depends(require_local_connection),
 ) -> HTMLResponse | RedirectResponse:
 
     error: str | None = None
@@ -91,7 +96,7 @@ def master_key_change_db_password(
     state: ServerState = Depends(get_server_state),
     password: str = Form(""),
     confirm_password: str = Form(""),
-    admin_username: str = Depends(require_admin_session),
+    admin_username: str = Depends(require_local_connection),
 ) -> HTMLResponse | RedirectResponse:
 
     error: str | None = None

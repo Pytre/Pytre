@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from urllib.parse import quote, quote_plus
 
 import jwt
-from fastapi import APIRouter, Depends, Form, Query, Request, Response, status
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request, Response, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from starlette.middleware.base import RequestResponseEndpoint
 
@@ -63,7 +63,7 @@ def admin_auth_required_handler(request: Request, exc: Exception) -> RedirectRes
     return response
 
 
-def _is_loopback(request: Request) -> bool:
+def is_loopback(request: Request) -> bool:
     """True only for a direct connection from the local machine.
     A request carrying any forwarding header went through a reverse proxy, so request.client.host
     can't prove the caller is local - never considered as a loopback then.
@@ -166,6 +166,17 @@ def require_admin_session(request: Request, state: ServerState = Depends(get_ser
     return user.username
 
 
+def require_local_connection(request: Request, admin_username: str = Depends(require_admin_session)) -> str:
+    """FastAPI dependency for the most sensitive /admin/* routes: on top of a valid admin session, the request must
+    come straight from the server itself (see is_loopback), so a stolen session can't be used remotely.
+    Returns the admin username. Raises HTTPException(403) otherwise."""
+    if not is_loopback(request):
+        msg = f"Local-only action refused for admin '{admin_username}' on {request.url.path}: not a local connection"
+        log(msg, logging.WARNING)
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only available from the server itself")
+    return admin_username
+
+
 async def admin_session_middleware(request: Request, call_next: RequestResponseEndpoint) -> Response:
     """Registered at the app level (see app.py) - refreshes the admin_session cookie's `last_activity` claim
     on every request that went through require_admin_session successfully, so a session doesn't expire on the
@@ -212,7 +223,7 @@ def admin_login_form(
     context = LoginContext(
         next=next,
         no_admin_yet=no_admin_yet,
-        show_bootstrap_form=no_admin_yet and _is_loopback(request),
+        show_bootstrap_form=no_admin_yet and is_loopback(request),
         error=error,
         sso_providers=sso_providers,
     )
@@ -269,7 +280,7 @@ def admin_bootstrap_submit(
     what the GET /login page happened to render - this is the only path that can ever create an
     admin account without already being logged in as one."""
 
-    if not _is_loopback(request) or state.app_ctx.users.users_admin_exists():
+    if not is_loopback(request) or state.app_ctx.users.users_admin_exists():
         return RedirectResponse("/admin/login", status_code=status.HTTP_303_SEE_OTHER)
 
     context = LoginContext(next=next, no_admin_yet=True, show_bootstrap_form=True)

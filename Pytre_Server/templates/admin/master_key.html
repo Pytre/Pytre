@@ -13,6 +13,7 @@
 
         <p>Status: <strong>{{ "a master key is stored" if key_exists else "no master key stored" }}</strong></p>
 
+        {% if is_local %}
         <div class="form-actions" id="master-key-actions">
             {% if key_exists %}
             <button type="button" class="secondary" id="reveal-btn">Reveal</button>
@@ -31,10 +32,17 @@
             </form>
             {% endif %}
         </div>
+        {% else %}
+        <p class="description" id="master-key-local-only">
+            These actions are only available from the server itself, on its local address
+            (e.g. <code>http://127.0.0.1:8000/admin</code>, or through an SSH tunnel).
+        </p>
+        {% endif %}
 
         {% if msg %}<p class="result">{{ msg }}</p>{% endif %}
         {% if error %}<p class="error form-error">{{ error }}</p>{% endif %}
 
+        {% if is_local %}
         <script>
         (function () {
             var showBtn = document.getElementById("show-set-form-btn");
@@ -58,6 +66,7 @@
             }
         })();
         </script>
+        {% endif %}
     </div>
 </div>
 {% endblock %}

@@ -65,6 +65,16 @@ def admin_client(monkeypatch) -> TestClient:
 
 
 @pytest.fixture
+def local_admin_client(monkeypatch) -> TestClient:
+    """Like `admin_client`, but connected from the server itself (a loopback address, without forwarding
+    header) - for the admin actions that only answer local connections, such as the master key ones."""
+    monkeypatch.setattr(kee_module, "KEE_FILE", TEST_DB_PATH)
+    test_client = TestClient(create_app(master_key=TEST_DB_PASSWORD), client=("127.0.0.1", 12345))
+    test_client.post("/admin/login", data={"username": TEST_USERNAME, "password": TEST_USER_PASSWORD})
+    return test_client
+
+
+@pytest.fixture
 def isolated_admin_client(monkeypatch, tmp_path) -> TestClient:
     """Like `isolated_client`, but already logged in as the test admin user - see `admin_client`."""
     db_copy = tmp_path / "Pytre_test.db"

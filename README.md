@@ -15,7 +15,7 @@ I am not looking for contributions but if you have any questions I would be happ
 - [Architecture](#architecture)
 - [Download](#download)
 - [Enterprise deployment](#enterprise-deployment): MSI, zip, update policy
-- [Server security](#server-security): how queries are run, web administration
+- [Server security](#server-security): reverse proxy, how queries are run, web administration
 - [Setup from source](#setup-from-source)
 - [License](#license)
 
@@ -44,9 +44,11 @@ The executables and the zip need no installation: run the executable, or extract
 
 The prebuilt client only runs as a pure client: hybrid mode needs `Pytre_Core/credentials_secrets.py` with your own key, so the client has to be built from source.
 
+Before making the server reachable from other computers, read [Server security](#server-security): it doesn't handle HTTPS itself, and a reverse proxy in front of it must be set up as described there.
+
 ## Enterprise deployment
 
-All three formats of the client suit a managed deployment. The server is only published as a single executable.
+All three formats of the client suit a managed deployment. The server is only published as a single executable: to deploy it, see [Server security](#server-security).
 
 - `Pytre_Client_<version>.msi` (recommended, stable releases only): installs the client folder, which never updates itself
 - `Pytre_Client_<version>.zip`: the same folder, to extract yourself, also published for pre-releases
@@ -94,6 +96,19 @@ Put a `Pytre.policy.json` file next to the client executable:
 
 ## Server security
 
+### Network and reverse proxy
+
+The server listens on `127.0.0.1` by default and doesn't handle HTTPS itself: put it behind a reverse proxy that terminates TLS (see `--forwarded-allow-ips`).
+
+The proxy must add `X-Forwarded-For` and `X-Forwarded-Proto` headers to every request. Without them, a proxy running on the server itself makes every request look local: the actions reserved to the server itself, and the creation of the first admin account, would then be reachable from anywhere. Apache, Caddy and Traefik add them by default, nginx needs:
+
+```nginx
+proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+proxy_set_header X-Forwarded-Proto $scheme;
+```
+
+The web administration (`/admin`) shares its port with the client API: the proxy can also restrict `/admin` to the networks admins work from.
+
 ### Running queries
 
 A client never sends SQL to a server. For each execution, it only sends the server and query identifiers, picked from the lists the server gave it, the hash of its version of the query, and the parameter values. The server then:
@@ -116,10 +131,7 @@ The web administration is served at `/admin`, by the same process and on the sam
 - Repeated failed sign-ins are throttled, and each failure is logged.
 - A session ends after 1 hour of inactivity and after 8 hours in any case, or as soon as the user loses admin rights or changes their password.
 - Queries are files in the server's queries folder: the web administration lists them, reloads them from disk, and can exempt one from the version check for a limited time.
-- An admin can reveal, replace or delete the master password of the settings database stored in the keyring, and re-encrypt the database with a new one. Each of these actions is logged as a warning.
-
-The server listens on `127.0.0.1` by default and doesn't handle HTTPS itself: put it behind a reverse proxy that terminates TLS (see `--forwarded-allow-ips`).  
-As the web administration shares its port with the client API, the proxy can also restrict `/admin` to the networks admins work from.
+- An admin can reveal, replace or delete the master password of the settings database stored in the keyring, and re-encrypt the database with a new one, only from the server itself (e.g. `http://127.0.0.1:8000/admin`, or through an SSH tunnel): requests through a reverse proxy are refused. Each of these actions is logged as a warning.
 
 ## Setup from source
 
@@ -149,7 +161,7 @@ pip install -r requirements-server.txt
 python -m Pytre_Server --help
 ```
 
-On first start the master password of the settings database is asked in the terminal and stored in the system keyring (`--show-master-key`, `--set-master-key` and `--delete-master-key` manage it afterwards). The web administration is available at `/admin`; the first admin account can only be created from the server itself (localhost).
+On first start the master password of the settings database is asked in the terminal and stored in the system keyring (`--show-master-key`, `--set-master-key` and `--delete-master-key` manage it afterwards). The web administration is available at `/admin`; the first admin account can only be created from the server itself (localhost). Behind a reverse proxy, see [Server security](#server-security).
 
 ### Queries
 

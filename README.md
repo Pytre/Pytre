@@ -16,6 +16,7 @@ I am not looking for contributions but if you have any questions I would be happ
 - [Download](#download)
 - [Enterprise deployment](#enterprise-deployment): MSI, zip, update policy
 - [Server security](#server-security): reverse proxy, how queries are run, web administration
+- [Server options](#server-options)
 - [Setup from source](#setup-from-source)
 - [License](#license)
 
@@ -133,6 +134,31 @@ The web administration is served at `/admin`, by the same process and on the sam
 - Queries are files in the server's queries folder: the web administration lists them, reloads them from disk, and can exempt one from the version check for a limited time.
 - An admin can reveal, replace or delete the master password of the settings database stored in the keyring, and re-encrypt the database with a new one, only from the server itself (e.g. `http://127.0.0.1:8000/admin`, or through an SSH tunnel): requests through a reverse proxy are refused. Each of these actions is logged as a warning.
 
+## Server options
+
+The same options apply to `Pytre_Server.exe` and `python -m Pytre_Server`, `--help` lists them.
+
+| Option | Default | Description |
+|---|---|---|
+| `--host` | `127.0.0.1` | Address to listen on, `0.0.0.0` for every interface. Keep the default when the reverse proxy runs on the server itself |
+| `--port` | `8000` | Port to listen on |
+| `--forwarded-allow-ips` | `127.0.0.1`, or `$FORWARDED_ALLOW_IPS` | Comma-separated addresses of the reverse proxies whose `X-Forwarded-*` headers are trusted. Never `*` unless the server can only be reached through the proxy |
+| `--chunk-size` | `2000` | Rows sent per chunk of a query result |
+| `--db-pool-size` | `30` | Maximum number of queries running at once on each SQL server |
+| `--max-concurrency-per-user` | `4` | Maximum number of requests running at once for each user |
+| `--heartbeat-secs` | `30` | Seconds between keep-alive pings while a query runs, `0` to disable them |
+| `--log-file` | none | File the logs are written to, also used to refill the web administration logs at startup |
+| `--log-buffer-mb` | `5` | Size of the logs kept in memory for the web administration, in MB |
+
+Maintenance commands, run one at a time without starting the server:
+
+| Command | Description |
+|---|---|
+| `--hash-password` | Prompts for a password and prints its hash |
+| `--show-master-key` | Prints the master password stored in the system keyring |
+| `--set-master-key` | Prompts for a new master password and stores it in the system keyring |
+| `--delete-master-key` | Deletes the master password from the system keyring |
+
 ## Setup from source
 
 Requires Python 3.14 or later (tested with 3.14).
@@ -161,7 +187,7 @@ pip install -r requirements-server.txt
 python -m Pytre_Server --help
 ```
 
-On first start the master password of the settings database is asked in the terminal and stored in the system keyring (`--show-master-key`, `--set-master-key` and `--delete-master-key` manage it afterwards). The web administration is available at `/admin`; the first admin account can only be created from the server itself (localhost). Behind a reverse proxy, see [Server security](#server-security).
+On first start the master password of the settings database is asked in the terminal and stored in the system keyring (see [Server options](#server-options) to manage it afterwards). The web administration is available at `/admin`; the first admin account can only be created from the server itself (localhost). Behind a reverse proxy, see [Server security](#server-security).
 
 ### Queries
 

@@ -2,9 +2,11 @@
 Tests for Pytre_Server/__main__.py
 """
 
-from unittest.mock import Mock
-
+import argparse
 import logging
+import re
+from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 
@@ -318,3 +320,46 @@ def test_main_dispatches_to_hash_password_flag_and_skips_server_start(monkeypatc
 
     assert not start.called
 
+
+# ================================================================================
+# Consistency with the README
+# ================================================================================
+
+README_FILE = Path(__file__).resolve().parents[3] / "README.md"
+
+
+def readme_server_options() -> dict[str, list[str]]:
+    """Rows of the tables of the README "Server options" section: option -> its other cells"""
+    readme = README_FILE.read_text(encoding="utf-8")
+    section = readme.split("\n## Server options\n", 1)[1].split("\n## ", 1)[0]
+
+    rows: dict[str, list[str]] = {}
+    for line in section.splitlines():
+        match = re.match(r"^\| `(--[\w-]+)` \|(.*)\|$", line.strip())
+        if match:
+            rows[match[1]] = [cell.strip() for cell in match[2].split("|")]
+    return rows
+
+
+def parser_options() -> dict[str, argparse.Action]:
+    return {
+        option: action
+        for action in create_parser()._actions
+        for option in action.option_strings
+        if option.startswith("--") and option != "--help"
+    }
+
+
+@pytest.mark.unit
+def test_readme_lists_every_server_option_and_no_other():
+    assert set(readme_server_options()) == set(parser_options())
+
+
+@pytest.mark.unit
+def test_readme_gives_the_default_value_of_the_server_options():
+    """Commands have no default, and a None default is computed elsewhere (uvicorn's for --forwarded-allow-ips)"""
+    rows = readme_server_options()
+
+    for option, action in parser_options().items():
+        if action.default not in (None, False):
+            assert rows[option][0] == f"`{action.default}`", option

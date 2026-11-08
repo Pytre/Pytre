@@ -140,9 +140,10 @@ def test_workflow_builds_the_installer_from_its_file(workflow_text):
 
 
 def test_release_publishes_attests_and_checksums_the_client_installer(workflow_text):
-    """The MSI is verified like the executables and the zip"""
+    """The MSI is verified like the executables and the zip - the upload of each build is checked in
+    tests/unit/test_build_workflow.py"""
     checksums_line = next(line for line in workflow_text.splitlines() if "> SHA256SUMS.txt" in line)
 
     assert "dist/*.msi" in workflow_text
     assert "*.msi" in checksums_line
-    assert workflow_text.count("dist/${{ matrix.name }}_*.msi") == 2  # build artifact and attestation
+    assert "dist/${{ matrix.name }}_*.msi" in workflow_text  # attestation

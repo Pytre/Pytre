@@ -85,6 +85,9 @@ jobs:
     defaults:
       run:
         shell: bash
+    env:
+      # MSI for stable releases only, as MSI versions can't tell pre-releases apart - a manual run builds one to test it
+      BUILD_MSI: ${{ matrix.name == 'Pytre_Client' && (needs.version.outputs.prerelease == 'false' || github.event_name == 'workflow_dispatch') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -110,14 +113,16 @@ jobs:
 
       # Tag "v.2.0.0-alpha" -> Pytre_Client_2.0.0-alpha.exe ; manual run on a branch -> Pytre_Client_dev.exe
       - name: Add version to executable name
+        id: asset
         run: |
           version="${GITHUB_REF_NAME#v}"
           version="${version#.}"
           version="${version//\//-}"
           mv "dist/${{ matrix.name }}.exe" "dist/${{ matrix.name }}_${version}.exe"
           echo "ASSET_VERSION=${version}" >> "$GITHUB_ENV"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
 
-      # Folder build for managed deployments, never updates itself - zipped with its Pytre_Client/ root folder
+      # Folder build, updated by the client itself or by a deployment - zipped with its Pytre_Client/ root folder
       - name: Build client folder and zip it
         if: matrix.name == 'Pytre_Client'
         run: |
@@ -132,9 +137,8 @@ jobs:
         env:
           NAME: ${{ matrix.name }}
 
-      # Stable releases only, as MSI versions can't tell pre-releases apart - a manual run builds one to test it
       - name: Build client installer
-        if: matrix.name == 'Pytre_Client' && (needs.version.outputs.prerelease == 'false' || github.event_name == 'workflow_dispatch')
+        if: env.BUILD_MSI == 'true'
         shell: pwsh
         run: |
           $PSNativeCommandUseErrorActionPreference = $true
@@ -150,7 +154,7 @@ jobs:
 
       # The runner is an administrator: install and uninstall for real
       - name: Test client installer
-        if: matrix.name == 'Pytre_Client' && (needs.version.outputs.prerelease == 'false' || github.event_name == 'workflow_dispatch')
+        if: env.BUILD_MSI == 'true'
         shell: pwsh
         run: |
           $msi = (Resolve-Path "dist\Pytre_Client_$env:ASSET_VERSION.msi").Path
@@ -170,13 +174,28 @@ jobs:
           path: msi_*.log
           if-no-files-found: ignore
 
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      # One artifact per file, named after it and downloadable as is (no archive around it)
+      - name: Upload executable
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: ${{ matrix.name }}
-          path: |
-            dist/${{ matrix.name }}_*.exe
-            dist/${{ matrix.name }}_*.zip
-            dist/${{ matrix.name }}_*.msi
+          path: dist/${{ matrix.name }}_${{ steps.asset.outputs.version }}.exe
+          archive: false
+          if-no-files-found: error
+
+      - name: Upload client folder zip
+        if: matrix.name == 'Pytre_Client'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          path: dist/${{ matrix.name }}_${{ steps.asset.outputs.version }}.zip
+          archive: false
+          if-no-files-found: error
+
+      - name: Upload client installer
+        if: env.BUILD_MSI == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          path: dist/${{ matrix.name }}_${{ steps.asset.outputs.version }}.msi
+          archive: false
           if-no-files-found: error
 
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
@@ -187,8 +206,40 @@ jobs:
             dist/${{ matrix.name }}_*.zip
             dist/${{ matrix.name }}_*.msi
 
+  checksums:
+    name: Checksums
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: dist
+          pattern: "Pytre_*"
+          merge-multiple: true
+          skip-decompress: true  # the client zip is an artifact of its own: keep it as is
+
+      # Artifacts uploaded without archive may land in a subfolder of their own: bring every file to dist/
+      - name: Gather files
+        run: |
+          find dist -mindepth 2 -type f -exec mv -t dist {} +
+          find dist -mindepth 1 -type d -empty -delete
+          ls -l dist
+
+      - name: Compute checksums
+        run: |
+          shopt -s nullglob
+          cd dist && sha256sum *.exe *.zip *.msi > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          path: dist/SHA256SUMS.txt
+          archive: false
+          if-no-files-found: error
+
   release:
-    needs: [version, build]
+    needs: [version, checksums]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -199,11 +250,14 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+          skip-decompress: true  # the client zip is an artifact of its own: keep it as is
 
-      - name: Compute checksums
+      # The files and SHA256SUMS.txt of the checksums job, gathered the same way
+      - name: Gather files
         run: |
-          shopt -s nullglob
-          cd dist && sha256sum *.exe *.zip *.msi > SHA256SUMS.txt
+          find dist -mindepth 2 -type f -exec mv -t dist {} +
+          find dist -mindepth 1 -type d -empty -delete
+          ls -l dist
 
       - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         id: release

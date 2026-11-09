@@ -1,24 +1,80 @@
 """
-Shared fixtures/helpers for faking an OIDC identity provider in integration tests - used by both
-the admin webui's own SSO login (test_admin_auth.py) and the desktop client's mediated-mode SSO
-login (test_client_sso.py). Both fake the IdP the same way (discovery/JWKS via a MockTransport,
-code exchange via a fake AsyncOAuth2Client) - the protocol pieces already have their own dedicated
-coverage (tests/unit/core/test_oidc_client.py, tests/unit/server/test_oidc.py).
+Shared fixtures/helpers for the route integration tests.
+
+Most of them fake an OIDC identity provider - used by both the admin webui's own SSO login
+(test_admin_auth.py) and the desktop client's mediated-mode SSO login (test_client_sso.py). Both fake
+the IdP the same way (discovery/JWKS via a MockTransport, code exchange via a fake AsyncOAuth2Client) -
+the protocol pieces already have their own dedicated coverage (tests/unit/core/test_oidc_client.py,
+tests/unit/server/test_oidc.py).
 """
 
+import asyncio
 import json
 import time
+from collections.abc import Generator
+from contextlib import contextmanager
+from typing import cast
 from urllib.parse import parse_qs, urlparse
 
+from fastapi import FastAPI
 import httpx2
 import jwt
 import pytest
 from authlib.integrations.httpx_client import AsyncOAuth2Client
+from fastapi.testclient import TestClient
 from cryptography.hazmat.primitives.asymmetric import rsa
 from jwt.algorithms import RSAAlgorithm
 
 from Pytre_Core.oidc_providers import OidcProvider
 from Pytre_Core.users import AuthType, User
+from Pytre_Server.server_state import PASSWORD_MAX_CONCURRENT_CHECKS, ServerResources
+
+
+@contextmanager
+def every_password_slot_taken(resources: ServerResources, monkeypatch: pytest.MonkeyPatch) -> Generator[None]:
+    """Holds every password check slot, as if PASSWORD_MAX_CONCURRENT_CHECKS checks were running - used by the
+    /login and /admin/login tests. The wait for a free slot is shortened so a refusal comes fast.
+    Only one request may wait on the slots: TestClient runs each request in an event loop of its own, and an
+    asyncio semaphore stays bound to the first loop a request waited in."""
+
+    async def take_every_slot() -> None:
+        for _ in range(PASSWORD_MAX_CONCURRENT_CHECKS):
+            await resources.password_semaphore.acquire()  # never waits: the slots are free
+
+    monkeypatch.setattr("Pytre_Server.server_state.PASSWORD_CHECK_WAIT_SECS", 0.05)
+    asyncio.run(take_every_slot())
+    try:
+        yield
+    finally:
+        for _ in range(PASSWORD_MAX_CONCURRENT_CHECKS):
+            resources.password_semaphore.release()
+
+
+IP_THRESHOLD = 3  # replaces IP_MAX_ATTEMPTS in the route tests, to keep them short
+
+
+def lower_ip_threshold(client: TestClient) -> None:
+    """Throttles the client's address after IP_THRESHOLD failures instead of IP_MAX_ATTEMPTS - the threshold is
+    read when the app's ServerResources is built, so it is set on that instance."""
+    resources = cast(ServerResources, cast(FastAPI, client.app).state.server.resources)
+    resources.login_throttle.ip.max_attempts = IP_THRESHOLD
+
+
+def fail_from_one_address(client: TestClient, count: int) -> None:
+    """`count` failed /login calls from the client's address, each for another unknown username - never enough to
+    throttle a username."""
+    for i in range(count):
+        client.post("/login", json={"username": f"no-such-user-{i}", "password": "wrong-password"})
+
+
+def event_loop_is_running() -> bool:
+    """False in a worker thread - lets a spy tell whether a blocking call was kept off the event loop."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return False
+    return True
+
 
 SSO_ISSUER = "https://idp.example.com"
 SSO_CLIENT_ID = "pytre-client"

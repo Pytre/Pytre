@@ -3,16 +3,18 @@ Tests for Pytre_Server/server_state.py
 """
 
 import asyncio
+import gc
 import logging
+import threading
 import time
-from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, Mock
 
 import pytest
 
+from Pytre_Core.users import hash_password
 from Pytre_Server.server_state import (
-    LOGIN_THROTTLE_WINDOW_MINUTES,
-    MAX_LOGIN_ATTEMPTS,
+    PASSWORD_MAX_CONCURRENT_CHECKS,
+    PasswordChecksSaturated,
     ServerResources,
     ServerState,
     _DriverEntry,
@@ -63,89 +65,219 @@ def test_ignore_hash_until_defaults_to_empty(server_state):
 
 
 # ================================================================================
-# Login throttle
+# Capped password checks (verify_password_capped)
 # ================================================================================
 
-
-@pytest.mark.unit
-def test_is_login_throttled_false_when_no_attempts(server_state):
-    assert server_state.resources.is_login_throttled("alice") is False
+SHORT_WAIT_SECS = 0.05  # replaces PASSWORD_CHECK_WAIT_SECS in the tests expecting a refusal, to keep them fast
 
 
-@pytest.mark.unit
-def test_is_login_throttled_true_after_max_attempts(server_state):
-    for _ in range(MAX_LOGIN_ATTEMPTS):
-        server_state.resources.throttle_record_failing("alice")
-
-    assert server_state.resources.is_login_throttled("alice") is True
+async def _take_every_password_slot(resources: ServerResources) -> None:
+    for _ in range(PASSWORD_MAX_CONCURRENT_CHECKS):
+        await resources.password_semaphore.acquire()  # never waits: the slots are free
 
 
-@pytest.mark.unit
-def test_is_login_throttled_false_below_max_attempts(server_state):
-    for _ in range(MAX_LOGIN_ATTEMPTS - 1):
-        server_state.resources.throttle_record_failing("alice")
-
-    assert server_state.resources.is_login_throttled("alice") is False
+def _free_every_password_slot(resources: ServerResources, count: int = PASSWORD_MAX_CONCURRENT_CHECKS) -> None:
+    for _ in range(count):
+        resources.password_semaphore.release()
 
 
-@pytest.mark.unit
-def test_throttle_normalizes_username_case(server_state):
-    """A brute-force attempt shouldn't be able to dodge the limit just by varying the
-    username's case across attempts."""
-    for _ in range(MAX_LOGIN_ATTEMPTS):
-        server_state.resources.throttle_record_failing("Alice")
-
-    assert server_state.resources.is_login_throttled("ALICE") is True
-
-
-@pytest.mark.unit
-def test_throttle_reset_failings_clears_attempts(server_state):
-    for _ in range(MAX_LOGIN_ATTEMPTS):
-        server_state.resources.throttle_record_failing("alice")
-
-    server_state.resources.throttle_reset_failings("alice")
-
-    assert server_state.resources.is_login_throttled("alice") is False
+async def _free_password_slots(resources: ServerResources) -> int:
+    """Number of password check slots currently free - takes them all, then gives them back."""
+    taken = 0
+    while not resources.password_semaphore.locked():
+        await resources.password_semaphore.acquire()
+        taken += 1
+    _free_every_password_slot(resources, taken)
+    return taken
 
 
-@pytest.mark.unit
-def test_is_login_throttled_prunes_attempts_outside_the_window(server_state):
-    old_time = datetime.now(timezone.utc) - timedelta(minutes=LOGIN_THROTTLE_WINDOW_MINUTES + 1)
-    server_state.resources.throttle_failed_login["alice"] = [old_time] * MAX_LOGIN_ATTEMPTS
-
-    assert server_state.resources.is_login_throttled("alice") is False
-    assert "alice" not in server_state.resources.throttle_failed_login
+async def _wait_for_free_password_slots(resources: ServerResources, expected: int, timeout: float = 5) -> None:
+    async with asyncio.timeout(timeout):
+        while await _free_password_slots(resources) != expected:
+            await asyncio.sleep(0.01)
 
 
-@pytest.mark.unit
-def test_throttle_record_failing_logs_once_when_threshold_is_reached(server_state, caplog):
-    with caplog.at_level(logging.INFO):
-        for _ in range(MAX_LOGIN_ATTEMPTS - 1):
-            server_state.resources.throttle_record_failing("alice")
-        assert not any("throttled" in r.message for r in caplog.records)
+class _BlockingCheck:
+    """Stands in for verify_password(): every call blocks its worker thread until release() - lets a test hold
+    checks "running" for as long as it needs."""
 
-        server_state.resources.throttle_record_failing("alice")  # the exact crossing attempt
+    def __init__(self, result: bool = True, exc: BaseException | None = None) -> None:
+        self.result = result
+        self.exc = exc
+        self.running = threading.Semaphore(0)  # released once per call that started
+        self._released = threading.Event()
 
-    assert sum("throttled" in r.message for r in caplog.records) == 1
+    def __call__(self, _password: str, _password_hash: str) -> bool:
+        self.running.release()
+        self._released.wait(timeout=5)
+        if self.exc is not None:
+            raise self.exc
+        return self.result
+
+    async def wait_running(self, count: int = 1) -> None:
+        for _ in range(count):
+            assert await asyncio.to_thread(self.running.acquire, timeout=5)
+
+    def release(self) -> None:
+        self._released.set()
 
 
-@pytest.mark.unit
-def test_throttle_record_failing_does_not_relog_past_the_threshold(server_state, caplog):
-    """Regression guard: logging inside is_login_throttled() (>=) instead of here (==) would fire
-    again on every call once past the threshold, even though in normal use the login routes never
-    call throttle_record_failing() again once a user is already throttled."""
-    with caplog.at_level(logging.INFO):
-        for _ in range(MAX_LOGIN_ATTEMPTS):
-            server_state.resources.throttle_record_failing("alice")
-        server_state.resources.throttle_record_failing("alice")  # simulates a misuse past the threshold
-
-    assert sum("throttled" in r.message for r in caplog.records) == 1
+@pytest.mark.anyio
+async def test_verify_password_capped_accepts_the_right_password(server_state):
+    assert await server_state.resources.verify_password_capped("s3cret", hash_password("s3cret")) is True
 
 
-@pytest.mark.unit
-def test_different_usernames_have_independent_throttles(server_state):
-    for _ in range(MAX_LOGIN_ATTEMPTS):
-        server_state.resources.throttle_record_failing("alice")
+@pytest.mark.anyio
+async def test_verify_password_capped_rejects_a_wrong_password(server_state):
+    assert await server_state.resources.verify_password_capped("wrong", hash_password("s3cret")) is False
+
+
+@pytest.mark.anyio
+async def test_verify_password_capped_checks_outside_the_event_loop(server_state, monkeypatch):
+    loop_running_during_check: list[bool] = []
+
+    def spy(_password: str, _password_hash: str) -> bool:
+        try:
+            asyncio.get_running_loop()
+            loop_running_during_check.append(True)
+        except RuntimeError:
+            loop_running_during_check.append(False)
+        return True
+
+    monkeypatch.setattr("Pytre_Server.server_state.verify_password", spy)
+
+    await server_state.resources.verify_password_capped("s3cret", "some-hash")
+
+    assert loop_running_during_check == [False]
+
+
+@pytest.mark.anyio
+async def test_verify_password_capped_refuses_without_checking_when_no_slot_is_freed_in_time(
+    server_state, monkeypatch
+):
+    resources = server_state.resources
+    fake_verify = Mock(return_value=True)
+    monkeypatch.setattr("Pytre_Server.server_state.verify_password", fake_verify)
+    monkeypatch.setattr("Pytre_Server.server_state.PASSWORD_CHECK_WAIT_SECS", SHORT_WAIT_SECS)
+
+    await _take_every_password_slot(resources)
+    try:
+        with pytest.raises(PasswordChecksSaturated):
+            await resources.verify_password_capped("s3cret", "some-hash")
+    finally:
+        _free_every_password_slot(resources)
+
+    fake_verify.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_verify_password_capped_waits_for_a_slot_freed_in_time(server_state, monkeypatch):
+    """The wait spares a refusal to a login arriving while the other checks finish."""
+    resources = server_state.resources
+    monkeypatch.setattr("Pytre_Server.server_state.verify_password", Mock(return_value=True))
+
+    await _take_every_password_slot(resources)
+    asyncio.get_running_loop().call_later(0.05, resources.password_semaphore.release)  # one check over, soon
+    try:
+        assert await resources.verify_password_capped("s3cret", "some-hash") is True
+    finally:
+        _free_every_password_slot(resources, PASSWORD_MAX_CONCURRENT_CHECKS - 1)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("outcome", [True, False], ids=["success", "failure"])
+async def test_verify_password_capped_frees_its_slot_once_done(server_state, monkeypatch, outcome):
+    monkeypatch.setattr("Pytre_Server.server_state.verify_password", Mock(return_value=outcome))
+
+    assert await server_state.resources.verify_password_capped("s3cret", "some-hash") is outcome
+
+    assert await _free_password_slots(server_state.resources) == PASSWORD_MAX_CONCURRENT_CHECKS
+
+
+@pytest.mark.anyio
+async def test_verify_password_capped_frees_its_slot_when_the_check_raises(server_state, monkeypatch):
+    monkeypatch.setattr("Pytre_Server.server_state.verify_password", Mock(side_effect=RuntimeError("boom")))
+
+    with pytest.raises(RuntimeError):
+        await server_state.resources.verify_password_capped("s3cret", "some-hash")
+
+    assert await _free_password_slots(server_state.resources) == PASSWORD_MAX_CONCURRENT_CHECKS
+
+
+@pytest.mark.anyio
+async def test_verify_password_capped_never_runs_more_checks_at_once_than_the_cap(server_state, monkeypatch):
+    """Checks still running hold their slot: one more call waits, then is refused."""
+    resources = server_state.resources
+    blocking_check = _BlockingCheck()
+    monkeypatch.setattr("Pytre_Server.server_state.verify_password", blocking_check)
+    monkeypatch.setattr("Pytre_Server.server_state.PASSWORD_CHECK_WAIT_SECS", SHORT_WAIT_SECS)
+
+    calls = [
+        asyncio.create_task(resources.verify_password_capped("s3cret", "some-hash"))
+        for _ in range(PASSWORD_MAX_CONCURRENT_CHECKS)
+    ]
+    try:
+        await blocking_check.wait_running(PASSWORD_MAX_CONCURRENT_CHECKS)
+
+        with pytest.raises(PasswordChecksSaturated):
+            await resources.verify_password_capped("s3cret", "some-hash")
+    finally:
+        blocking_check.release()
+
+    assert await asyncio.gather(*calls) == [True] * PASSWORD_MAX_CONCURRENT_CHECKS
+    assert await _free_password_slots(resources) == PASSWORD_MAX_CONCURRENT_CHECKS
+
+
+@pytest.mark.anyio
+async def test_verify_password_capped_keeps_the_slot_of_a_cancelled_caller_until_the_check_is_over(
+    server_state, monkeypatch
+):
+    """A client disconnecting can't free a slot while its check still runs - the cap would be exceeded."""
+    resources = server_state.resources
+    blocking_check = _BlockingCheck()
+    monkeypatch.setattr("Pytre_Server.server_state.verify_password", blocking_check)
+
+    caller = asyncio.create_task(resources.verify_password_capped("s3cret", "some-hash"))
+    await blocking_check.wait_running()
+
+    caller.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await caller
+
+    assert await _free_password_slots(resources) == PASSWORD_MAX_CONCURRENT_CHECKS - 1  # still held
+
+    blocking_check.release()
+    await _wait_for_free_password_slots(resources, PASSWORD_MAX_CONCURRENT_CHECKS)
+
+
+@pytest.mark.anyio
+async def test_verify_password_capped_retrieves_the_error_of_a_check_nobody_waits_for(server_state, monkeypatch):
+    """A check raising after its caller was cancelled must not log "Task exception was never retrieved"."""
+    resources = server_state.resources
+    blocking_check = _BlockingCheck(exc=RuntimeError("boom"))
+    monkeypatch.setattr("Pytre_Server.server_state.verify_password", blocking_check)
+
+    loop = asyncio.get_running_loop()
+    loop_errors: list[dict] = []
+    previous_handler = loop.get_exception_handler()
+    loop.set_exception_handler(lambda _loop, context: loop_errors.append(context))
+    try:
+        caller = asyncio.create_task(resources.verify_password_capped("s3cret", "some-hash"))
+        await blocking_check.wait_running()
+        caller.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await caller
+
+        blocking_check.release()
+        await _wait_for_free_password_slots(resources, PASSWORD_MAX_CONCURRENT_CHECKS)
+
+        del caller
+        gc.collect()  # an unretrieved exception is only logged once its task is garbage collected
+        await asyncio.sleep(0)
+    finally:
+        loop.set_exception_handler(previous_handler)
+
+    assert loop_errors == []
 
 
 # ================================================================================

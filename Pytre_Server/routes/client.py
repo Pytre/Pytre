@@ -14,7 +14,7 @@ from Pytre_Core.context import UserContext
 from Pytre_Core.logs_central import ExecutionLogEntry
 from Pytre_Core.servers import filter_servers
 from Pytre_Core.remote_protocol import stream_error
-from Pytre_Core.users import AuthType, hash_password, verify_password
+from Pytre_Core.users import AuthType, hash_password
 from Pytre_Core.user_prefs import DisplayFormat
 from Pytre_Core.utils import log as _log
 from Pytre_Core.sql_query.loader import build_queries_from_parsers, filter_queries
@@ -24,7 +24,13 @@ from Pytre_Core.sql_query.query_drivers_server import AsyncSqlConnectionError, A
 from Pytre_Server.auth_token import create_token, decode_token, TokenType
 from Pytre_Server.oidc import OidcReverifyError, verify_still_active
 from Pytre_Server.result_streaming import ClientDisconnected, DisconnectAware, pings, stream_result_ndjson
-from Pytre_Server.server_state import ServerResources, ServerState, get_server_state
+from Pytre_Server.server_state import (
+    PasswordChecksSaturated,
+    ServerResources,
+    ServerState,
+    client_host,
+    get_server_state,
+)
 from Pytre_Server.routes.client_sso import router as client_sso_router
 
 
@@ -155,26 +161,38 @@ async def auth_methods(state: ServerState = Depends(get_server_state)) -> AuthMe
 
 
 @router.post("/login")
-async def login(request: LoginRequest, state: ServerState = Depends(get_server_state)) -> LoginResponse:
+async def login(
+    request: LoginRequest, http_request: Request, state: ServerState = Depends(get_server_state)
+) -> LoginResponse:
     """Authenticate with a username/password, return a token usable as a Bearer token on refresh route.
     Always the same generic error on failure - don't reveal whether the username exists,
-    to avoid account enumeration (by response content or timing)."""
+    to avoid account enumeration (by response content or timing).
+    Failed logins are throttled per username and per client address, the latter shared with /admin/login.
+    The password check runs in a worker thread so the event loop stays free, and is capped server-wide: 429 when no
+    check slot is freed in time."""
     resources: ServerResources = state.resources
+    host = client_host(http_request)
 
-    if resources.is_login_throttled(request.username):
+    if resources.login_throttle.is_throttled(request.username, host):
         http_error = status.HTTP_429_TOO_MANY_REQUESTS
         raise HTTPException(status_code=http_error, detail="Too many attempts, try again later")
 
     user = UserContext(state.app_ctx.users, username=request.username).user
     is_basic_existing_user = user.exists and user.auth_type == AuthType.BASIC
-    password_ok = verify_password(request.password, user.password_hash if is_basic_existing_user else "")
+    password_hash = user.password_hash if is_basic_existing_user else ""
+
+    try:
+        password_ok = await resources.verify_password_capped(request.password, password_hash)
+    except PasswordChecksSaturated:
+        http_error = status.HTTP_429_TOO_MANY_REQUESTS
+        raise HTTPException(status_code=http_error, detail="Too many attempts, try again later")
 
     if not is_basic_existing_user or not password_ok:
-        resources.throttle_record_failing(request.username)
+        resources.login_throttle.record_failure(request.username, host)
         http_error = status.HTTP_401_UNAUTHORIZED
         raise HTTPException(status_code=http_error, detail="Invalid username or password")
 
-    resources.throttle_reset_failings(request.username)
+    resources.login_throttle.record_success(request.username, host)
     return LoginResponse(
         refresh_token=create_token(user.username, state.app_ctx.settings.jwt_secret, TokenType.REFRESH),
         access_token=create_token(user.username, state.app_ctx.settings.jwt_secret, TokenType.ACCESS),
@@ -221,8 +239,8 @@ async def change_password(
     to authenticate this call becomes invalid after new password_hash is set."""
 
     user = UserContext(state.app_ctx.users, username=username).user
-    user.password_hash = hash_password(request.new_password)
-    user.save()
+    user.password_hash = await asyncio.to_thread(hash_password, request.new_password)
+    await asyncio.to_thread(user.save)
 
     return ChangePasswordResponse(
         refresh_token=create_token(username, state.app_ctx.settings.jwt_secret, TokenType.REFRESH),

@@ -116,6 +116,8 @@ proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
 proxy_set_header X-Forwarded-Proto $scheme;
 ```
 
+The proxy must also be listed in `--forwarded-allow-ips`. Failed sign-ins are counted per client address, and without it every request seems to come from the proxy: a few failed sign-ins would then block signing in for everyone.
+
 The web administration (`/admin`) shares its port with the client API: the proxy can also restrict `/admin` to the networks admins work from.
 
 ### Running queries
@@ -137,7 +139,7 @@ Database credentials stay on the server: a client only ever gets the identifier 
 The web administration is served at `/admin`, by the same process and on the same port as the client API. Opening the server's address in a browser redirects to it.
 
 - Only admin users can sign in, with their password or through SSO. The first admin account can only be created from the server itself (localhost).
-- Repeated failed sign-ins are throttled, and each failure is logged.
+- Repeated failed sign-ins are throttled per account and per client address (shared with the client API).
 - A session ends after 1 hour of inactivity and after 8 hours in any case, or as soon as the user loses admin rights or changes their password.
 - Queries are files in the server's queries folder: the web administration lists them, reloads them from disk, and can exempt one from the version check for a limited time.
 - An admin can reveal, replace or delete the master password of the settings database stored in the keyring, and re-encrypt the database with a new one, only from the server itself (e.g. `http://127.0.0.1:8000/admin`, or through an SSH tunnel): requests through a reverse proxy are refused. Each of these actions is logged as a warning.

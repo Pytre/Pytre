@@ -9,12 +9,18 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from starlette.middleware.base import RequestResponseEndpoint
 
 from Pytre_Core.context import UserContext
-from Pytre_Core.users import AuthType, User, hash_password, verify_password
+from Pytre_Core.users import AuthType, User, hash_password
 from Pytre_Core.utils import log as _log
 
 from Pytre_Server.auth_token import JWT_ALGORITHM, TokenType, create_token, decode_token
 from Pytre_Server.oidc import OidcLoginError, handle_callback, start_login
-from Pytre_Server.server_state import ServerResources, ServerState, get_server_state
+from Pytre_Server.server_state import (
+    PasswordChecksSaturated,
+    ServerResources,
+    ServerState,
+    client_host,
+    get_server_state,
+)
 from Pytre_Server.templating import templates
 
 
@@ -232,7 +238,7 @@ def admin_login_form(
 
 
 @router.post("/login", response_class=HTMLResponse, response_model=None)
-def admin_login_submit(
+async def admin_login_submit(
     request: Request,
     state: ServerState = Depends(get_server_state),
     username: str = Form(...),
@@ -240,8 +246,9 @@ def admin_login_submit(
     next: str = Form(""),
 ) -> HTMLResponse | RedirectResponse:
     resources: ServerResources = state.resources
+    host = client_host(request)
 
-    if resources.is_login_throttled(username):
+    if resources.login_throttle.is_throttled(username, host):
         context = {"error": "Too many attempts, try again later", "next": next}
         return templates.TemplateResponse(
             request, "admin/login.html", context, status_code=status.HTTP_429_TOO_MANY_REQUESTS
@@ -249,17 +256,24 @@ def admin_login_submit(
 
     user = UserContext(state.app_ctx.users, username=username).user
     is_valid_admin = user.exists and user.auth_type == AuthType.BASIC and user.admin
-    password_ok = verify_password(password, user.password_hash if is_valid_admin else "")
+
+    try:
+        password_ok = await resources.verify_password_capped(password, user.password_hash if is_valid_admin else "")
+    except PasswordChecksSaturated:
+        context = {"error": "Too many attempts, try again later", "next": next}
+        return templates.TemplateResponse(
+            request, "admin/login.html", context, status_code=status.HTTP_429_TOO_MANY_REQUESTS
+        )
 
     if not is_valid_admin or not password_ok:
-        resources.throttle_record_failing(username)
+        resources.login_throttle.record_failure(username, host)
         log(f"Failed admin login attempt for '{username}'", logging.WARNING)
         context = {"error": "Invalid username or password", "next": next}
         return templates.TemplateResponse(
             request, "admin/login.html", context, status_code=status.HTTP_401_UNAUTHORIZED
         )
 
-    resources.throttle_reset_failings(username)
+    resources.login_throttle.record_success(username, host)
     log(f"Admin '{user.username}' logged in", logging.INFO)
 
     response = RedirectResponse(_safe_next(next), status_code=status.HTTP_303_SEE_OTHER)

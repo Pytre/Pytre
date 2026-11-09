@@ -11,8 +11,10 @@ import time
 import pytest
 
 from Pytre_Core.context import AppContext
+from Pytre_Core.users import User, hash_password
 from Pytre_Server.auth_token import TokenType, create_token
 from tests.integration.conftest import TEST_DB_PASSWORD, TEST_USER_PASSWORD, TEST_USERNAME
+from tests.integration.routes.conftest import event_loop_is_running
 
 pytestmark = pytest.mark.integration
 
@@ -101,3 +103,28 @@ def test_cannot_login_with_old_password_after_change(isolated_client):
     response = isolated_client.post("/login", json={"username": TEST_USERNAME, "password": TEST_USER_PASSWORD})
 
     assert response.status_code == 401
+
+
+def test_change_password_hashes_and_saves_outside_the_event_loop(isolated_client, monkeypatch):
+    """Argon2 and the KeePass save are blocking: run on the event loop, they would freeze every other request."""
+    token = _login(isolated_client)
+    headers = {"Authorization": f"Bearer {token}"}
+    loop_running: dict[str, bool] = {}
+
+    def spy_hash(password: str) -> str:
+        loop_running["hash"] = event_loop_is_running()
+        return hash_password(password)
+
+    real_save = User.save
+
+    def spy_save(self, save_db: bool = True) -> None:
+        loop_running["save"] = event_loop_is_running()
+        real_save(self, save_db)
+
+    monkeypatch.setattr("Pytre_Server.routes.client.hash_password", spy_hash)
+    monkeypatch.setattr(User, "save", spy_save)
+
+    response = isolated_client.post("/change-password", json={"new_password": "a-new-password"}, headers=headers)
+
+    assert response.status_code == 200
+    assert loop_running == {"hash": False, "save": False}

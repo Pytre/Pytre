@@ -4,7 +4,7 @@ import time
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from typing import Protocol
 
 from fastapi import Request
@@ -13,15 +13,17 @@ from Pytre_Core.context import AppContext
 from Pytre_Core.logs_central import ServerDriven
 from Pytre_Core.oidc_client import OidcClient, new_token
 from Pytre_Core.servers import Server
+from Pytre_Core.users import verify_password
 from Pytre_Core.utils import log as _log
 from Pytre_Core.sql_query.query_drivers_server import AsyncSqlDriver, get_driver
 
 from Pytre_Server.log_buffer import LogBufferHandler
+from Pytre_Server.login_throttle import LoginThrottle
 from Pytre_Server.query_catalog import QueryCatalog
 
 
-MAX_LOGIN_ATTEMPTS = 5
-LOGIN_THROTTLE_WINDOW_MINUTES = 15
+PASSWORD_MAX_CONCURRENT_CHECKS = 2  # each Argon2 check takes 64 MiB and ~4 CPU cores: bounds both during a login flood
+PASSWORD_CHECK_WAIT_SECS = 0.5  # wait for a free slot (a few checks duration, even on a small server) before refusing
 
 OIDC_PENDING_TTL_SECS = 600  # long enough for a slow IdP, short enough to bound memory
 OIDC_PENDING_MAX = 200  # hard cap to avoid to grow unbounded - new entry replace older one
@@ -32,6 +34,10 @@ CLIENT_CODE_PENDING_MAX = 200  # hard cap to avoid to grow unbounded - new entry
 
 def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__) -> None:
     _log(msg, level=level, sublogger=sublogger)
+
+
+class PasswordChecksSaturated(Exception):
+    """Raised when no password check slot was freed within PASSWORD_CHECK_WAIT_SECS."""
 
 
 @dataclass(slots=True)
@@ -81,7 +87,10 @@ class ServerResources:
     db_pool_size: int = 30  # concurrent queries each driver can run on its SQL server
 
     user_semaphores: dict[str, asyncio.Semaphore] = field(default_factory=dict)
-    throttle_failed_login: dict[str, list[datetime]] = field(default_factory=dict)  # UTC datetime
+    login_throttle: LoginThrottle = field(default_factory=LoginThrottle)
+    password_semaphore: asyncio.BoundedSemaphore = field(
+        default_factory=lambda: asyncio.BoundedSemaphore(PASSWORD_MAX_CONCURRENT_CHECKS), repr=False
+    )
 
     execution_logs: ServerDriven | None = None
     log_buffer: LogBufferHandler | None = None
@@ -161,7 +170,7 @@ class ServerResources:
             task.cancel()
 
     # ------------------------------------------------------------------------------------------
-    # users throttling
+    # concurrency caps (executions per user and password checks)
     # ------------------------------------------------------------------------------------------
     def _get_user_semaphore(self, max_concurrency: int, username: str) -> asyncio.Semaphore:
         """Lazily creates a per-user semaphore capping concurrent /execute requests.
@@ -171,43 +180,30 @@ class ServerResources:
             self.user_semaphores[username] = asyncio.Semaphore(max_concurrency)
         return self.user_semaphores[username]
 
-    def is_login_throttled(self, username: str) -> bool:
-        """True if `username` has hit MAX_LOGIN_ATTEMPTS failures within the rolling window"""
-        return len(self._recent_failed_logins(username)) >= MAX_LOGIN_ATTEMPTS
+    async def verify_password_capped(self, password: str, password_hash: str) -> bool:
+        """verify_password() in a worker thread (Argon2 releases the GIL, the event loop stays free), with at most
+        PASSWORD_MAX_CONCURRENT_CHECKS running at once across the server. Waiting for a slot holds no thread.
+        The slot is released once the check is actually over, even if the caller stopped waiting for it. Raises
+        PasswordChecksSaturated, without checking anything, when no slot is freed within PASSWORD_CHECK_WAIT_SECS."""
+        try:
+            async with asyncio.timeout(PASSWORD_CHECK_WAIT_SECS):
+                await self.password_semaphore.acquire()
+        except TimeoutError:
+            msg = f"No password check slot freed within {PASSWORD_CHECK_WAIT_SECS}s"
+            raise PasswordChecksSaturated(msg) from None
 
-    def throttle_record_failing(self, username: str) -> None:
-        user_key = self.throttle_standardize_username(username)
+        def end_check(check: asyncio.Task) -> None:
+            """Releases the slot once the check is over, and retrieves its exception so that a check nobody
+            waits for anymore doesn't log "Task exception was never retrieved"."""
+            self.password_semaphore.release()
+            if not check.cancelled():
+                check.exception()
 
-        attempts = self._recent_failed_logins(username)
-        attempts.append(datetime.now(timezone.utc))
+        # no await until the release is attached: the slot can't leak
+        check = asyncio.create_task(asyncio.to_thread(verify_password, password, password_hash))
+        check.add_done_callback(end_check)
 
-        self.throttle_failed_login[user_key] = attempts
-
-        if len(attempts) == MAX_LOGIN_ATTEMPTS:
-            log(f"User '{username}' has been throttled, too many attempts", logging.INFO)
-
-    def throttle_reset_failings(self, username: str) -> None:
-        user_key = self.throttle_standardize_username(username)
-        self.throttle_failed_login.pop(user_key, None)
-
-    @staticmethod
-    def throttle_standardize_username(username: str) -> str:
-        """Standardize `username` to avoid duplicates if different case is used"""
-        return username.lower()
-
-    def _recent_failed_logins(self, username: str) -> list[datetime]:
-        """Failed attempts for `username` still inside the rolling window. Also prunes (or clears)
-        the stored list as a side effect, so callers never read stale entries."""
-        cutoff = datetime.now(timezone.utc) - timedelta(minutes=LOGIN_THROTTLE_WINDOW_MINUTES)
-        user_key = self.throttle_standardize_username(username)
-
-        recent = [a for a in self.throttle_failed_login.get(user_key, []) if a > cutoff]
-        if recent:
-            self.throttle_failed_login[user_key] = recent
-        else:
-            self.throttle_reset_failings(user_key)
-
-        return recent
+        return await asyncio.shield(check)  # a cancelled caller doesn't cancel the check, which keeps its slot
 
     # ------------------------------------------------------------------------------------------
     # OIDC pending login (webui SSO)
@@ -318,3 +314,9 @@ def get_server_state(request: Request) -> ServerState:
     """FastAPI dependency: retrieves the ServerState built by create_app() for the running app.
     Works identically for any router mounted on that app (client routes, admin routes...)."""
     return request.app.state.server
+
+
+def client_host(request: Request) -> str | None:
+    """Address of the client: the one from X-Forwarded-For when the request comes through a proxy listed in
+    --forwarded-allow-ips (uvicorn rewrites it), otherwise the one of the TCP connection."""
+    return request.client.host if request.client else None

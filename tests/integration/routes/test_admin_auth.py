@@ -24,9 +24,13 @@ from Pytre_Server.app import create_app
 from Pytre_Server.auth_token import JWT_ALGORITHM, TokenType, create_token, decode_token
 from tests.integration.conftest import TEST_DB_PASSWORD, TEST_USER_PASSWORD, TEST_USERNAME
 from tests.integration.routes.conftest import (
+    IP_THRESHOLD,
     SSO_ISSUER,
     TokenExchangeState,
+    every_password_slot_taken,
     extract_state_token,
+    fail_from_one_address,
+    lower_ip_threshold,
     make_oidc_provider,
     make_oidc_user,
 )
@@ -99,6 +103,31 @@ def test_login_throttles_after_too_many_failures(client):
     response = client.post("/admin/login", data={"username": TEST_USERNAME, "password": TEST_USER_PASSWORD})
 
     assert response.status_code == 429
+
+
+def test_login_is_refused_without_counting_a_failure_when_every_password_slot_is_taken(client, monkeypatch):
+    resources = client.app.state.server.resources
+
+    with every_password_slot_taken(resources, monkeypatch):
+        response = client.post("/admin/login", data={"username": TEST_USERNAME, "password": TEST_USER_PASSWORD})
+
+    assert response.status_code == 429
+    assert "Too many attempts, try again later" in response.text
+    assert "admin_session" not in response.headers.get("set-cookie", "")
+    assert resources.login_throttle.user.failed_login == {}
+    assert resources.login_throttle.ip.failed_login == {}
+
+
+def test_login_throttles_an_address_failing_with_many_usernames(client):
+    """The count per address is shared with /login: failures there throttle the web administration too."""
+    lower_ip_threshold(client)
+    fail_from_one_address(client, IP_THRESHOLD)
+
+    response = client.post("/admin/login", data={"username": TEST_USERNAME, "password": TEST_USER_PASSWORD})
+
+    assert response.status_code == 429
+    assert "Too many attempts, try again later" in response.text
+    assert "admin_session" not in response.headers.get("set-cookie", "")
 
 
 def test_login_failure_is_logged(client, caplog):

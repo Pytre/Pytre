@@ -726,34 +726,45 @@ class RemoteServer:
         }
 
         max_login_retry = 1
-        for i in range(max_login_retry + 1):
-            with httpx2.stream("POST", url, json=body, headers=self._auth_headers, timeout=_EXEC_TIMEOUT) as response:
-                if response.status_code == 401 and not i == max_login_retry:
-                    self.remote.login()
-                    continue
+        try:
+            for i in range(max_login_retry + 1):
+                with httpx2.stream(
+                    "POST", url, json=body, headers=self._auth_headers, timeout=_EXEC_TIMEOUT
+                ) as response:
+                    if response.status_code == 401 and not i == max_login_retry:
+                        self.remote.login()
+                        continue
 
-                try:
-                    response.raise_for_status()
-                except httpx2.HTTPStatusError as e:
-                    response.read()  # buffer the body as the connection closes as soon as `with` ends,
-                    raise RemoteHTTPStatusError(
-                        detail_from_response(e.response, str(e)), cause=e
-                    )  # after that e.response.json()/.text would raise ResponseNotRead
+                    try:
+                        response.raise_for_status()
+                    except httpx2.HTTPStatusError as e:
+                        response.read()  # buffer the body as the connection closes as soon as `with` ends,
+                        raise RemoteHTTPStatusError(
+                            detail_from_response(e.response, str(e)), cause=e
+                        )  # after that e.response.json()/.text would raise ResponseNotRead
 
-                lines = response.iter_lines()
-                first_line = next(lines, None)
-                while first_line is not None and StreamKey.PING in json.loads(first_line):
-                    first_line = next(lines, None)  # keep alive sent while the query is still running
+                    lines = response.iter_lines()
+                    first_line = next(lines, None)
+                    while first_line is not None and StreamKey.PING in json.loads(first_line):
+                        first_line = next(lines, None)  # keep alive sent while the query is still running
 
-                if first_line is None:
-                    col_names: tuple = ()
-                else:
-                    first_record = json.loads(first_line)
-                    self._raise_if_error(first_record)
-                    col_names = first_record[StreamKey.COLUMNS]
+                    if first_line is None:
+                        col_names: tuple = ()
+                    else:
+                        first_record = json.loads(first_line)
+                        self._raise_if_error(first_record)
+                        col_names = first_record[StreamKey.COLUMNS]
 
-                yield RemoteCursor(tuple(col_names), self._iter_records(lines))
-                break
+                    yield RemoteCursor(tuple(col_names), self._iter_records(lines))
+                    break
+        except httpx2.TimeoutException as e:
+            msg = f"Nothing received from {self.remote.id} for {_EXEC_TIMEOUT // 60} minutes, execution abandoned"
+            log(msg, logging.WARNING)
+            raise RemoteRequestError(msg, cause=e) from e
+        except httpx2.RequestError as e:
+            msg = f"Connection to {self.remote.id} lost during the execution : {e}"
+            log(msg, logging.WARNING)
+            raise RemoteRequestError(msg, cause=e) from e
 
     def _iter_records(self, lines: Iterator[str]) -> Generator[tuple]:
         for line in lines:

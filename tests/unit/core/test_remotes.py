@@ -2224,6 +2224,71 @@ def test_execute_raises_remote_request_error_if_relogin_fails_due_to_network(rem
             pass
 
 
+def _lines_then_raise(lines: list[str], error: Exception):
+    """Lines read from the stream, then a network failure while waiting for the next one."""
+    yield from lines
+    raise error
+
+
+@pytest.mark.unit
+def test_execute_wraps_read_timeout_while_waiting_for_columns(remote_server, monkeypatch):
+    """Nothing received before the client's timeout, e.g. pings not reaching it while the query executes."""
+    _mock_health_check_ok(monkeypatch)
+    timeout = httpx2.ReadTimeout("timed out")
+    lines = _lines_then_raise(_ndjson_lines({"__ping__": True}), timeout)
+    monkeypatch.setattr(httpx2, "stream", lambda *a, **k: _FakeStreamContext(_FakeStreamResponse(lines)))
+
+    with pytest.raises(RemoteRequestError, match="Nothing received from .* minutes") as exc_info:
+        with remote_server.execute("Q1", "hash1", DisplayFormat(), {}):
+            pytest.fail("no cursor expected without columns")
+
+    assert exc_info.value.__cause__ is timeout
+
+
+@pytest.mark.unit
+def test_execute_wraps_read_timeout_while_reading_rows(remote_server, monkeypatch):
+    """Raised by the caller's own iteration, inside its `with` block: wrapped all the same."""
+    _mock_health_check_ok(monkeypatch)
+    timeout = httpx2.ReadTimeout("timed out")
+    lines = _lines_then_raise(_ndjson_lines({"__columns__": ["id"]}, {"__row__": ["1"]}), timeout)
+    monkeypatch.setattr(httpx2, "stream", lambda *a, **k: _FakeStreamContext(_FakeStreamResponse(lines)))
+
+    collected = []
+    with pytest.raises(RemoteRequestError, match="Nothing received from") as exc_info:
+        with remote_server.execute("Q1", "hash1", DisplayFormat(), {}) as rows:
+            for row in rows:
+                collected.append(row)
+
+    assert collected == [("1",)]  # the row read before the timeout is not lost
+    assert exc_info.value.__cause__ is timeout
+
+
+@pytest.mark.unit
+def test_execute_wraps_connection_lost_while_reading_rows(remote_server, monkeypatch):
+    _mock_health_check_ok(monkeypatch)
+    error = httpx2.ReadError("connection reset")
+    lines = _lines_then_raise(_ndjson_lines({"__columns__": ["id"]}), error)
+    monkeypatch.setattr(httpx2, "stream", lambda *a, **k: _FakeStreamContext(_FakeStreamResponse(lines)))
+
+    with pytest.raises(RemoteRequestError, match="lost during the execution : connection reset") as exc_info:
+        with remote_server.execute("Q1", "hash1", DisplayFormat(), {}) as rows:
+            list(rows)
+
+    assert exc_info.value.__cause__ is error
+
+
+@pytest.mark.unit
+def test_execute_lets_errors_of_the_caller_through_unchanged(remote_server, monkeypatch):
+    """Only network errors are wrapped, not what the caller raises while handling the rows."""
+    _mock_health_check_ok(monkeypatch)
+    lines = _ndjson_lines({"__columns__": ["id"]}, {"__row__": ["1"]})
+    monkeypatch.setattr(httpx2, "stream", lambda *a, **k: _FakeStreamContext(_FakeStreamResponse(lines)))
+
+    with pytest.raises(ValueError, match="caller failure"):
+        with remote_server.execute("Q1", "hash1", DisplayFormat(), {}):
+            raise ValueError("caller failure")
+
+
 @pytest.mark.unit
 def test_remotes_default_to_the_file_of_the_user_config_folder():
     """Resolved when Remotes is built, not at import: follows the folder of the running platform"""

@@ -7,12 +7,13 @@ personal setup or docker container needed.
 from unittest.mock import Mock
 
 import pytest
-from fastapi.testclient import TestClient
 
 from Pytre_Core.users import verify_password
+from Pytre_Server.login_throttle import USER_IP_MAX_ATTEMPTS
 from tests.integration.conftest import TEST_USER_PASSWORD, TEST_USERNAME
 from tests.integration.routes.conftest import (
     IP_THRESHOLD,
+    client_from,
     event_loop_is_running,
     every_password_slot_taken,
     fail_from_one_address,
@@ -109,9 +110,7 @@ def test_login_throttles_an_address_failing_with_many_usernames(client):
 def test_login_address_throttle_spares_other_addresses(client):
     lower_ip_threshold(client)
     fail_from_one_address(client, IP_THRESHOLD)
-    other_address_client = TestClient(client.app, client=("10.0.0.2", 50000))
-
-    response = other_address_client.post(
+    response = client_from(client, "10.0.0.2").post(
         "/login", json={"username": TEST_USERNAME, "password": TEST_USER_PASSWORD}
     )
 
@@ -138,3 +137,51 @@ def test_login_address_count_is_shared_with_admin_login(client):
     response = client.post("/login", json={"username": TEST_USERNAME, "password": TEST_USER_PASSWORD})
 
     assert response.status_code == 429
+
+
+# ================================================================================
+# Abusive account lockout
+# ================================================================================
+
+CORRECT_CREDENTIALS = {"username": TEST_USERNAME, "password": TEST_USER_PASSWORD}
+WRONG_CREDENTIALS = {"username": TEST_USERNAME, "password": "wrong-password"}
+
+
+def test_login_failures_from_an_address_do_not_lock_the_account_out_of_other_addresses(client):
+    """An attacker failing on purpose only throttles the account from their own address."""
+    for _ in range(USER_IP_MAX_ATTEMPTS):
+        client.post("/login", json=WRONG_CREDENTIALS)
+
+    attacker_response = client.post("/login", json=CORRECT_CREDENTIALS)
+    victim_response = client_from(client, "10.0.0.7").post("/login", json=CORRECT_CREDENTIALS)
+
+    assert attacker_response.status_code == 429
+    assert victim_response.status_code == 200
+
+
+def test_login_account_throttled_from_every_address_stays_usable_from_a_known_address(client):
+    """The count from every address is lowered below the one from one address, so a few failures from a single
+    address are enough to reach it."""
+    client.app.state.server.resources.login_throttle.user.max_attempts = 3
+    victim = client_from(client, "10.0.0.7")
+    assert victim.post("/login", json=CORRECT_CREDENTIALS).status_code == 200  # the victim's usual address
+
+    for _ in range(3):
+        client.post("/login", json=WRONG_CREDENTIALS)
+
+    assert client_from(client, "10.0.0.8").post("/login", json=CORRECT_CREDENTIALS).status_code == 429
+    assert victim.post("/login", json=CORRECT_CREDENTIALS).status_code == 200
+
+
+def test_login_success_makes_its_address_known(client):
+    client_from(client, "10.0.0.7").post("/login", json=CORRECT_CREDENTIALS)
+
+    known_addresses = client.app.state.server.resources.login_throttle.known_addresses
+    assert known_addresses.is_known(TEST_USERNAME.lower(), "10.0.0.7") is True
+
+
+def test_login_failure_does_not_make_its_address_known(client):
+    client_from(client, "10.0.0.7").post("/login", json=WRONG_CREDENTIALS)
+
+    known_addresses = client.app.state.server.resources.login_throttle.known_addresses
+    assert known_addresses.is_known(TEST_USERNAME.lower(), "10.0.0.7") is False

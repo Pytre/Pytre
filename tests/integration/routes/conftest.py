@@ -60,6 +60,11 @@ def lower_ip_threshold(client: TestClient) -> None:
     resources.login_throttle.ip.max_attempts = IP_THRESHOLD
 
 
+def client_from(client: TestClient, host: str) -> TestClient:
+    """A client of the same app as `client`, connecting from the address `host`."""
+    return TestClient(client.app, client=(host, 50000))
+
+
 def fail_from_one_address(client: TestClient, count: int) -> None:
     """`count` failed /login calls from the client's address, each for another unknown username - never enough to
     throttle a username."""

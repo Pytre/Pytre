@@ -22,7 +22,7 @@ from Pytre_Server.login_throttle import LoginThrottle
 from Pytre_Server.query_catalog import QueryCatalog
 
 
-PASSWORD_MAX_CONCURRENT_CHECKS = 2  # each Argon2 check takes 64 MiB and ~4 CPU cores: bounds both during a login flood
+PASSWORD_MAX_CONCURRENT_CHECKS = 2  # each Argon2 check takes 64 MiB and ~4 CPU cores: bounds both in a login flood
 PASSWORD_CHECK_WAIT_SECS = 0.5  # wait for a free slot (a few checks duration, even on a small server) before refusing
 
 OIDC_PENDING_TTL_SECS = 600  # long enough for a slow IdP, short enough to bound memory
@@ -57,8 +57,8 @@ class _OidcPendingLogin:
     Single-use: popped by the callback, whether it succeeds or not."""
 
     provider_issuer: str  # re-looked-up from AppContext.oidc_providers at callback time, never a stale copy
-    nonce: str
-    code_verifier: str
+    nonce: str = field(repr=False)
+    code_verifier: str = field(repr=False)
     next_path: str  # already validated by _safe_next() before being stored
     expires_at: float  # time.monotonic()
 
@@ -74,7 +74,7 @@ class _ClientCodePending:
     expires_at: float  # time.monotonic()
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False, repr=False)
 class ServerResources:
     """Shared, mutable state that must survive a full ServerState reload
 
@@ -97,9 +97,9 @@ class ServerResources:
     ignore_hash_until: dict[str, datetime] = field(default_factory=dict)  # query_id -> until UTC datetime
 
     oidc_client: OidcClient = field(default_factory=OidcClient)
-    oidc_pending: dict[str, _OidcPendingLogin] = field(default_factory=dict)
+    oidc_pending: dict[str, _OidcPendingLogin] = field(default_factory=dict, repr=False)
 
-    client_code_pending: dict[str, _ClientCodePending] = field(default_factory=dict)
+    client_code_pending: dict[str, _ClientCodePending] = field(default_factory=dict, repr=False)
 
     # ------------------------------------------------------------------------------------------
     # driver related methods
@@ -297,7 +297,7 @@ class _PendingHelper:
             del pending_dict[key]
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class ServerState:
     """App context, catalog of available queries, and per-launch configuration.
     See ServerResources for the state a reload must not reset."""

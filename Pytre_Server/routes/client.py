@@ -200,12 +200,15 @@ async def login(
 
 
 @router.post("/refresh", response_model_exclude_none=True)
-async def refresh(request: RefreshRequest, state: ServerState = Depends(get_server_state)) -> RefreshResponse:
+async def refresh(
+    request: RefreshRequest, http_request: Request, state: ServerState = Depends(get_server_state)
+) -> RefreshResponse:
     """Authenticate with a refresh token and return a token usable as a Bearer token on other routes.
     For an OIDC user, this also periodically re-confirms with the IdP that the account is still active
     (throttled) before minting a new access token  - and, when that check just ran and succeeded, rolls
     the refresh token itself forward too. A continuously-active OIDC account never has to go through an
-    interactive browser login again."""
+    interactive browser login again.
+    A valid refresh token keeps the client address known to the account, see LoginThrottle.remember_address()."""
 
     username = username_from_token(request.refresh_token, TokenType.REFRESH, state)
 
@@ -222,6 +225,8 @@ async def refresh(request: RefreshRequest, state: ServerState = Depends(get_serv
     refresh_token = None
     if verified:
         refresh_token = create_token(username, state.app_ctx.settings.jwt_secret, TokenType.REFRESH)
+
+    state.resources.login_throttle.remember_address(username, client_host(http_request))
 
     return RefreshResponse(
         access_token=create_token(username, state.app_ctx.settings.jwt_secret, TokenType.ACCESS),

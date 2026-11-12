@@ -17,7 +17,13 @@ from Pytre_Core.context import AppContext
 from Pytre_Core.users import AuthType, OidcLink, User
 from Pytre_Server.auth_token import TokenType, create_token
 from tests.integration.conftest import TEST_DB_PASSWORD, TEST_USER_PASSWORD, TEST_USERNAME
-from tests.integration.routes.conftest import SSO_ISSUER, SSO_USERNAME, make_oidc_provider, make_oidc_user
+from tests.integration.routes.conftest import (
+    SSO_ISSUER,
+    SSO_USERNAME,
+    client_from,
+    make_oidc_provider,
+    make_oidc_user,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -35,6 +41,24 @@ def test_refresh_returns_a_new_access_token(client):
     assert response.status_code == 200
     assert response.json()["access_token"]
     assert "refresh_token" not in response.json()  # /refresh only ever mints a new access token
+
+
+def test_refresh_makes_its_address_known_to_the_account(client):
+    """A client that stays signed in only uses /refresh: its address must stay known to its account, so a lockout
+    of the account from every address doesn't reach it."""
+    refresh_token = _login(client)["refresh_token"]
+
+    response = client_from(client, "10.0.0.9").post("/refresh", json={"refresh_token": refresh_token})
+
+    assert response.status_code == 200
+    known_addresses = client.app.state.server.resources.login_throttle.known_addresses
+    assert known_addresses.is_known(TEST_USERNAME.lower(), "10.0.0.9") is True
+
+
+def test_refresh_with_an_invalid_token_does_not_make_its_address_known(client):
+    client_from(client, "10.0.0.9").post("/refresh", json={"refresh_token": "not-a-real-token"})
+
+    assert client.app.state.server.resources.login_throttle.known_addresses.addresses == {}
 
 
 def test_refresh_rejects_invalid_token(client):

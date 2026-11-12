@@ -16,7 +16,7 @@ I am not looking for contributions but if you have any questions I would be happ
 - [Queries](#queries): writing them, where they are read from
 - [Download](#download)
 - [Enterprise deployment](#enterprise-deployment): MSI, zip, update policy
-- [Server security](#server-security): reverse proxy, how queries are run, web administration
+- [Server security](#server-security): reverse proxy, sign-in throttling, how queries are run, web administration
 - [Server options](#server-options)
 - [Setup from source](#setup-from-source)
 - [License](#license)
@@ -116,9 +116,24 @@ proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
 proxy_set_header X-Forwarded-Proto $scheme;
 ```
 
-The proxy must also be listed in `--forwarded-allow-ips`. Failed sign-ins are counted per client address, and without it every request seems to come from the proxy: a few failed sign-ins would then block signing in for everyone.
+The proxy must also be listed in `--forwarded-allow-ips`. Failed sign-ins are counted per client address (see [Sign-in throttling](#sign-in-throttling)), and without it every request seems to come from the proxy: 20 failed sign-ins would then block signing in for everyone.
 
 The web administration (`/admin`) shares its port with the client API: the proxy can also restrict `/admin` to the networks admins work from.
+
+### Sign-in throttling
+
+Failed sign-ins, to the client API and to the web administration alike, are counted over the last 15 minutes. Past a threshold, sign-ins are refused (HTTP 429) without checking the password:
+
+| Counted per | Threshold | Refused |
+|---|---|---|
+| account and client address | 5 | for this account, from this address |
+| client address | 20 | for every account, from this address |
+| account | 50 | for this account, from every address except the ones it was recently used from |
+
+- A successful sign-in only resets the count of its account from its address: an attacker can't lock an account out from their own address, and a valid account doesn't restart the count of an address.
+- An account targeted from many addresses stays usable from the addresses it signed in from, or refreshed its session from, in the last 30 days.
+- At most 2 passwords are checked at once: beyond, a sign-in waits up to half a second for its turn, then is refused (HTTP 429).
+- Counts are kept in memory only and lost when the server restarts.
 
 ### Running queries
 
@@ -139,7 +154,7 @@ Database credentials stay on the server: a client only ever gets the identifier 
 The web administration is served at `/admin`, by the same process and on the same port as the client API. Opening the server's address in a browser redirects to it.
 
 - Only admin users can sign in, with their password or through SSO. The first admin account can only be created from the server itself (localhost).
-- Repeated failed sign-ins are throttled per account and per client address (shared with the client API).
+- Repeated failed sign-ins are throttled, see [Sign-in throttling](#sign-in-throttling).
 - A session ends after 1 hour of inactivity and after 8 hours in any case, or as soon as the user loses admin rights or changes their password.
 - Queries are files in the server's queries folder: the web administration lists them, reloads them from disk, and can exempt one from the version check for a limited time.
 - An admin can reveal, replace or delete the master password of the settings database stored in the keyring, and re-encrypt the database with a new one, only from the server itself (e.g. `http://127.0.0.1:8000/admin`, or through an SSH tunnel): requests through a reverse proxy are refused. Each of these actions is logged as a warning.

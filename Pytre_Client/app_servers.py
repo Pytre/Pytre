@@ -505,7 +505,7 @@ class ServersWindow(tk.Toplevel):
             ui_unlock_fn=self.unlock_ui,
             overlay_dialog_msg="Export des serveurs...",
             overlay_dialog_wait_ms=1500,
-            csv_process_fn=lambda: self.servers.csv_export(filename, overwrite=True),
+            csv_process_fn=lambda: self.servers.csv_export(filename, overwrite=True, with_passwords=True),
             end_msgbox_title="Export",
             end_msgbox_msg="Fin de l'export des serveurs",
             end_fn=None,

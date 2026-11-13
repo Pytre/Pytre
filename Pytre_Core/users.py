@@ -433,7 +433,7 @@ class Users:
             return True
 
     def csv_export(
-        self, filepath: Path | str, delimiter: str = ";", overwrite: bool = False, pwd_infos: bool = False
+        self, filepath: Path | str, delimiter: str = ";", overwrite: bool = False, with_hashes: bool = False
     ) -> bool:
         quotechar = '"'
 
@@ -450,7 +450,7 @@ class Users:
         attr_optional = [c for c in UserField if c.csv_status is _CsvStatus.OPTIONAL]
         attr_cust = self.get_cust_attribs_list()
 
-        if pwd_infos:
+        if with_hashes:
             attr_optional.append(UserField.PWD_HASH)
 
         attr_to_export = attr_std + attr_optional + attr_cust

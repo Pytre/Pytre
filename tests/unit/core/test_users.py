@@ -1016,7 +1016,9 @@ def test_user_without_users_database_cannot_be_saved_or_deleted(method):
 
 @pytest.mark.unit
 def test_create_from_remote_infos_without_users_database():
-    user = User.create_from_remote_infos(None, {"username": "alice", "display_name": "Alice", "attribs_cust": {"x": "1"}})
+    user = User.create_from_remote_infos(
+        None, {"username": "alice", "display_name": "Alice", "attribs_cust": {"x": "1"}}
+    )
 
     assert user.users is None
     assert user.username == "alice"
@@ -1794,7 +1796,7 @@ def test_csv_export_includes_password_hash_when_requested(mock_kee, tmp_path):
     users = Users(mock_kee)
     output_file = tmp_path / "export.csv"
 
-    users.csv_export(output_file, pwd_infos=True)
+    users.csv_export(output_file, with_hashes=True)
 
     lines = output_file.read_text(encoding="utf-8-sig").splitlines()
     header = lines[0].split(";")
@@ -1808,7 +1810,7 @@ def test_csv_export_includes_password_hash_when_requested(mock_kee, tmp_path):
 @pytest.mark.unit
 def test_csv_export_always_includes_auth_and_oidc_link_but_excludes_password_hash_by_default(mock_kee, tmp_path):
     """Auth and Oidc Link are _CsvStatus.OPTIONAL - always present, unlike Password Hash which is
-    _CsvStatus.PASSWORD and only ever exported when pwd_infos=True is explicitly requested."""
+    _CsvStatus.PASSWORD and only ever exported when with_hashes=True is explicitly requested."""
     entry = Mock()
     entry.username = "jdoe"
     entry.title = "John Doe"

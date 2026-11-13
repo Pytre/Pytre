@@ -16,9 +16,9 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
 
-from Pytre_Core.servers import Server, ServerType
+from Pytre_Core.servers import Server, ServerTarget, ServerType
 from Pytre_Core.utils import log as _log
-from Pytre_Server.routes.admin_auth import require_admin_session
+from Pytre_Server.routes.admin_auth import is_loopback, require_admin_session
 from Pytre_Server.server_state import ServerState, get_server_state
 from Pytre_Server.templating import templates
 
@@ -46,6 +46,15 @@ class ServerForm(BaseModel):
     trust_server_certificate: bool = False
     groups: list[str] = Field(default_factory=list)
 
+    @property
+    def server_type(self) -> str:
+        return ServerType(self.type).name if self.type in ServerType else ServerType.mssql.name
+
+    @property
+    def target(self) -> ServerTarget:
+        """The target this form would give the server, see apply_to()."""
+        return ServerTarget.of(self.server_type, self.host, self.port, self.server, self.trust_server_certificate)
+
     def apply_to(self, server: Server) -> None:
         """Copies the submitted values onto `server`."""
         server.id = self.id.strip()
@@ -53,7 +62,7 @@ class ServerForm(BaseModel):
         server.user = self.login.strip()
         if self.password:
             server.password = self.password
-        server.type = ServerType(self.type).name if self.type in ServerType else ServerType.mssql.name
+        server.type = self.server_type
         server.charset = self.charset.strip()
         server.database = self.database.strip()
         server.host = self.host.strip()
@@ -93,6 +102,7 @@ def servers_list(
     servers = state.app_ctx.servers.get_all_servers(reload=False)
     context = {
         "servers": servers,
+        "is_local": is_loopback(request),  # only to choose what message the export confirmation should show
         "msg": msg,
         "error": error,
     }
@@ -161,8 +171,21 @@ async def _save_server(
     request: Request, state: ServerState, server_obj: Server, server_form: ServerForm, admin_username: str
 ) -> HTMLResponse | RedirectResponse:
     """Applies submitted form values onto `server_obj` and saves it. Shared by create and edit -
-    `server_obj` is either a blank new Server or one just loaded via find_server_by_uuid()."""
+    `server_obj` is either a blank new Server or one just loaded via find_server_by_uuid().
+    An existing server whose target changes needs its password again: never send a stored password to a new target."""
+
+    target_changed = bool(server_obj.uuid) and server_form.target != server_obj.target  # before apply_to()
     server_form.apply_to(server_obj)
+
+    if target_changed and not server_form.password:
+        msg = f"Server '{server_obj.id}' not saved for admin '{admin_username}': target changed without its password"
+        log(msg, logging.WARNING)
+        context = _form_context(state, server_obj)
+        context["error"] = (
+            "Changing the host, port, instance or type of a server, or whether its certificate is checked, requires "
+            "entering its password again."
+        )
+        return templates.TemplateResponse(request, "admin/server_form.html", context)
 
     saved_uuid = server_obj.uuid
     try:
@@ -320,16 +343,28 @@ async def servers_import_submit(
 
 
 @router.get("/export", response_model=None)
-def servers_export(state: ServerState = Depends(get_server_state)) -> FileResponse | RedirectResponse:
+def servers_export(
+    request: Request,
+    state: ServerState = Depends(get_server_state),
+    admin_username: str = Depends(require_admin_session),
+) -> FileResponse | RedirectResponse:
+    """Passwords are only included for a request from the server itself (see is_loopback)."""
+    include_pwds = is_loopback(request)
+
     fd, tmp_path_str = tempfile.mkstemp(suffix=".csv")
     os.close(fd)
     tmp_path = Path(tmp_path_str)
 
     try:
-        state.app_ctx.servers.csv_export(tmp_path, overwrite=True)
+        state.app_ctx.servers.csv_export(tmp_path, overwrite=True, with_passwords=include_pwds)
     except Exception:
         os.unlink(tmp_path)
         return RedirectResponse(url="/admin/servers?error=Export+failed", status_code=status.HTTP_303_SEE_OTHER)
+
+    if include_pwds:
+        log(f"Servers exported with their passwords by admin '{admin_username}'", logging.WARNING)
+    else:
+        log(f"Servers exported without their passwords by admin '{admin_username}'", logging.INFO)
 
     return FileResponse(
         tmp_path,

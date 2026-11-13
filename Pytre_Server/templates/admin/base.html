@@ -799,6 +799,13 @@
             });
         }
 
+        // Asks for confirmation, then downloads `url` - for an export whose content deserves a warning
+        function pytreConfirmDownload(message, url) {
+            pytreConfirm(message).then(function (ok) {
+                if (ok) window.location.href = url;
+            });
+        }
+
         // Plain info dialog, OK-only - for showing something (a revealed value, a "not yet
         // implemented" notice...) rather than asking for a yes/no decision like pytreConfirm().
         // Clears the message text on close so a revealed secret doesn't linger in the DOM.

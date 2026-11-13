@@ -487,7 +487,7 @@ class UsersWindow(tk.Toplevel):
             ui_unlock_fn=self.unlock_ui,
             overlay_dialog_msg="Export des utilisateurs...",
             overlay_dialog_wait_ms=1500,
-            csv_process_fn=lambda: self.users.csv_export(filename, overwrite=True, pwd_infos=self.pwd_infos),
+            csv_process_fn=lambda: self.users.csv_export(filename, overwrite=True, with_hashes=self.pwd_infos),
             end_msgbox_title="Export",
             end_msgbox_msg="Fin de l'export des utilisateurs",
             end_fn=None,

@@ -11,7 +11,7 @@ import csv
 from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
 
-from Pytre_Core.servers import Server, Servers, filter_servers
+from Pytre_Core.servers import DEFAULT_PORT, Server, Servers, ServerTarget, filter_servers
 
 
 # ================================================================================
@@ -263,7 +263,10 @@ def test_csv_import_preserves_password_when_column_blank(tmp_path, mock_kee):
     existing_entry.password = "old_secret"
     existing_entry.notes = ""
     existing_entry.tags = []
-    existing_entry.get_custom_property = Mock(return_value=None)
+    # same target as the row below
+    stored_target = {"type": "MSSQL", "host": "host", "port": "1433", "server": "srv"}
+    stored_target["trust_server_certificate"] = "false"
+    existing_entry.get_custom_property = Mock(side_effect=stored_target.get)
     existing_entry.set_custom_property = Mock()
     mock_kee.grp_servers.entries = [existing_entry]
 
@@ -1411,3 +1414,241 @@ def test_load_from_entry_defaults_charset_for_postgre(mock_kee):
     assert server.charset == "UTF8"
 
 
+
+
+# ================================================================================
+# ServerTarget - where a stored password is sent to
+# ================================================================================
+
+def _target(
+    type: str = "mssql",
+    host: str = "db.example.com",
+    port: str | int = "1433",
+    server: str = "PROD",
+    trusts_certificate: bool = False,
+) -> ServerTarget:
+    """A target, every unset field set as for an mssql server on db.example.com."""
+    return ServerTarget.of(type, host, port, server, trusts_certificate)
+
+
+@pytest.mark.unit
+def test_server_target_ignores_case_and_surrounding_spaces():
+    assert _target("MSSQL ", " DB.Example.com", " 1433", "prod") == _target()
+
+
+@pytest.mark.unit
+def test_server_target_accepts_an_int_port():
+    assert _target(port=1433) == _target()
+
+
+@pytest.mark.unit
+def test_server_target_empty_port_is_the_default_one():
+    """A server stored without a port is connected to on DEFAULT_PORT, as when it is loaded."""
+    assert _target(port="") == _target(port=DEFAULT_PORT)
+
+
+@pytest.mark.unit
+def test_server_target_empty_type_is_the_default_one():
+    """A server stored without a type is connected to as an mssql one, as when it is loaded."""
+    assert _target(type="") == _target(type="mssql")
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("type", "postgre"),
+        ("host", "other.example.com"),
+        ("port", "1434"),
+        ("server", "TEST"),
+        ("trusts_certificate", True),
+    ],
+)
+def test_server_target_differs_when_any_of_its_fields_changes(field, value):
+    assert _target(**{field: value}) != _target()
+
+
+@pytest.mark.unit
+def test_server_target_differs_when_the_certificate_is_checked_again():
+    """Any change of the certificate setting requires the password, even one that makes the connection safer."""
+    assert _target(trusts_certificate=False) != _target(trusts_certificate=True)
+
+
+@pytest.mark.unit
+def test_server_target_property_matches_the_server_fields(mock_kee):
+    server = Server(Servers(mock_kee))
+    server.type, server.host, server.port, server.server = "mssql", "db.example.com", "1433", "PROD"
+    server.trust_server_certificate = False
+
+    assert server.target == _target()
+
+
+# ================================================================================
+# CSV export without passwords
+# ================================================================================
+
+
+def _export_rows(servers: Servers, tmp_path: Path, **kwargs) -> list[dict[str, str]]:
+    output_file = tmp_path / "export.csv"
+    servers.csv_export(output_file, overwrite=True, **kwargs)
+    with open(output_file, encoding="utf-8-sig", newline="") as f:
+        return list(csv.DictReader(f, delimiter=";"))
+
+
+def _stored_entry(title: str, password: str = "s3cret", **props: str) -> Mock:
+    """A KeePass server entry holding `props` as its custom properties."""
+    entry = Mock()
+    entry.title = title
+    entry.notes = ""
+    entry.username = "sa"
+    entry.password = password
+    entry.tags = []
+    stored = {"type": "mssql", "host": "db.example.com", "port": "1433", "server": ""}
+    stored.update({"trust_server_certificate": "false", **props})
+    entry.get_custom_property = Mock(side_effect=stored.get)
+    entry.set_custom_property = Mock()
+    return entry
+
+
+@pytest.mark.unit
+def test_csv_export_leaves_passwords_blank_by_default(mock_kee, tmp_path):
+    mock_kee.grp_servers.entries = [_stored_entry("SRV")]
+
+    rows = _export_rows(Servers(mock_kee), tmp_path)
+
+    assert rows[0]["Password"] == ""  # the column is kept: the file can be imported back
+    assert rows[0]["Id"] == "SRV"
+
+
+@pytest.mark.unit
+def test_csv_export_includes_passwords_when_requested(mock_kee, tmp_path):
+    mock_kee.grp_servers.entries = [_stored_entry("SRV", password="s3cret")]
+
+    rows = _export_rows(Servers(mock_kee), tmp_path, with_passwords=True)
+
+    assert rows[0]["Password"] == "s3cret"
+
+
+# ================================================================================
+# CSV import - a target change needs the password
+# ================================================================================
+
+_IMPORT_HEADERS = [
+    "id", "description", "user", "password", "grp_authorized", "type", "charset", "database", "host", "port",
+    "server", "login_timeout", "timeout", "trust_server_certificate",
+]
+
+
+def _import_file(tmp_path: Path, *rows: dict[str, str]) -> Path:
+    """A servers CSV file with `rows`, every unset column filled as for SRV on db.example.com."""
+    default = {
+        "id": "SRV", "description": "", "user": "sa", "password": "", "grp_authorized": "", "type": "mssql",
+        "charset": "", "database": "db", "host": "db.example.com", "port": "1433", "server": "",
+        "login_timeout": "60", "timeout": "300", "trust_server_certificate": "false",
+    }
+    csv_file = tmp_path / "import.csv"
+    with open(csv_file, "w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=_IMPORT_HEADERS, delimiter=";")
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({**default, **row})
+    return csv_file
+
+
+@pytest.mark.unit
+def test_csv_import_refuses_a_target_change_without_the_password(mock_kee, tmp_path):
+    entry = _stored_entry("SRV")
+    mock_kee.grp_servers.entries = [entry]
+
+    with pytest.raises(ValueError, match=r"missing on line\(s\) 2\. Nothing was imported"):
+        Servers(mock_kee).csv_import(_import_file(tmp_path, {"host": "attacker.example.com"}))
+
+    entry.set_custom_property.assert_not_called()
+    assert entry.password == "s3cret"
+    mock_kee.save_db.assert_not_called()
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "change",
+    [{"type": "postgre"}, {"port": "1434"}, {"server": "OTHER"}, {"trust_server_certificate": "true"}],
+    ids=["type", "port", "instance", "certificate"],
+)
+def test_csv_import_refuses_every_kind_of_target_change_without_the_password(mock_kee, tmp_path, change):
+    mock_kee.grp_servers.entries = [_stored_entry("SRV")]
+
+    with pytest.raises(ValueError, match="requires its password"):
+        Servers(mock_kee).csv_import(_import_file(tmp_path, change))
+
+
+@pytest.mark.unit
+def test_csv_import_accepts_a_target_change_with_the_password(mock_kee, tmp_path):
+    entry = _stored_entry("SRV")
+    mock_kee.grp_servers.entries = [entry]
+
+    Servers(mock_kee).csv_import(_import_file(tmp_path, {"host": "new.example.com", "password": "n3w"}))
+
+    assert entry.password == "n3w"
+    entry.set_custom_property.assert_any_call("host", "new.example.com")
+
+
+@pytest.mark.unit
+def test_csv_import_accepts_the_same_target_without_the_password(mock_kee, tmp_path):
+    """Host and instance are compared case-insensitively: re-importing an export is never refused."""
+    entry = _stored_entry("SRV", server="PROD")
+    mock_kee.grp_servers.entries = [entry]
+
+    Servers(mock_kee).csv_import(_import_file(tmp_path, {"host": "DB.Example.com", "server": "prod"}))
+
+    assert entry.password == "s3cret"
+
+
+@pytest.mark.unit
+def test_csv_import_accepts_a_server_stored_without_port_and_exported_as_is(mock_kee, tmp_path):
+    """Regression: an export writes the stored port as is, empty for a server that has none, while the loaded server
+    gets DEFAULT_PORT - re-importing it must not count as a target change."""
+    mock_kee.grp_servers.entries = [_stored_entry("SRV", port="")]
+
+    Servers(mock_kee).csv_import(_import_file(tmp_path, {"port": ""}))
+
+
+@pytest.mark.unit
+def test_csv_import_accepts_a_server_stored_without_type_and_exported_as_is(mock_kee, tmp_path):
+    """Regression: an export writes the stored type as is, empty for a server that has none, while the loaded server
+    gets mssql - re-importing it must not count as a target change."""
+    mock_kee.grp_servers.entries = [_stored_entry("SRV", type="")]
+
+    Servers(mock_kee).csv_import(_import_file(tmp_path, {"type": ""}))
+
+
+@pytest.mark.unit
+def test_csv_import_accepts_a_new_server_without_password(mock_kee, tmp_path):
+    """Only a stored password can be sent elsewhere: a new server has none."""
+    mock_kee.grp_servers.entries = []
+    mock_kee.db.add_entry = Mock(return_value=_stored_entry("NEW", password=""))
+
+    Servers(mock_kee).csv_import(_import_file(tmp_path, {"id": "NEW", "host": "anywhere.example.com"}))
+
+    mock_kee.db.add_entry.assert_called_once()
+
+
+@pytest.mark.unit
+def test_csv_import_is_all_or_nothing(mock_kee, tmp_path):
+    """A refused row prevents every row from being applied, even the valid ones before it."""
+    valid, refused = _stored_entry("VALID"), _stored_entry("REFUSED")
+    mock_kee.grp_servers.entries = [valid, refused]
+    mock_kee.db.add_entry = Mock()
+
+    with pytest.raises(ValueError, match=r"line\(s\) 4\."):
+        Servers(mock_kee).csv_import(
+            _import_file(
+                tmp_path,
+                {"id": "VALID", "description": "changed"},
+                {"id": "NEW"},
+                {"id": "REFUSED", "host": "attacker.example.com"},
+            )
+        )
+
+    valid.set_custom_property.assert_not_called()
+    assert valid.notes == ""
+    mock_kee.db.add_entry.assert_not_called()

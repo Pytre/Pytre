@@ -6,7 +6,12 @@
     <div class="toolbar users-toolbar">
         <button type="button" class="btn" onclick="openFormModal('/admin/users/new')">New user</button>
         <button type="button" class="btn" onclick="openFormModal('/admin/users/import')">Import CSV</button>
-        <a class="btn" href="/admin/users/export">Export CSV</a>
+        {% if is_local %}
+            {% set export_warning = "This export includes the password hashes of the users. Keep the file safe and delete it once used." %}
+        {% else %}
+            {% set export_warning = "Password hashes are only included when exporting from the server itself: this export has none. Importing it back keeps the current passwords." %}
+        {% endif %}
+        <button type="button" class="btn" data-confirm="{{ export_warning }}" onclick="pytreConfirmDownload(this.dataset.confirm, '/admin/users/export')">Export CSV</button>
         <button type="submit" formaction="/admin/users/reload">Reload</button>
         <input type="text" id="filter" placeholder="Filter...">
         <button type="button" class="btn" onclick="openFormModal('/admin/users/attributes')">

@@ -1,6 +1,7 @@
 import csv
 import io
 import logging
+from dataclasses import dataclass
 from uuid import UUID
 from pathlib import Path
 from enum import Enum
@@ -10,6 +11,13 @@ from pykeepass.group import Group
 
 from Pytre_Core.kee import Kee
 from Pytre_Core.utils import detect_encoding, log as _log
+
+
+DEFAULT_PORT = "1433"  # port, as a string not an int, of a server that has none
+
+
+def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__) -> None:
+    _log(msg, level=level, sublogger=sublogger)
 
 
 class _DbKind(Enum):
@@ -48,8 +56,27 @@ class ServerField(Enum):
         return self.csv_header.title()
 
 
-def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__) -> None:
-    _log(msg, level=level, sublogger=sublogger)
+@dataclass(frozen=True, slots=True)
+class ServerTarget:
+    """Where and how a server is connected to: its type, host, port and instance, and whether its certificate is
+    trusted without being checked. Two targets are equal when the stored password would go to the same place, the same
+    way: values are normalized, hosts and instances are compared case-insensitively."""
+
+    type: str
+    host: str
+    port: str
+    server: str
+    trusts_certificate: bool
+
+    @classmethod
+    def of(cls, type: str, host: str, port: str | int, server: str, trusts_certificate: bool) -> ServerTarget:
+        return cls(
+            (type.strip() or ServerType.mssql.name).lower(),
+            host.strip().lower(),
+            str(port).strip() or DEFAULT_PORT,
+            server.strip().lower(),
+            trusts_certificate,
+        )
 
 
 class Servers:
@@ -186,8 +213,17 @@ class Servers:
             if missing_cols:
                 raise ValueError(f"Missing columns in file to import : {', '.join(missing_cols)}")
 
+            # read every row first: the import is all or nothing, refused before anything is changed
+            rows = list(enumerate(csv_reader, start=2))
+            refused_lines = [str(num) for num, row in rows if self._csv_import_row_moves_password(row, entries_dict)]
+            if refused_lines:
+                raise ValueError(
+                    "Changing the host, port, instance or type of a server, or whether its certificate is checked, "
+                    f"requires its password: missing on line(s) {', '.join(refused_lines)}. Nothing was imported."
+                )
+
             # process rows
-            for row_num, row in enumerate(csv_reader, start=2):
+            for row_num, row in rows:
                 server_id = row["id"].strip()
                 if not server_id:
                     log(f"Ligne {row_num} ignorée : aucun id renseigné", logging.WARNING)
@@ -224,7 +260,24 @@ class Servers:
 
             return True
 
-    def csv_export(self, filepath: Path | str, delimiter: str = ";", overwrite: bool = False) -> bool:
+    def _csv_import_row_moves_password(self, row: dict[str, str], entries_dict: dict[str, Entry]) -> bool:
+        """True if `row` changes the target of an existing server without giving its password (see ServerTarget)."""
+        entry = entries_dict.get(row[ServerField.ID.csv_header].strip().upper())
+        if entry is None or row[ServerField.PWD.csv_header].strip():
+            return False
+
+        new_target = ServerTarget.of(
+            row[ServerField.TYPE.csv_header],
+            row[ServerField.HOST.csv_header],
+            row[ServerField.PORT.csv_header],
+            row[ServerField.SERVER.csv_header],
+            row[ServerField.TRUST_CERTIFICATE.csv_header].strip().lower() == "true",
+        )
+        return Server(self, entry=entry).target != new_target
+
+    def csv_export(
+        self, filepath: Path | str, delimiter: str = ";", overwrite: bool = False, with_passwords: bool = False
+    ) -> bool:
         quotechar = '"'
 
         if self.kee_grp is None:
@@ -258,6 +311,8 @@ class Servers:
             for field in ServerField:
                 if field is ServerField.GROUPS:
                     value = groups
+                elif field is ServerField.PWD and not with_passwords:
+                    value = ""
                 elif field.db_kind is _DbKind.NATIVE:
                     value = getattr(s_entry, field.db_key) or ""
                 else:  # db_kind == "custom"
@@ -315,7 +370,7 @@ class Server:
         self.charset: str = ""
         self.database: str = ""
         self.host: str = ""
-        self.port: str = "1433"  # string attendu et pas int
+        self.port: str = DEFAULT_PORT  # a string, not  an int
         self.server: str = ""
         self.login_timeout: int = 60
         self.timeout: int = 300
@@ -324,6 +379,10 @@ class Server:
 
         if entry:
             self._load_from_entry(entry)
+
+    @property
+    def target(self) -> ServerTarget:
+        return ServerTarget.of(self.type, self.host, self.port, self.server, self.trust_server_certificate)
 
     def to_dict(self) -> dict:
         return {

@@ -217,7 +217,7 @@ def test_edit_server_updates_fields(isolated_admin_client):
             "id": "edit_me",
             "description": "After",
             "login": "sa",
-            "password": "",
+            "password": "new-pwd",  # the type and host change: the password must be entered again
             "type": "PostgreSQL",
             "host": "newhost",
             "login_timeout": "60",
@@ -555,3 +555,112 @@ def test_bulk_delete_resets_cached_connections_for_each_deleted_server(isolated_
 
     assert "bulk_conn_a" not in resources.driver_entries
     assert "bulk_conn_b" not in resources.driver_entries
+
+
+# ================================================================================
+# A target change needs the password
+# ================================================================================
+
+_TARGET_FORM = {
+    "id": "target_srv",
+    "description": "",
+    "login": "sa",
+    "password": "s3cret!",
+    "type": "SQL Server",
+    "host": "db.example.com",
+    "port": "1433",
+    "server": "",
+    "login_timeout": "60",
+    "timeout": "300",
+}
+
+
+def _create_target_server(client) -> str:
+    """Creates target_srv with a password, returns its uuid."""
+    client.post("/admin/servers/new", data=_TARGET_FORM, follow_redirects=False)
+    return _find_uuid(client.get("/admin/servers").text, "target_srv")
+
+
+def _stored(uuid: str):
+    from Pytre_Core.context import AppContext
+
+    server = AppContext(master_key="password").servers.find_server_by_uuid(uuid)
+    assert server is not None
+    return server
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"host": "attacker.example.com"},
+        {"port": "1434"},
+        {"server": "OTHER"},
+        {"type": "PostgreSQL"},
+        {"trust_server_certificate": "1"},
+    ],
+    ids=["host", "port", "instance", "type", "certificate"],
+)
+def test_edit_server_refuses_a_target_change_without_the_password(isolated_admin_client, change):
+    uuid = _create_target_server(isolated_admin_client)
+
+    response = isolated_admin_client.post(
+        f"/admin/servers/{uuid}/edit", data={**_TARGET_FORM, "password": "", **change}, follow_redirects=False
+    )
+
+    assert response.status_code == 200  # the form again, nothing saved
+    assert "requires entering its password again" in response.text
+    stored = _stored(uuid)
+    assert (stored.host, stored.port, stored.password) == ("db.example.com", "1433", "s3cret!")
+
+
+def test_edit_server_refusal_redisplays_what_was_submitted(isolated_admin_client):
+    uuid = _create_target_server(isolated_admin_client)
+
+    response = isolated_admin_client.post(
+        f"/admin/servers/{uuid}/edit", data={**_TARGET_FORM, "password": "", "host": "new.example.com"}
+    )
+
+    assert 'value="new.example.com"' in response.text  # the admin only has to add the password
+
+
+def test_edit_server_refusal_is_logged_as_a_warning(isolated_admin_client, caplog):
+    uuid = _create_target_server(isolated_admin_client)
+
+    with caplog.at_level(logging.INFO):
+        isolated_admin_client.post(
+            f"/admin/servers/{uuid}/edit", data={**_TARGET_FORM, "password": "", "host": "attacker.example.com"}
+        )
+
+    assert any(
+        r.levelno == logging.WARNING
+        and r.message
+        == f"Server 'target_srv' not saved for admin '{TEST_USERNAME}': target changed without its password"
+        for r in caplog.records
+    )
+
+
+def test_edit_server_accepts_a_target_change_with_the_password(isolated_admin_client):
+    uuid = _create_target_server(isolated_admin_client)
+
+    response = isolated_admin_client.post(
+        f"/admin/servers/{uuid}/edit",
+        data={**_TARGET_FORM, "password": "n3w", "host": "new.example.com"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert (_stored(uuid).host, _stored(uuid).password) == ("new.example.com", "n3w")
+
+
+def test_edit_server_accepts_the_same_target_without_the_password(isolated_admin_client):
+    """Host and instance are compared case-insensitively, and the other fields aren't part of the target."""
+    uuid = _create_target_server(isolated_admin_client)
+
+    response = isolated_admin_client.post(
+        f"/admin/servers/{uuid}/edit",
+        data={**_TARGET_FORM, "password": "", "host": "DB.Example.com", "database": "other", "login": "other"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert _stored(uuid).password == "s3cret!"

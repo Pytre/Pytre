@@ -155,6 +155,7 @@ The web administration is served at `/admin`, by the same process and on the sam
 
 - Only admin users can sign in, with their password or through SSO. The first admin account can only be created from the server itself (localhost).
 - Repeated failed sign-ins are throttled, see [Sign-in throttling](#sign-in-throttling).
+- The CSV exports only include the passwords of the servers and the password hashes of the users when made from the server itself. Changing the host, port, instance or type of a server, or whether its certificate is checked, requires entering its password again, in its form as in a CSV import.
 - A session ends after 1 hour of inactivity and after 8 hours in any case, or as soon as the user loses admin rights or changes their password.
 - Queries are files in the server's queries folder: the web administration lists them, reloads them from disk, and can exempt one from the version check for a limited time.
 - An admin can reveal, replace or delete the master password of the settings database stored in the keyring, and re-encrypt the database with a new one, only from the server itself (e.g. `http://127.0.0.1:8000/admin`, or through an SSH tunnel): requests through a reverse proxy are refused. Each of these actions is logged as a warning.

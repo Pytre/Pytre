@@ -20,7 +20,7 @@ from starlette.datastructures import FormData
 from Pytre_Core.users import AuthType, OidcLink, User, UserField, hash_password
 from Pytre_Core.utils import log as _log
 from Pytre_Server.query_logs_reader import QueryLogsUnavailable, last_run_by_user, start_to_timestamp
-from Pytre_Server.routes.admin_auth import require_admin_session
+from Pytre_Server.routes.admin_auth import is_loopback, require_admin_session
 from Pytre_Server.server_state import ServerState, get_server_state
 from Pytre_Server.templating import templates
 
@@ -144,6 +144,7 @@ def users_list(
             issuer: provider.label for issuer, provider in state.app_ctx.oidc_providers.get_all_providers().items()
         },
         "last_runs": _last_runs(state),
+        "is_local": is_loopback(request),  # only to choose what message the export confirmation should show
         "msg": msg,
         "error": error,
     }
@@ -406,16 +407,27 @@ async def users_import_submit(
 
 
 @router.get("/export", response_model=None)
-def users_export(state: ServerState = Depends(get_server_state)) -> FileResponse | RedirectResponse:
+def users_export(
+    request: Request,
+    state: ServerState = Depends(get_server_state),
+    admin_username: str = Depends(require_admin_session),
+) -> FileResponse | RedirectResponse:
+    include_hashes = is_loopback(request)
+
     fd, tmp_path_str = tempfile.mkstemp(suffix=".csv")
     os.close(fd)
     tmp_path = Path(tmp_path_str)
 
     try:
-        state.app_ctx.users.csv_export(tmp_path, overwrite=True, pwd_infos=True)
+        state.app_ctx.users.csv_export(tmp_path, overwrite=True, with_hashes=include_hashes)
     except Exception:
         os.unlink(tmp_path)
         return RedirectResponse(url="/admin/users?error=Export+failed", status_code=status.HTTP_303_SEE_OTHER)
+
+    if include_hashes:
+        log(f"Users exported with their password hashes by admin '{admin_username}'", logging.WARNING)
+    else:
+        log(f"Users exported without their password hashes by admin '{admin_username}'", logging.INFO)
 
     return FileResponse(
         tmp_path,

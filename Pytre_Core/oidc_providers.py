@@ -10,6 +10,9 @@ from Pytre_Core.kee import Kee
 from Pytre_Core.utils import log as _log
 
 
+DEFAULT_SCOPES = "openid profile"  # profile carries preferred_username, the default username claim
+
+
 def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__) -> None:
     _log(msg, level=level, sublogger=sublogger)
 
@@ -92,7 +95,7 @@ class OidcProvider:
         self.issuer: str = ""
         self.client_id: str = ""
         self.client_secret: str = ""
-        self.scopes: str = "openid"
+        self.scopes: str = DEFAULT_SCOPES
         self.username_claim: str = "preferred_username"  # claim used to find the Pytre user at first login
         self.public_base_url: str = ""  # base of the redirect URLs, explicit to stay right with a reverse proxy
 

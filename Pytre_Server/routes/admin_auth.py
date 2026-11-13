@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from urllib.parse import quote, quote_plus
 
 import jwt
-from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request, Response, status
+from fastapi import APIRouter, Depends, Form, HTTPException, Request, Response, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from starlette.middleware.base import RequestResponseEndpoint
 
@@ -18,6 +18,7 @@ from Pytre_Server.server_state import (
     PasswordChecksSaturated,
     ServerResources,
     ServerState,
+    SsoFlow,
     client_host,
     get_server_state,
 )
@@ -353,45 +354,33 @@ async def admin_login_sso_start(
     if oidc_provider is None:
         return RedirectResponse("/admin/login", status_code=status.HTTP_303_SEE_OTHER)
 
-    redirect_uri = f"{oidc_provider.public_base_url.rstrip('/')}/admin/login/sso/callback"
-
     try:
-        auth_url = await start_login(state.resources, oidc_provider, redirect_uri, _safe_next(next))
+        auth_url = await start_login(state.resources, oidc_provider, SsoFlow.ADMIN, _safe_next(next))
     except OidcLoginError as e:
         return RedirectResponse(f"/admin/login?error={quote_plus(str(e))}", status_code=status.HTTP_303_SEE_OTHER)
 
     return RedirectResponse(auth_url, status_code=status.HTTP_303_SEE_OTHER)
 
 
-@router.get("/login/sso/callback", response_model=None)
-async def admin_login_sso_callback(
-    request: Request,
-    state: ServerState = Depends(get_server_state),
-    state_token: str = Query("", alias="state"),
-    code: str = "",
-    error: str = "",
-    error_description: str = "",
+async def finish_sso_login(
+    state: ServerState, state_token: str, code: str, error: str, error_description: str, *, request: Request
 ) -> RedirectResponse:
-    """Completes an SSO login started above, then issues the admin session cookie exactly like
-    POST /admin/login does for a password login. `state_token`/`code` come from the identity
-    provider's redirect - `error`/`error_description` instead if the user denied consent or the
-    provider itself failed."""
+    """Completes an SSO login started by admin_login_sso_start(), called by the shared SSO callback route,
+    then issues the admin session cookie exactly like POST /admin/login does for a password login.
+    `state_token`/`code` come from the identity provider's redirect - `error`/`error_description` instead
+    if the user denied consent or the provider itself failed."""
+
     if error:
         error_msg = quote_plus(error_description or error)
         return RedirectResponse(f"/admin/login?error={error_msg}", status_code=status.HTTP_303_SEE_OTHER)
 
-    resources: ServerResources = state.resources
-
-    # redirect_uri must exactly match the one start_login() used above - built from the same
-    # provider, once it's known. When the state is unknown/expired, handle_callback() below rejects
-    # it on its own with the precise reason; an empty redirect_uri is never used for a real exchange.
-    pending = resources.oidc_peek_pending_login(state_token)
-    oidc_provider = state.app_ctx.oidc_providers.get_all_providers().get(pending.provider_issuer) if pending else None
-    redirect_uri = f"{oidc_provider.public_base_url.rstrip('/')}/admin/login/sso/callback" if oidc_provider else ""
-
     try:
         user, next_path = await handle_callback(
-            resources, state.app_ctx.oidc_providers, state.app_ctx.users, state_token, code, redirect_uri
+            state.resources,
+            state.app_ctx.oidc_providers,
+            state.app_ctx.users,
+            state_token,
+            code,
         )
     except OidcLoginError as e:
         return RedirectResponse(f"/admin/login?error={quote_plus(str(e))}", status_code=status.HTTP_303_SEE_OTHER)

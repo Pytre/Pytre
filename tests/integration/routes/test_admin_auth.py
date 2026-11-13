@@ -391,7 +391,7 @@ def test_already_logged_in_get_login_redirects_away(client):
 
 
 # ================================================================================
-# SSO login (OpenID Connect) - end to end through GET /admin/login/sso[/callback], with the
+# SSO login (OpenID Connect) - end to end through GET /admin/login/sso and /login/sso/callback, with the
 # identity provider itself faked (discovery/JWKS via a MockTransport, code exchange via a fake
 # AsyncOAuth2Client) - the protocol pieces already have their own dedicated coverage
 # (tests/unit/core/test_oidc_client.py, tests/unit/server/test_oidc.py).
@@ -449,7 +449,7 @@ def test_sso_login_full_flow_sets_cookie_and_redirects_to_next(isolated_client, 
     state_token = _start_sso(isolated_client, fake_token_exchange, provider.uuid, next_path="/admin/servers")
 
     response = isolated_client.get(
-        f"/admin/login/sso/callback?state={state_token}&code=fake-code", follow_redirects=False
+        f"/login/sso/callback?state={state_token}&code=fake-code", follow_redirects=False
     )
 
     assert response.status_code == 303
@@ -463,7 +463,7 @@ def test_sso_login_cookie_grants_access_to_protected_routes(isolated_client, ins
     make_oidc_user(app_ctx)
     state_token = _start_sso(isolated_client, fake_token_exchange, provider.uuid)
 
-    isolated_client.get(f"/admin/login/sso/callback?state={state_token}&code=fake-code")
+    isolated_client.get(f"/login/sso/callback?state={state_token}&code=fake-code")
     response = isolated_client.get("/admin/users")
 
     assert response.status_code == 200
@@ -479,20 +479,49 @@ def test_sso_login_rejects_open_redirect_via_next_param(isolated_client, install
     )
 
     response = isolated_client.get(
-        f"/admin/login/sso/callback?state={state_token}&code=fake-code", follow_redirects=False
+        f"/login/sso/callback?state={state_token}&code=fake-code", follow_redirects=False
     )
 
     assert response.headers["location"] == "/admin"
 
 
-def test_sso_callback_rejects_an_unknown_state(isolated_client):
-    response = isolated_client.get("/admin/login/sso/callback?state=never-issued&code=x", follow_redirects=False)
+def test_sso_start_sends_the_shared_redirect_uri(isolated_client, install_idp_transport):
+    """The same redirect URI as the client's SSO, so only one has to be registered with the identity provider"""
+    app_ctx = isolated_client.app.state.server.app_ctx
+    provider = make_oidc_provider(app_ctx)
 
-    assert response.status_code == 303
-    assert response.headers["location"].startswith("/admin/login?error=")
-    assert "expired+or+was+already+used" in response.headers["location"] or "expired" in unquote(
-        response.headers["location"]
-    )
+    response = isolated_client.get(f"/admin/login/sso?provider={provider.uuid}", follow_redirects=False)
+
+    assert "redirect_uri=http%3A%2F%2Ftestserver%2Flogin%2Fsso%2Fcallback" in response.headers["location"]
+
+
+def test_sso_login_cookie_is_scoped_to_admin_although_set_by_the_shared_callback(
+    isolated_client, install_idp_transport, fake_token_exchange
+):
+    app_ctx = isolated_client.app.state.server.app_ctx
+    provider = make_oidc_provider(app_ctx)
+    make_oidc_user(app_ctx)
+    state_token = _start_sso(isolated_client, fake_token_exchange, provider.uuid)
+
+    response = isolated_client.get(f"/login/sso/callback?state={state_token}&code=fake-code", follow_redirects=False)
+
+    assert "Path=/admin" in response.headers["set-cookie"]
+    assert isolated_client.cookies.get("admin_session", path="/admin")
+
+
+def test_sso_former_admin_callback_path_is_gone(isolated_client):
+    response = isolated_client.get("/admin/login/sso/callback?state=x&code=x", follow_redirects=False)
+
+    assert response.status_code == 404
+
+
+def test_sso_callback_shows_the_generic_page_for_an_unknown_state(isolated_client):
+    """Without a known state, neither the flow nor a page to send the browser back to is known"""
+    response = isolated_client.get("/login/sso/callback?state=never-issued&code=x", follow_redirects=False)
+
+    assert response.status_code == 200
+    assert "Login failed or expired" in response.text
+    assert "admin_session" not in response.headers.get("set-cookie", "")
 
 
 def test_sso_callback_state_is_single_use(isolated_client, install_idp_transport, fake_token_exchange):
@@ -500,23 +529,41 @@ def test_sso_callback_state_is_single_use(isolated_client, install_idp_transport
     provider = make_oidc_provider(app_ctx)
     make_oidc_user(app_ctx)
     state_token = _start_sso(isolated_client, fake_token_exchange, provider.uuid)
-    isolated_client.get(f"/admin/login/sso/callback?state={state_token}&code=fake-code")
+    isolated_client.get(f"/login/sso/callback?state={state_token}&code=fake-code")
 
     replay = isolated_client.get(
-        f"/admin/login/sso/callback?state={state_token}&code=fake-code", follow_redirects=False
+        f"/login/sso/callback?state={state_token}&code=fake-code", follow_redirects=False
     )
 
-    assert "expired" in unquote(replay.headers["location"])
+    assert replay.status_code == 200  # consumed by the first callback: unknown from now on
+    assert "Login failed or expired" in replay.text
 
 
-def test_sso_callback_surfaces_an_idp_error_param_without_attempting_an_exchange(isolated_client):
+def test_sso_callback_surfaces_an_idp_error_param_without_attempting_an_exchange(
+    isolated_client, install_idp_transport, fake_token_exchange
+):
+    app_ctx = isolated_client.app.state.server.app_ctx
+    provider = make_oidc_provider(app_ctx)
+    state_token = _start_sso(isolated_client, fake_token_exchange, provider.uuid)
+
     response = isolated_client.get(
-        "/admin/login/sso/callback?error=access_denied&error_description=User+cancelled", follow_redirects=False
+        f"/login/sso/callback?state={state_token}&error=access_denied&error_description=User+cancelled",
+        follow_redirects=False,
     )
 
     assert response.status_code == 303
-    assert "User+cancelled" in response.headers["location"] or "User" in unquote(response.headers["location"])
+    assert response.headers["location"].startswith("/admin/login?error=")
+    assert "User cancelled" in unquote(response.headers["location"].replace("+", " "))
     assert "admin_session" not in response.headers.get("set-cookie", "")
+
+
+def test_sso_callback_shows_the_generic_page_for_an_idp_error_without_state(isolated_client):
+    response = isolated_client.get(
+        "/login/sso/callback?error=access_denied&error_description=User+cancelled", follow_redirects=False
+    )
+
+    assert response.status_code == 200
+    assert "Login failed or expired" in response.text
 
 
 def test_sso_callback_rejects_a_non_admin_user(isolated_client, install_idp_transport, fake_token_exchange):
@@ -526,7 +573,7 @@ def test_sso_callback_rejects_a_non_admin_user(isolated_client, install_idp_tran
     state_token = _start_sso(isolated_client, fake_token_exchange, provider.uuid)
 
     response = isolated_client.get(
-        f"/admin/login/sso/callback?state={state_token}&code=fake-code", follow_redirects=False
+        f"/login/sso/callback?state={state_token}&code=fake-code", follow_redirects=False
     )
 
     assert response.status_code == 303
@@ -543,7 +590,7 @@ def test_sso_callback_rejects_an_unknown_username_claim(isolated_client, install
     state_token = _start_sso(isolated_client, fake_token_exchange, provider.uuid)
 
     response = isolated_client.get(
-        f"/admin/login/sso/callback?state={state_token}&code=fake-code", follow_redirects=False
+        f"/login/sso/callback?state={state_token}&code=fake-code", follow_redirects=False
     )
 
     assert response.status_code == 303

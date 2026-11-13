@@ -19,8 +19,10 @@ from authlib.oauth2.rfc7636 import create_s256_code_challenge
 from Pytre_Core.oidc_client import OidcDiscoveryError
 from Pytre_Core.oidc_providers import OidcProvider
 from Pytre_Core.users import AuthType
+from Pytre_Server.server_state import SsoFlow
 from tests.integration.conftest import TEST_DB_PASSWORD
 from tests.integration.routes.conftest import (
+    SSO_ISSUER,
     TokenExchangeState,
     extract_state_token,
     make_oidc_provider,
@@ -83,6 +85,20 @@ def test_sso_start_redirects_to_the_authorization_endpoint(isolated_client, inst
     assert response.status_code == 303
     assert "idp.example.com/auth?" in response.headers["location"]
     assert "state=" in response.headers["location"]
+
+
+def test_sso_start_sends_the_shared_redirect_uri(isolated_client, install_idp_transport):
+    """The same redirect URI as the web administration's SSO, so only one has to be registered with the IdP"""
+    app_ctx = isolated_client.app.state.server.app_ctx
+    make_oidc_provider(app_ctx)
+    _code_verifier, code_challenge = _code_verifier_and_challenge()
+
+    response = isolated_client.get(
+        f"/login/sso/start?port={CLIENT_PORT}&state={CLIENT_STATE}&code_challenge={code_challenge}",
+        follow_redirects=False,
+    )
+
+    assert "redirect_uri=http%3A%2F%2Ftestserver%2Flogin%2Fsso%2Fcallback" in response.headers["location"]
 
 
 def test_sso_start_with_no_usable_provider_redirects_to_the_loopback_with_an_error(isolated_client):
@@ -226,6 +242,51 @@ def test_sso_callback_accepts_a_non_admin_user(isolated_client, install_idp_tran
 
     assert state == CLIENT_STATE
     assert code
+
+
+def test_sso_callback_never_issues_an_admin_session_for_a_client_login(
+    isolated_client, install_idp_transport, fake_token_exchange
+):
+    """Shared with the web administration: an admin signing in from the client only gets the one-time code"""
+    app_ctx = isolated_client.app.state.server.app_ctx
+    make_oidc_provider(app_ctx)
+    make_oidc_user(app_ctx, admin=True)
+    _code_verifier, code_challenge = _code_verifier_and_challenge()
+    _start, state_token = _start_client_sso(isolated_client, fake_token_exchange, code_challenge)
+
+    response = isolated_client.get(f"/login/sso/callback?state={state_token}&code=fake-code", follow_redirects=False)
+
+    assert response.headers["location"].startswith(f"http://127.0.0.1:{CLIENT_PORT}/?code=")
+    assert "admin_session" not in response.headers.get("set-cookie", "")
+
+
+def test_sso_callback_finishes_a_web_administration_login_without_a_client_code(
+    isolated_client, install_idp_transport, fake_token_exchange
+):
+    """The flow stored with the pending login decides, never the shape of what the callback receives"""
+    app_ctx = isolated_client.app.state.server.app_ctx
+    provider = make_oidc_provider(app_ctx)
+    make_oidc_user(app_ctx, admin=True)
+    start = isolated_client.get(f"/admin/login/sso?provider={provider.uuid}", follow_redirects=False)
+    state_token = extract_state_token(start.headers["location"])
+    resources = isolated_client.app.state.server.resources
+    fake_token_exchange.claims["nonce"] = resources.oidc_pending[state_token].nonce
+
+    response = isolated_client.get(f"/login/sso/callback?state={state_token}&code=fake-code", follow_redirects=False)
+
+    assert response.headers["location"] == "/admin"
+    assert "admin_session=" in response.headers["set-cookie"]
+    assert resources.client_code_pending == {}
+
+
+def test_sso_callback_shows_the_generic_page_for_a_client_login_without_a_valid_bridge(isolated_client):
+    resources = isolated_client.app.state.server.resources
+    state_token = resources.oidc_start_pending_login(SSO_ISSUER, SsoFlow.CLIENT, "n", "v", "not-a-bridge")
+
+    response = isolated_client.get(f"/login/sso/callback?state={state_token}&code=x", follow_redirects=False)
+
+    assert response.status_code == 200
+    assert "Login failed or expired" in response.text
 
 
 # ================================================================================

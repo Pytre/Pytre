@@ -11,9 +11,11 @@ from fastapi import APIRouter, Depends, Form, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
 
-from Pytre_Core.oidc_providers import OidcProvider
+from Pytre_Core.oidc_providers import DEFAULT_SCOPES, OidcProvider
 from Pytre_Core.users import Users
 from Pytre_Core.utils import log as _log
+
+from Pytre_Server.oidc import CALLBACK_PATH
 from Pytre_Server.routes.admin_auth import require_admin_session
 from Pytre_Server.server_state import ServerState, get_server_state
 from Pytre_Server.templating import templates
@@ -31,7 +33,7 @@ class OidcProviderForm(BaseModel):
     issuer: str
     client_id: str
     client_secret: str = ""
-    scopes: str = "openid"
+    scopes: str = DEFAULT_SCOPES
     username_claim: str = "preferred_username"
     public_base_url: str = ""
     enabled: bool = False
@@ -44,7 +46,7 @@ class OidcProviderForm(BaseModel):
         provider.client_id = self.client_id.strip()
         if self.client_secret:
             provider.client_secret = self.client_secret
-        provider.scopes = self.scopes.strip() or "openid"
+        provider.scopes = self.scopes.strip() or DEFAULT_SCOPES
         provider.username_claim = self.username_claim.strip() or "preferred_username"
         provider.public_base_url = self.public_base_url.strip().rstrip("/")
         provider.enabled = self.enabled
@@ -59,6 +61,7 @@ def _form_context(provider: OidcProvider, users: Users, saved_issuer: str | None
         "provider": provider,
         "saved_issuer": issuer,
         "linked_users": sorted(user.username for user in linked_users),
+        "sso_callback_path": CALLBACK_PATH,
     }
 
 

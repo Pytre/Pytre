@@ -18,6 +18,7 @@ from Pytre_Server.query_catalog import QueryCatalog
 from Pytre_Server.routes.admin_auth import AdminAuthRequired, admin_auth_required_handler, admin_session_middleware
 from Pytre_Server.routes.admin_router import router as admin_router
 from Pytre_Server.routes.client import router as client_router
+from Pytre_Server.routes.sso_callback import router as sso_callback_router
 from Pytre_Server.server_state import ServerResources, ServerState
 
 
@@ -102,6 +103,7 @@ def create_app(
 
     app.include_router(client_router)
     app.include_router(admin_router)
+    app.include_router(sso_callback_router)  # shared by the web administration and the client
 
     # exception handler to redirect to /admin/login when no valid admin session
     app.add_exception_handler(AdminAuthRequired, admin_auth_required_handler)

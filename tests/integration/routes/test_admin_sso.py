@@ -94,6 +94,29 @@ def test_create_provider_round_trip_keeps_each_field_distinct(isolated_admin_cli
         assert match.group(1) == data[field], f"{field} did not round-trip correctly: got {match.group(1)!r}"
 
 
+def test_new_provider_form_prefills_the_scopes_carrying_the_default_username_claim(isolated_admin_client):
+    form = isolated_admin_client.get("/admin/sso/new").text
+
+    assert re.search(r'id="scopes"[^>]*value="openid profile"', form)
+
+
+def test_create_provider_with_blank_scopes_saves_the_default_ones(isolated_admin_client):
+    data = _new_provider_data("https://idp-blank-scopes.example.com", scopes="  ")
+    isolated_admin_client.post("/admin/sso/new", data=data, follow_redirects=False)
+
+    uuid = _find_uuid(isolated_admin_client.get("/admin/sso").text, "https://idp-blank-scopes.example.com")
+    edit_page = isolated_admin_client.get(f"/admin/sso/{uuid}/edit").text
+
+    assert re.search(r'id="scopes"[^>]*value="openid profile"', edit_page)
+
+
+def test_provider_form_explains_the_scopes_and_the_username_claim(isolated_admin_client):
+    form = isolated_admin_client.get("/admin/sso/new").text
+
+    for label in ("Scopes", "Username claim"):
+        assert re.search(rf'>{label}\s*<span class="info-tip" tabindex="0" title="[^"]+"', form), label
+
+
 def test_create_provider_blank_issuer_reports_error(isolated_admin_client):
     response = isolated_admin_client.post("/admin/sso/new", data=_new_provider_data(""))
     assert response.status_code == 200
@@ -489,6 +512,15 @@ def test_provider_form_shows_zero_linked_users_for_an_existing_provider_only(iso
     assert "0 linked user(s)" in edit_form
     assert "will lose their SSO link" not in edit_form  # nobody to warn about
     assert "linked user(s)" not in new_form
+
+
+def test_provider_form_shows_the_shared_callback_as_the_redirect_uri_to_register(isolated_admin_client):
+    """The page builds the URI from the public base URL typed in and this path, for every form display"""
+    uuid = _create_provider(isolated_admin_client, "https://idp-redirect.example.com")
+
+    for url in ("/admin/sso/new", f"/admin/sso/{uuid}/edit"):
+        form = isolated_admin_client.get(url).text
+        assert 'data-callback-path="/login/sso/callback"' in form
 
 
 def test_providers_list_shows_the_number_of_linked_users(isolated_admin_client):

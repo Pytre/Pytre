@@ -17,6 +17,7 @@ from Pytre_Server.server_state import (
     PasswordChecksSaturated,
     ServerResources,
     ServerState,
+    SsoFlow,
     _DriverEntry,
 )
 
@@ -515,13 +516,15 @@ async def test_shutdown_drivers_cancels_pending_disconnect_tasks(server_state):
 
 
 # ================================================================================
-# OIDC pending login (webui SSO)
+# OIDC pending login (web administration and client SSO)
 # ================================================================================
 
 
 @pytest.mark.unit
 def test_oidc_start_pending_login_returns_a_usable_state_token(server_state):
-    state_token = server_state.resources.oidc_start_pending_login("https://idp", "nonce", "verifier", "/admin")
+    state_token = server_state.resources.oidc_start_pending_login(
+        "https://idp", SsoFlow.ADMIN, "nonce", "verifier", "/admin"
+    )
 
     assert state_token
     assert state_token in server_state.resources.oidc_pending
@@ -529,8 +532,8 @@ def test_oidc_start_pending_login_returns_a_usable_state_token(server_state):
 
 @pytest.mark.unit
 def test_oidc_start_pending_login_generates_distinct_tokens(server_state):
-    first = server_state.resources.oidc_start_pending_login("https://idp", "n1", "v1", "/admin")
-    second = server_state.resources.oidc_start_pending_login("https://idp", "n2", "v2", "/admin")
+    first = server_state.resources.oidc_start_pending_login("https://idp", SsoFlow.ADMIN, "n1", "v1", "/admin")
+    second = server_state.resources.oidc_start_pending_login("https://idp", SsoFlow.ADMIN, "n2", "v2", "/admin")
 
     assert first != second
     assert len(server_state.resources.oidc_pending) == 2
@@ -538,20 +541,36 @@ def test_oidc_start_pending_login_generates_distinct_tokens(server_state):
 
 @pytest.mark.unit
 def test_oidc_pop_pending_login_returns_the_stored_values(server_state):
-    state_token = server_state.resources.oidc_start_pending_login("https://idp", "the-nonce", "the-verifier", "/x")
+    state_token = server_state.resources.oidc_start_pending_login(
+        "https://idp", SsoFlow.ADMIN, "the-nonce", "the-verifier", "/x"
+    )
 
     entry = server_state.resources.oidc_pop_pending_login(state_token)
 
     assert entry is not None
     assert entry.provider_issuer == "https://idp"
+    assert entry.flow is SsoFlow.ADMIN
     assert entry.nonce == "the-nonce"
     assert entry.code_verifier == "the-verifier"
     assert entry.next_path == "/x"
 
 
 @pytest.mark.unit
+def test_oidc_pending_login_keeps_the_flow_that_started_it(server_state):
+    """The shared SSO callback finishes a login the way its flow requires, read back from the pending entry"""
+    admin_token = server_state.resources.oidc_start_pending_login("https://idp", SsoFlow.ADMIN, "n1", "v1", "/x")
+    client_token = server_state.resources.oidc_start_pending_login("https://idp", SsoFlow.CLIENT, "n2", "v2", "{}")
+
+    admin_entry = server_state.resources.oidc_peek_pending_login(admin_token)
+    client_entry = server_state.resources.oidc_peek_pending_login(client_token)
+
+    assert admin_entry is not None and admin_entry.flow is SsoFlow.ADMIN
+    assert client_entry is not None and client_entry.flow is SsoFlow.CLIENT
+
+
+@pytest.mark.unit
 def test_oidc_pop_pending_login_is_single_use(server_state):
-    state_token = server_state.resources.oidc_start_pending_login("https://idp", "n", "v", "/admin")
+    state_token = server_state.resources.oidc_start_pending_login("https://idp", SsoFlow.ADMIN, "n", "v", "/admin")
 
     first = server_state.resources.oidc_pop_pending_login(state_token)
     second = server_state.resources.oidc_pop_pending_login(state_token)
@@ -570,7 +589,7 @@ def test_oidc_pop_pending_login_rejects_an_unknown_state(server_state):
 def test_oidc_pop_pending_login_rejects_an_expired_entry(server_state):
     """Regression guard: an expired entry must not be usable even though it's still physically in
     the dict until pruned - _oidc_prune_expired() runs lazily, not on a timer."""
-    state_token = server_state.resources.oidc_start_pending_login("https://idp", "n", "v", "/admin")
+    state_token = server_state.resources.oidc_start_pending_login("https://idp", SsoFlow.ADMIN, "n", "v", "/admin")
     server_state.resources.oidc_pending[state_token].expires_at = time.monotonic() - 1
 
     entry = server_state.resources.oidc_pop_pending_login(state_token)
@@ -581,7 +600,9 @@ def test_oidc_pop_pending_login_rejects_an_expired_entry(server_state):
 
 @pytest.mark.unit
 def test_oidc_peek_pending_login_returns_the_stored_values_without_consuming_it(server_state):
-    state_token = server_state.resources.oidc_start_pending_login("https://idp", "the-nonce", "the-verifier", "/x")
+    state_token = server_state.resources.oidc_start_pending_login(
+        "https://idp", SsoFlow.ADMIN, "the-nonce", "the-verifier", "/x"
+    )
 
     entry = server_state.resources.oidc_peek_pending_login(state_token)
 
@@ -592,7 +613,7 @@ def test_oidc_peek_pending_login_returns_the_stored_values_without_consuming_it(
 
 @pytest.mark.unit
 def test_oidc_peek_pending_login_can_be_called_more_than_once(server_state):
-    state_token = server_state.resources.oidc_start_pending_login("https://idp", "n", "v", "/admin")
+    state_token = server_state.resources.oidc_start_pending_login("https://idp", SsoFlow.ADMIN, "n", "v", "/admin")
 
     first = server_state.resources.oidc_peek_pending_login(state_token)
     second = server_state.resources.oidc_peek_pending_login(state_token)
@@ -608,7 +629,7 @@ def test_oidc_peek_pending_login_rejects_an_unknown_state(server_state):
 
 @pytest.mark.unit
 def test_oidc_peek_pending_login_rejects_an_expired_entry(server_state):
-    state_token = server_state.resources.oidc_start_pending_login("https://idp", "n", "v", "/admin")
+    state_token = server_state.resources.oidc_start_pending_login("https://idp", SsoFlow.ADMIN, "n", "v", "/admin")
     server_state.resources.oidc_pending[state_token].expires_at = time.monotonic() - 1
 
     assert server_state.resources.oidc_peek_pending_login(state_token) is None
@@ -616,9 +637,9 @@ def test_oidc_peek_pending_login_rejects_an_expired_entry(server_state):
 
 @pytest.mark.unit
 def test_oidc_peek_pending_login_does_not_prevent_the_real_pop_from_consuming_the_entry(server_state):
-    """The admin SSO callback route peeks first (to build redirect_uri), then hands off to
-    handle_callback(), which performs the real, consuming lookup - the peek must never interfere."""
-    state_token = server_state.resources.oidc_start_pending_login("https://idp", "n", "v", "/admin")
+    """The SSO callback route peeks first (to know the flow), then hands off to handle_callback(),
+    which performs the real, consuming lookup - the peek must never interfere."""
+    state_token = server_state.resources.oidc_start_pending_login("https://idp", SsoFlow.ADMIN, "n", "v", "/admin")
 
     server_state.resources.oidc_peek_pending_login(state_token)
     popped = server_state.resources.oidc_pop_pending_login(state_token)
@@ -629,10 +650,10 @@ def test_oidc_peek_pending_login_does_not_prevent_the_real_pop_from_consuming_th
 
 @pytest.mark.unit
 def test_oidc_start_pending_login_prunes_expired_entries(server_state):
-    stale_token = server_state.resources.oidc_start_pending_login("https://idp", "n", "v", "/admin")
+    stale_token = server_state.resources.oidc_start_pending_login("https://idp", SsoFlow.ADMIN, "n", "v", "/admin")
     server_state.resources.oidc_pending[stale_token].expires_at = time.monotonic() - 1
 
-    server_state.resources.oidc_start_pending_login("https://idp", "n2", "v2", "/admin")
+    server_state.resources.oidc_start_pending_login("https://idp", SsoFlow.ADMIN, "n2", "v2", "/admin")
 
     assert stale_token not in server_state.resources.oidc_pending
     assert len(server_state.resources.oidc_pending) == 1
@@ -642,9 +663,9 @@ def test_oidc_start_pending_login_prunes_expired_entries(server_state):
 def test_oidc_start_pending_login_evicts_the_oldest_once_at_capacity(server_state, monkeypatch):
     monkeypatch.setattr("Pytre_Server.server_state.OIDC_PENDING_MAX", 2)
 
-    first = server_state.resources.oidc_start_pending_login("https://idp", "n1", "v1", "/admin")
-    server_state.resources.oidc_start_pending_login("https://idp", "n2", "v2", "/admin")
-    server_state.resources.oidc_start_pending_login("https://idp", "n3", "v3", "/admin")
+    first = server_state.resources.oidc_start_pending_login("https://idp", SsoFlow.ADMIN, "n1", "v1", "/admin")
+    server_state.resources.oidc_start_pending_login("https://idp", SsoFlow.ADMIN, "n2", "v2", "/admin")
+    server_state.resources.oidc_start_pending_login("https://idp", SsoFlow.ADMIN, "n3", "v3", "/admin")
 
     # OIDC_PENDING_MAX is imported by name in server_state.py's own module scope - monkeypatching
     # the module attribute (above) is what the SUT sees; a plain `from ... import OIDC_PENDING_MAX`

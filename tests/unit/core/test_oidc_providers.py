@@ -16,7 +16,7 @@ import pytest
 
 import Pytre_Core.kee as kee_module
 from Pytre_Core.kee import Kee
-from Pytre_Core.oidc_providers import OidcProvider, OidcProviders
+from Pytre_Core.oidc_providers import DEFAULT_SCOPES, OidcProvider, OidcProviders
 from Pytre_Core.users import AuthType, OidcLink, User, Users
 
 TEST_DB_PATH = Path(__file__).parent.parent.parent / "resources" / "Pytre_test.db"
@@ -72,7 +72,7 @@ def test_a_new_oidc_has_sensible_defaults(oidcs):
 
     assert oidc.enabled is False
     assert oidc.label == ""
-    assert oidc.scopes == "openid"
+    assert oidc.scopes == "openid profile"  # profile carries the default username claim
     assert oidc.username_claim == "preferred_username"
     assert oidc.public_base_url == ""
     assert oidc.uuid == ""
@@ -159,12 +159,12 @@ def test_reload_picks_up_a_change_made_elsewhere(kee, oidcs):
     oidc.save()
 
     other = _reopened().get_all_providers()[ISSUER]
-    other.scopes = "openid profile"
+    other.scopes = "openid email"
     other.save()
 
-    assert oidc.scopes == "openid"
+    assert oidc.scopes == DEFAULT_SCOPES
     oidc.reload()
-    assert oidc.scopes == "openid profile"
+    assert oidc.scopes == "openid email"
 
 
 def test_delete_removes_the_entry(kee, oidcs):
@@ -213,17 +213,17 @@ def test_find_provider_by_uuid_needs_an_explicit_reload_to_see_a_change_made_els
 
     other = _reopened().find_provider_by_uuid(oidc.uuid)
     assert other is not None
-    other.scopes = "openid profile"
+    other.scopes = "openid email"
     other.save()
 
     stale = oidcs.find_provider_by_uuid(oidc.uuid)
     assert stale is not None
-    assert stale.scopes == "openid"
+    assert stale.scopes == DEFAULT_SCOPES
 
     oidcs.open_db(reload=True)
     fresh = oidcs.find_provider_by_uuid(oidc.uuid)
     assert fresh is not None
-    assert fresh.scopes == "openid profile"
+    assert fresh.scopes == "openid email"
 
 
 # ================================================================================

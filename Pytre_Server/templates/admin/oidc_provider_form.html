@@ -1,4 +1,7 @@
 {% extends "admin/base.html" %}
+{% macro info_tip(text) %}
+<span class="info-tip" tabindex="0" title="{{ text }}" aria-label="{{ text }}">ⓘ</span>
+{% endmacro %}
 {% block title %}{% if provider.uuid %}Edit SSO provider{% else %}New SSO provider{% endif %} — Pytre Server{% endblock %}
 {% block main_class %}main-flush{% endblock %}
 {% block content %}
@@ -64,11 +67,11 @@
 
             <div class="form-row">
                 <div class="form-col">
-                    <label for="scopes">Scopes</label>
+                    <label for="scopes">Scopes{{ info_tip("Space-separated. Must include the scope providing the username claim: profile for preferred_username, email for email. offline_access is added automatically.") }}</label>
                     <input type="text" id="scopes" name="scopes" value="{{ provider.scopes }}">
                 </div>
                 <div class="form-col">
-                    <label for="username_claim">Username claim</label>
+                    <label for="username_claim">Username claim{{ info_tip("Claim matched against the user Id at the first SSO login of an account, which then stays linked to its identity provider account") }}</label>
                     <input type="text" id="username_claim" name="username_claim" value="{{ provider.username_claim }}">
                 </div>
             </div>
@@ -77,7 +80,7 @@
             <input type="text" id="public_base_url" name="public_base_url" value="{{ provider.public_base_url }}" placeholder="https://pytre.example.com">
 
             <label>Redirect URI to register with this identity provider</label>
-            <div class="field-static" id="redirect-uri-display"></div>
+            <div class="field-static" id="redirect-uri-display" data-callback-path="{{ sso_callback_path }}"></div>
         </form>
 
         {% if provider.uuid %}
@@ -116,7 +119,7 @@
             var redirectUriDisplay = document.getElementById("redirect-uri-display");
             function updateRedirectUri() {
                 var base = publicBaseUrlInput.value.replace(/\/+$/, "");
-                redirectUriDisplay.textContent = base ? base + "/admin/login/sso/callback" : "(fill in the public base URL above)";
+                redirectUriDisplay.textContent = base ? base + redirectUriDisplay.dataset.callbackPath : "(fill in the public base URL above)";
             }
             publicBaseUrlInput.addEventListener("input", updateRedirectUri);
             updateRedirectUri();

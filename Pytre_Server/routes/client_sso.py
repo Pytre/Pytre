@@ -18,13 +18,12 @@ from pydantic import BaseModel
 
 from Pytre_Server.auth_token import TokenType, create_token
 from Pytre_Server.oidc import OidcLoginError, handle_callback, start_login
-from Pytre_Server.server_state import ServerState, get_server_state
+from Pytre_Server.server_state import ServerState, SsoFlow, get_server_state
 
 
 router = APIRouter(prefix="/login/sso")
 
-_CALLBACK_SUFFIX = "/login/sso/callback"
-_LOGIN_FAILED_HTML = "<html><body>Login failed or expired - you may close this window and try again.</body></html>"
+LOGIN_FAILED_HTML = "<html><body>Login failed or expired - you may close this window and try again.</body></html>"
 
 
 def _build_loopback_redirect_uri(port: int) -> str:
@@ -86,53 +85,38 @@ async def sso_start(
     provider = usable[0]
 
     bridge = _encode_bridge(redirect_uri, client_state, code_challenge)
-    server_redirect_uri = f"{provider.public_base_url.rstrip('/')}{_CALLBACK_SUFFIX}"
 
     try:
-        auth_url = await start_login(state.resources, provider, server_redirect_uri, bridge)
+        auth_url = await start_login(state.resources, provider, SsoFlow.CLIENT, bridge)
     except OidcLoginError as e:
         return _error_redirect(redirect_uri, client_state, str(e))
 
     return RedirectResponse(auth_url, status_code=303)
 
 
-@router.get("/callback", response_model=None)
-async def sso_callback(
-    state: ServerState = Depends(get_server_state),
-    state_token: str = Query("", alias="state"),
-    code: str = "",
-    error: str = "",
-    error_description: str = "",
+async def finish_sso_login(
+    state: ServerState, state_token: str, code: str, error: str, error_description: str, *, next_path: str
 ) -> RedirectResponse | HTMLResponse:
-    """Hit by the IdP, exactly like the admin webui's own callback - completes the login, then
-    bridges back to the client's loopback listener with a short-lived, single-use code (never
-    the IdP's own tokens) for it to exchange via POST /login/sso/token."""
-    resources = state.resources
+    """Completes an SSO login started by sso_start(), called by the shared SSO callback route, then bridges
+    back to the client's loopback listener with a short-lived, single-use code (never the IdP's own tokens)
+    for it to exchange via POST /login/sso/token. `next_path` is the pending login's, holding the bridge."""
 
-    pending = resources.oidc_peek_pending_login(state_token)
-    bridge = _decode_bridge(pending.next_path) if pending else None
+    bridge = _decode_bridge(next_path)
     if bridge is None:
-        # state unknown/expired/forged - no redirect_uri to safely bounce back to
-        return HTMLResponse(_LOGIN_FAILED_HTML)
+        return HTMLResponse(LOGIN_FAILED_HTML)  # no redirect_uri to safely bounce back to
 
     if error:
         return _error_redirect(bridge["redirect_uri"], bridge["state"], error_description or error)
 
-    # redirect_uri must exactly match the one sso_start() used above - rebuilt from the same
-    # provider, re-looked-up by issuer, never trusted from a later request parameter
-    all_providers = state.app_ctx.oidc_providers.get_all_providers()
-    provider = all_providers.get(pending.provider_issuer) if pending else None
-    server_redirect_uri = f"{provider.public_base_url.rstrip('/')}{_CALLBACK_SUFFIX}" if provider else ""
-
     try:
         user, _next_path = await handle_callback(
-            resources, state.app_ctx.oidc_providers, state.app_ctx.users, state_token, code, server_redirect_uri
+            state.resources, state.app_ctx.oidc_providers, state.app_ctx.users, state_token, code
         )
     except OidcLoginError as e:
         return _error_redirect(bridge["redirect_uri"], bridge["state"], str(e))
 
     # unlike the admin webui, no admin-only check here - any AuthType.OIDC user link_user() accepts can sign in
-    client_code = resources.client_code_start_pending(user.username, bridge["code_challenge"])
+    client_code = state.resources.client_code_start_pending(user.username, bridge["code_challenge"])
     url = f"{bridge['redirect_uri']}?code={quote_plus(client_code)}&state={quote_plus(bridge['state'])}"
     return RedirectResponse(url, status_code=status.HTTP_303_SEE_OTHER)
 

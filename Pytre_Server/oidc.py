@@ -18,11 +18,12 @@ from Pytre_Core.oidc_providers import OidcProvider, OidcProviders
 from Pytre_Core.users import AuthType, OidcLink, User, Users
 from Pytre_Core.utils import log as _log
 
-from Pytre_Server.server_state import ServerResources
+from Pytre_Server.server_state import ServerResources, SsoFlow
 
 
 REVERIFY_INTERVAL = timedelta(hours=1)  # how often an OIDC account is re-checked against its IdP
 REVERIFY_GRACE_PERIOD = timedelta(hours=24)  # how long an unreachable IdP is tolerated before rejecting
+CALLBACK_PATH = "/login/sso/callback"  # the only redirect URI to declare at the identity provider
 
 
 def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__) -> None:
@@ -44,8 +45,13 @@ class OidcReverifyError(Exception):
     this fires from the already-authenticated /refresh path, not during the login handshake."""
 
 
-async def start_login(resources: ServerResources, provider: OidcProvider, redirect_uri: str, next_path: str) -> str:
-    """Registers a pending login and returns the URL to send the browser to."""
+def callback_url(provider: OidcProvider) -> str:
+    """Redirect URI sent to the identity provider, the same for every SSO login of `provider`."""
+    return f"{provider.public_base_url.rstrip('/')}{CALLBACK_PATH}"
+
+
+async def start_login(resources: ServerResources, provider: OidcProvider, flow: SsoFlow, next_path: str) -> str:
+    """Registers a pending login for `flow` and returns the URL to send the browser to."""
     try:
         discovery = await resources.oidc_client.discover(provider.issuer)
     except OidcError as e:
@@ -53,7 +59,7 @@ async def start_login(resources: ServerResources, provider: OidcProvider, redire
 
     nonce = new_token()
     code_verifier = new_token()
-    state_token = resources.oidc_start_pending_login(provider.issuer, nonce, code_verifier, next_path)
+    state_token = resources.oidc_start_pending_login(provider.issuer, flow, nonce, code_verifier, next_path)
 
     # add offline_access to scope if missing from scope
     scope = " ".join(s for s in provider.scopes.split() if s != "offline_access") + " offline_access"
@@ -62,7 +68,7 @@ async def start_login(resources: ServerResources, provider: OidcProvider, redire
         provider.client_id,
         provider.client_secret,
         scope=scope,
-        redirect_uri=redirect_uri,
+        redirect_uri=callback_url(provider),
         code_challenge_method="S256",
     )
     auth_url, _ = client.create_authorization_url(
@@ -78,7 +84,6 @@ async def handle_callback(
     users: Users,
     state_token: str,
     code: str,
-    redirect_uri: str,
 ) -> tuple[User, str]:
     """Completes a pending login: exchanges `code`, validates the ID token, links it to a
     user. Returns (user, next_path) on success. The pending entry is consumed (single-use)
@@ -98,8 +103,8 @@ async def handle_callback(
     except OidcError as e:
         raise OidcLoginError(f"Could not reach the identity provider: {e}") from e
 
-    # fetch OAuth2 token
-    client = AsyncOAuth2Client(provider.client_id, provider.client_secret, redirect_uri=redirect_uri)
+    # fetch OAuth2 token - same redirect URI as start_login(), rebuilt from the provider looked up again above
+    client = AsyncOAuth2Client(provider.client_id, provider.client_secret, redirect_uri=callback_url(provider))
     try:
         token: dict = await client.fetch_token(
             discovery.token_endpoint, code=code, code_verifier=pending.code_verifier
@@ -131,29 +136,29 @@ async def handle_callback(
 
 
 def link_user(users: Users, provider: OidcProvider, claims: dict, refresh_token: str = "") -> User:
-    """Finds the Pytre user for `claims`, linking it to the IdP account (`sub`) on first login.
+    """Finds the user for `claims`, linking it to the IdP account (`sub`) on first login.
     Never creates a user - the account must already exist, with AuthType.OIDC. Once linked, only
-    `sub` is trusted for subsequent logins, even if the username claim's value changes later at the IdP."""
-    claimed_username = claims.get(provider.username_claim)
-    if not claimed_username:
-        raise OidcLoginError(f"The identity provider didn't send a '{provider.username_claim}' claim.")
+    `sub` is trusted for subsequent logins: the username claim is then neither required nor read."""
 
     sub = claims["sub"]  # already required present by OidcClient.validate_id_token()
 
-    # try to get user with a matching sub otherwise instanciate User with claimed_username
+    # an already linked account is found by sub alone, otherwise by the username claim (first login)
     user = users.find_user_by_oidc_link(provider.issuer, sub)
     if user is None:
+        claimed_username = claims.get(provider.username_claim)
+        if not claimed_username:
+            raise OidcLoginError(f"The identity provider didn't send a '{provider.username_claim}' claim.")
         user = User(users, username=str(claimed_username))
 
     # validate that user exists and is set to use OIDC as authentification method
     if not user.exists or user.auth_type is not AuthType.OIDC:
-        log(f"SSO rejected: '{claimed_username}' is not an OIDC-enabled account", logging.INFO)
-        raise OidcLoginError(f"No OIDC-enabled account matches '{claimed_username}'.")
+        log(f"SSO rejected: '{user.username}' is not an OIDC-enabled account", logging.INFO)
+        raise OidcLoginError(f"No OIDC-enabled account matches '{user.username}'.")
 
     link = user.oidc_link
     if link is not None and link.issuer != provider.issuer:
         log(f"SSO rejected: '{user.username}' is linked to another identity provider ({link.issuer})", logging.INFO)
-        raise OidcLoginError(f"'{claimed_username}' is linked to a different identity provider account.")
+        raise OidcLoginError(f"'{user.username}' is linked to a different identity provider account.")
 
     if link is None or link.sub in ("", sub):
         not_already_linked = link is None or link.sub == ""
@@ -165,7 +170,7 @@ def link_user(users: Users, provider: OidcProvider, claims: dict, refresh_token:
             log(f"SSO: linked Oidc account '{user.username}' to its identity provider account", logging.INFO)
     else:
         log(f"SSO rejected: '{user.username}' is linked to a different identity provider account", logging.INFO)
-        raise OidcLoginError(f"'{claimed_username}' is linked to a different identity provider account.")
+        raise OidcLoginError(f"'{user.username}' is linked to a different identity provider account.")
 
     return user
 

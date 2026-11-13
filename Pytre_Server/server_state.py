@@ -5,6 +5,7 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
+from enum import StrEnum
 from typing import Protocol
 
 from fastapi import Request
@@ -51,12 +52,20 @@ class _DriverEntry:
     inflight: int = 0  # nb of current execute() calls
 
 
+class SsoFlow(StrEnum):
+    """Who started an SSO login, so the shared callback knows how to finish it."""
+
+    ADMIN = "admin"  # web administration: admin session cookie
+    CLIENT = "client"  # client mediated mode: one-time code sent back to its loopback listener
+
+
 @dataclass(slots=True)
 class _OidcPendingLogin:
     """One in-flight SSO login attempt - the state token is the dict key (see ServerResources.oidc_pending).
     Single-use: popped by the callback, whether it succeeds or not."""
 
     provider_issuer: str  # re-looked-up from AppContext.oidc_providers at callback time, never a stale copy
+    flow: SsoFlow
     nonce: str = field(repr=False)
     code_verifier: str = field(repr=False)
     next_path: str  # already validated by _safe_next() before being stored
@@ -206,13 +215,16 @@ class ServerResources:
         return await asyncio.shield(check)  # a cancelled caller doesn't cancel the check, which keeps its slot
 
     # ------------------------------------------------------------------------------------------
-    # OIDC pending login (webui SSO)
+    # OIDC pending login (web administration and client SSO)
     # ------------------------------------------------------------------------------------------
-    def oidc_start_pending_login(self, provider_issuer: str, nonce: str, code_verifier: str, next_path: str) -> str:
+    def oidc_start_pending_login(
+        self, provider_issuer: str, flow: SsoFlow, nonce: str, code_verifier: str, next_path: str
+    ) -> str:
         """Registers a new pending SSO login and returns its state token, to embed in the
         authorization URL sent to the IdP - the callback looks it back up by that same value."""
         entry = _OidcPendingLogin(
             provider_issuer=provider_issuer,
+            flow=flow,
             nonce=nonce,
             code_verifier=code_verifier,
             next_path=next_path,
@@ -227,8 +239,8 @@ class ServerResources:
         return _PendingHelper._pop_or_peek_pending(self.oidc_pending, state_token)
 
     def oidc_peek_pending_login(self, state_token: str) -> _OidcPendingLogin | None:
-        """Read-only counterpart to oidc_pop_pending_login() - the admin SSO callback route needs
-        to know which provider a state belongs to before calling handle_callback().
+        """Read-only counterpart to oidc_pop_pending_login() - the SSO callback route needs to know
+        which flow a state belongs to before calling handle_callback().
         Never treat this as authorization - only the pop in handle_callback() consumes the entry."""
         return _PendingHelper._pop_or_peek_pending(self.oidc_pending, state_token, peek_only=True)
 

@@ -26,8 +26,17 @@ from Pytre_Core.kee import Kee
 from Pytre_Core.oidc_client import OidcClient, OidcDiscovery, OidcDiscoveryError, OidcTokenError
 from Pytre_Core.oidc_providers import OidcProvider, OidcProviders
 from Pytre_Core.users import AuthType, OidcLink, User, Users
-from Pytre_Server.oidc import OidcLoginError, OidcReverifyError, handle_callback, link_user, start_login, verify_still_active
-from Pytre_Server.server_state import ServerResources
+from Pytre_Server.oidc import (
+    CALLBACK_PATH,
+    OidcLoginError,
+    OidcReverifyError,
+    callback_url,
+    handle_callback,
+    link_user,
+    start_login,
+    verify_still_active,
+)
+from Pytre_Server.server_state import ServerResources, SsoFlow
 
 pytestmark = pytest.mark.unit
 
@@ -35,7 +44,7 @@ TEST_DB_PATH = Path(__file__).parent.parent.parent / "resources" / "Pytre_test.d
 TEST_DB_PASSWORD = "password"
 
 ISSUER = "https://idp.example.com"
-REDIRECT_URI = "https://pytre.example.com/admin/login/sso/callback"
+PUBLIC_BASE_URL = "https://pytre.example.com"
 
 
 @pytest.fixture
@@ -59,6 +68,7 @@ def _provider(**overrides) -> OidcProvider:
     provider.issuer = ISSUER
     provider.client_id = "pytre-client"
     provider.client_secret = "s3cret"
+    provider.public_base_url = PUBLIC_BASE_URL
     provider.enabled = True
     for name, value in overrides.items():
         setattr(provider, name, value)
@@ -123,10 +133,12 @@ class _FakeOAuth2ClientFactory:
         self.result: dict = {"id_token": "fake-id-token"}
         self.exc: BaseException | None = None
         self.instances: list[_FakeOAuth2Client] = []
+        self.init_kwargs: list[dict] = []  # keyword arguments each client was built with
 
-    def __call__(self, *_args, **_kwargs) -> _FakeOAuth2Client:
+    def __call__(self, *_args, **kwargs) -> _FakeOAuth2Client:
         client = _FakeOAuth2Client(self)
         self.instances.append(client)
+        self.init_kwargs.append(kwargs)
         return client
 
 
@@ -135,6 +147,23 @@ def oauth_client_factory(monkeypatch) -> _FakeOAuth2ClientFactory:
     factory = _FakeOAuth2ClientFactory()
     monkeypatch.setattr("Pytre_Server.oidc.AsyncOAuth2Client", factory)
     return factory
+
+
+# ================================================================================
+# callback_url()
+# ================================================================================
+
+
+@pytest.mark.parametrize("public_base_url", ["https://pytre.example.com", "https://pytre.example.com/"])
+def test_callback_url_appends_the_callback_path_to_the_public_base_url(public_base_url):
+    provider = _provider(public_base_url=public_base_url)
+
+    assert callback_url(provider) == "https://pytre.example.com/login/sso/callback"
+
+
+def test_callback_path_is_outside_admin():
+    """Filtering /admin on a proxy must not break the client's SSO, which shares this redirect URI"""
+    assert not CALLBACK_PATH.startswith("/admin")
 
 
 # ================================================================================
@@ -147,7 +176,7 @@ async def test_start_login_returns_an_authorization_url_carrying_the_state_and_p
     resources = _resources()
     provider = _provider()
 
-    url = await start_login(resources, provider, redirect_uri=REDIRECT_URI, next_path="/admin")
+    url = await start_login(resources, provider, flow=SsoFlow.ADMIN, next_path="/admin")
 
     assert url.startswith(f"{ISSUER}/auth?")
     assert "code_challenge=" in url
@@ -161,7 +190,7 @@ async def test_start_login_registers_a_pending_login_matching_the_provider_and_n
     resources = _resources()
     provider = _provider(issuer="https://other-idp.example.com")
 
-    await start_login(resources, provider, redirect_uri=REDIRECT_URI, next_path="/admin/servers")
+    await start_login(resources, provider, flow=SsoFlow.ADMIN, next_path="/admin/servers")
 
     (pending,) = resources.oidc_pending.values()
     assert pending.provider_issuer == provider.issuer
@@ -170,12 +199,25 @@ async def test_start_login_registers_a_pending_login_matching_the_provider_and_n
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("flow", list(SsoFlow))
+async def test_start_login_registers_the_flow_and_sends_the_shared_redirect_uri(flow):
+    resources = _resources()
+    provider = _provider()
+
+    url = await start_login(resources, provider, flow=flow, next_path="/admin")
+
+    (pending,) = resources.oidc_pending.values()
+    assert pending.flow is flow
+    assert "redirect_uri=https%3A%2F%2Fpytre.example.com%2Flogin%2Fsso%2Fcallback" in url
+
+
+@pytest.mark.anyio
 async def test_start_login_generates_a_fresh_nonce_and_verifier_on_each_call():
     resources = _resources()
     provider = _provider()
 
-    await start_login(resources, provider, redirect_uri=REDIRECT_URI, next_path="/admin")
-    await start_login(resources, provider, redirect_uri=REDIRECT_URI, next_path="/admin")
+    await start_login(resources, provider, flow=SsoFlow.ADMIN, next_path="/admin")
+    await start_login(resources, provider, flow=SsoFlow.ADMIN, next_path="/admin")
 
     first, second = resources.oidc_pending.values()
     assert first.nonce != second.nonce
@@ -188,7 +230,7 @@ async def test_start_login_wraps_a_discovery_failure():
     provider = _provider()
 
     with pytest.raises(OidcLoginError) as exc_info:
-        await start_login(resources, provider, redirect_uri=REDIRECT_URI, next_path="/admin")
+        await start_login(resources, provider, flow=SsoFlow.ADMIN, next_path="/admin")
     assert isinstance(exc_info.value.__cause__, OidcDiscoveryError)
 
 
@@ -198,7 +240,7 @@ async def test_start_login_registers_no_pending_login_when_discovery_fails():
     provider = _provider()
 
     with pytest.raises(OidcLoginError):
-        await start_login(resources, provider, redirect_uri=REDIRECT_URI, next_path="/admin")
+        await start_login(resources, provider, flow=SsoFlow.ADMIN, next_path="/admin")
 
     assert resources.oidc_pending == {}
 
@@ -213,52 +255,52 @@ async def test_handle_callback_rejects_an_unknown_state():
     resources = _resources()
 
     with pytest.raises(OidcLoginError, match="expired or was already used"):
-        await handle_callback(resources, _oidc_providers(), Mock(spec=Users), "never-issued", "code", REDIRECT_URI)
+        await handle_callback(resources, _oidc_providers(), Mock(spec=Users), "never-issued", "code")
 
 
 @pytest.mark.anyio
 async def test_handle_callback_rejects_a_reused_state(oauth_client_factory, monkeypatch):
     resources = _resources()
     provider = _provider()
-    state_token = resources.oidc_start_pending_login(provider.issuer, "n", "v", "/admin")
+    state_token = resources.oidc_start_pending_login(provider.issuer, SsoFlow.ADMIN, "n", "v", "/admin")
     monkeypatch.setattr("Pytre_Server.oidc.link_user", Mock(return_value=Mock(spec=User)))
 
-    await handle_callback(resources, _oidc_providers(provider), Mock(spec=Users), state_token, "code", REDIRECT_URI)
+    await handle_callback(resources, _oidc_providers(provider), Mock(spec=Users), state_token, "code")
 
     with pytest.raises(OidcLoginError, match="expired or was already used"):
         await handle_callback(
-            resources, _oidc_providers(provider), Mock(spec=Users), state_token, "code", REDIRECT_URI
+            resources, _oidc_providers(provider), Mock(spec=Users), state_token, "code"
         )
 
 
 @pytest.mark.anyio
 async def test_handle_callback_rejects_when_the_provider_is_no_longer_known():
     resources = _resources()
-    state_token = resources.oidc_start_pending_login("https://gone.example.com", "n", "v", "/admin")
+    state_token = resources.oidc_start_pending_login("https://gone.example.com", SsoFlow.ADMIN, "n", "v", "/admin")
 
     with pytest.raises(OidcLoginError, match="no longer usable"):
-        await handle_callback(resources, _oidc_providers(), Mock(spec=Users), state_token, "code", REDIRECT_URI)
+        await handle_callback(resources, _oidc_providers(), Mock(spec=Users), state_token, "code")
 
 
 @pytest.mark.anyio
 async def test_handle_callback_rejects_when_the_provider_has_been_disabled_since_start_login():
     resources = _resources()
     provider = _provider(enabled=False)
-    state_token = resources.oidc_start_pending_login(provider.issuer, "n", "v", "/admin")
+    state_token = resources.oidc_start_pending_login(provider.issuer, SsoFlow.ADMIN, "n", "v", "/admin")
 
     with pytest.raises(OidcLoginError, match="no longer usable"):
         await handle_callback(
-            resources, _oidc_providers(provider), Mock(spec=Users), state_token, "code", REDIRECT_URI
+            resources, _oidc_providers(provider), Mock(spec=Users), state_token, "code"
         )
 
 
 @pytest.mark.anyio
 async def test_handle_callback_consumes_the_pending_login_even_when_it_fails():
     resources = _resources()
-    state_token = resources.oidc_start_pending_login("https://gone.example.com", "n", "v", "/admin")
+    state_token = resources.oidc_start_pending_login("https://gone.example.com", SsoFlow.ADMIN, "n", "v", "/admin")
 
     with pytest.raises(OidcLoginError):
-        await handle_callback(resources, _oidc_providers(), Mock(spec=Users), state_token, "code", REDIRECT_URI)
+        await handle_callback(resources, _oidc_providers(), Mock(spec=Users), state_token, "code")
 
     assert state_token not in resources.oidc_pending
 
@@ -272,11 +314,11 @@ async def test_handle_callback_consumes_the_pending_login_even_when_it_fails():
 async def test_handle_callback_wraps_a_discovery_failure():
     resources = _resources(discover_exc=OidcDiscoveryError("down"))
     provider = _provider()
-    state_token = resources.oidc_start_pending_login(provider.issuer, "n", "v", "/admin")
+    state_token = resources.oidc_start_pending_login(provider.issuer, SsoFlow.ADMIN, "n", "v", "/admin")
 
     with pytest.raises(OidcLoginError) as exc_info:
         await handle_callback(
-            resources, _oidc_providers(provider), Mock(spec=Users), state_token, "code", REDIRECT_URI
+            resources, _oidc_providers(provider), Mock(spec=Users), state_token, "code"
         )
     assert isinstance(exc_info.value.__cause__, OidcDiscoveryError)
 
@@ -285,11 +327,13 @@ async def test_handle_callback_wraps_a_discovery_failure():
 async def test_handle_callback_exchanges_the_code_with_the_stored_pkce_verifier(oauth_client_factory, monkeypatch):
     resources = _resources()
     provider = _provider()
-    state_token = resources.oidc_start_pending_login(provider.issuer, "n", "the-code-verifier", "/admin")
+    state_token = resources.oidc_start_pending_login(
+        provider.issuer, SsoFlow.ADMIN, "n", "the-code-verifier", "/admin"
+    )
     monkeypatch.setattr("Pytre_Server.oidc.link_user", Mock(return_value=Mock(spec=User)))
 
     await handle_callback(
-        resources, _oidc_providers(provider), Mock(spec=Users), state_token, "the-code", REDIRECT_URI
+        resources, _oidc_providers(provider), Mock(spec=Users), state_token, "the-code"
     )
 
     assert oauth_client_factory.instances[0].fetch_token_kwargs == {
@@ -299,15 +343,30 @@ async def test_handle_callback_exchanges_the_code_with_the_stored_pkce_verifier(
 
 
 @pytest.mark.anyio
+async def test_handle_callback_exchanges_the_code_with_the_redirect_uri_sent_by_start_login(
+    oauth_client_factory, monkeypatch
+):
+    """The identity provider rejects an exchange whose redirect URI differs from the authorization request's"""
+    resources = _resources()
+    provider = _provider()
+    state_token = resources.oidc_start_pending_login(provider.issuer, SsoFlow.CLIENT, "n", "v", "{}")
+    monkeypatch.setattr("Pytre_Server.oidc.link_user", Mock(return_value=Mock(spec=User)))
+
+    await handle_callback(resources, _oidc_providers(provider), Mock(spec=Users), state_token, "code")
+
+    assert oauth_client_factory.init_kwargs[0]["redirect_uri"] == callback_url(provider)
+
+
+@pytest.mark.anyio
 async def test_handle_callback_wraps_a_code_exchange_failure_and_still_closes_the_client(oauth_client_factory):
     resources = _resources()
     provider = _provider()
-    state_token = resources.oidc_start_pending_login(provider.issuer, "n", "v", "/admin")
+    state_token = resources.oidc_start_pending_login(provider.issuer, SsoFlow.ADMIN, "n", "v", "/admin")
     oauth_client_factory.exc = InvalidGrantError()
 
     with pytest.raises(OidcLoginError, match="exchange"):
         await handle_callback(
-            resources, _oidc_providers(provider), Mock(spec=Users), state_token, "code", REDIRECT_URI
+            resources, _oidc_providers(provider), Mock(spec=Users), state_token, "code"
         )
 
     assert oauth_client_factory.instances[0].aclose_called is True
@@ -317,10 +376,10 @@ async def test_handle_callback_wraps_a_code_exchange_failure_and_still_closes_th
 async def test_handle_callback_closes_the_client_on_success_too(oauth_client_factory, monkeypatch):
     resources = _resources()
     provider = _provider()
-    state_token = resources.oidc_start_pending_login(provider.issuer, "n", "v", "/admin")
+    state_token = resources.oidc_start_pending_login(provider.issuer, SsoFlow.ADMIN, "n", "v", "/admin")
     monkeypatch.setattr("Pytre_Server.oidc.link_user", Mock(return_value=Mock(spec=User)))
 
-    await handle_callback(resources, _oidc_providers(provider), Mock(spec=Users), state_token, "code", REDIRECT_URI)
+    await handle_callback(resources, _oidc_providers(provider), Mock(spec=Users), state_token, "code")
 
     assert oauth_client_factory.instances[0].aclose_called is True
 
@@ -329,12 +388,12 @@ async def test_handle_callback_closes_the_client_on_success_too(oauth_client_fac
 async def test_handle_callback_rejects_a_token_response_without_an_id_token(oauth_client_factory):
     resources = _resources()
     provider = _provider()
-    state_token = resources.oidc_start_pending_login(provider.issuer, "n", "v", "/admin")
+    state_token = resources.oidc_start_pending_login(provider.issuer, SsoFlow.ADMIN, "n", "v", "/admin")
     oauth_client_factory.result = {"access_token": "at-only"}
 
     with pytest.raises(OidcLoginError, match="ID token"):
         await handle_callback(
-            resources, _oidc_providers(provider), Mock(spec=Users), state_token, "code", REDIRECT_URI
+            resources, _oidc_providers(provider), Mock(spec=Users), state_token, "code"
         )
 
 
@@ -342,11 +401,11 @@ async def test_handle_callback_rejects_a_token_response_without_an_id_token(oaut
 async def test_handle_callback_wraps_an_invalid_id_token(oauth_client_factory):
     resources = _resources(validate_exc=OidcTokenError("bad signature"))
     provider = _provider()
-    state_token = resources.oidc_start_pending_login(provider.issuer, "n", "v", "/admin")
+    state_token = resources.oidc_start_pending_login(provider.issuer, SsoFlow.ADMIN, "n", "v", "/admin")
 
     with pytest.raises(OidcLoginError) as exc_info:
         await handle_callback(
-            resources, _oidc_providers(provider), Mock(spec=Users), state_token, "code", REDIRECT_URI
+            resources, _oidc_providers(provider), Mock(spec=Users), state_token, "code"
         )
     assert isinstance(exc_info.value.__cause__, OidcTokenError)
 
@@ -358,10 +417,10 @@ async def test_handle_callback_validates_the_id_token_against_the_stored_nonce_a
     oidc_client = _oidc_client_mock()
     resources = ServerResources(oidc_client=oidc_client)
     provider = _provider()
-    state_token = resources.oidc_start_pending_login(provider.issuer, "the-nonce", "v", "/admin")
+    state_token = resources.oidc_start_pending_login(provider.issuer, SsoFlow.ADMIN, "the-nonce", "v", "/admin")
     monkeypatch.setattr("Pytre_Server.oidc.link_user", Mock(return_value=Mock(spec=User)))
 
-    await handle_callback(resources, _oidc_providers(provider), Mock(spec=Users), state_token, "code", REDIRECT_URI)
+    await handle_callback(resources, _oidc_providers(provider), Mock(spec=Users), state_token, "code")
 
     oidc_client.validate_id_token.assert_called_once()
     _, kwargs = oidc_client.validate_id_token.call_args
@@ -378,14 +437,14 @@ async def test_handle_callback_validates_the_id_token_against_the_stored_nonce_a
 async def test_handle_callback_returns_the_linked_user_and_the_stored_next_path(oauth_client_factory, monkeypatch):
     resources = _resources()
     provider = _provider()
-    state_token = resources.oidc_start_pending_login(provider.issuer, "n", "v", "/admin/servers")
+    state_token = resources.oidc_start_pending_login(provider.issuer, SsoFlow.ADMIN, "n", "v", "/admin/servers")
     fake_user = Mock(spec=User)
     link_user_mock = Mock(return_value=fake_user)
     monkeypatch.setattr("Pytre_Server.oidc.link_user", link_user_mock)
     users = Mock(spec=Users)
 
     user, next_path = await handle_callback(
-        resources, _oidc_providers(provider), users, state_token, "code", REDIRECT_URI
+        resources, _oidc_providers(provider), users, state_token, "code"
     )
 
     assert user is fake_user
@@ -426,9 +485,22 @@ def _reloaded_user(username: str) -> User:
 
 
 @pytest.mark.parametrize("claims", [{"sub": "sub-123"}, {"sub": "sub-123", "preferred_username": ""}])
-def test_link_user_rejects_a_missing_or_blank_username_claim(users, claims):
+def test_link_user_rejects_a_missing_or_blank_username_claim_at_the_first_login(users, claims):
+    _oidc_user(users, "sso_user")  # exists but isn't linked yet: only the username claim could find it
+
     with pytest.raises(OidcLoginError, match="preferred_username"):
         link_user(users, _provider(), claims)
+
+
+@pytest.mark.parametrize("claims", [{"sub": "sub-123"}, {"sub": "sub-123", "preferred_username": ""}])
+def test_link_user_accepts_an_already_linked_user_without_the_username_claim(users, claims):
+    """Once linked, sub alone finds the account: an IdP no longer sending the claim doesn't lock it out"""
+    _oidc_user(users, "sso_user")
+    link_user(users, _provider(), {"sub": "sub-123", "preferred_username": "sso_user"})
+
+    linked = link_user(users, _provider(), claims)
+
+    assert linked.username == "sso_user"
 
 
 def test_link_user_rejects_an_unknown_username(users):

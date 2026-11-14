@@ -114,11 +114,12 @@ def test_new_sso_provider_failure_shows_the_error_and_redisplays_a_new_provider_
     assert issuer not in isolated_admin_client.get("/admin/sso").text
 
 
-def test_settings_failure_shows_the_error_and_restores_the_settings(isolated_admin_client, tmp_path, caplog):
+def test_settings_failure_shows_the_error_and_restores_the_settings(isolated_local_admin_client, tmp_path, caplog):
+    """Saving the settings is local-only: this one goes through a connection from the server itself."""
     new_folder = str(tmp_path)
 
     with _writes_denied(), caplog.at_level(logging.INFO):
-        response = isolated_admin_client.post(
+        response = isolated_local_admin_client.post(
             "/admin/settings", data={"queries_folder": new_folder, "logs_folder": ""}, follow_redirects=False
         )
 
@@ -127,7 +128,7 @@ def test_settings_failure_shows_the_error_and_restores_the_settings(isolated_adm
     assert new_folder in response.text  # redisplays what was submitted
     assert not any("Settings changed by admin" in r.message for r in caplog.records)
 
-    still_current = isolated_admin_client.get("/admin/settings")
+    still_current = isolated_local_admin_client.get("/admin/settings")
     assert "tests/resources/queries" in still_current.text
     assert new_folder not in still_current.text
 

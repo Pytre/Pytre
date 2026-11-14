@@ -86,6 +86,18 @@ def isolated_admin_client(monkeypatch, tmp_path) -> TestClient:
 
 
 @pytest.fixture
+def isolated_local_admin_client(monkeypatch, tmp_path) -> TestClient:
+    """Like `isolated_admin_client`, but connected from the server itself - see `local_admin_client`. For the
+    local-only admin actions that write to the database, such as saving the general settings."""
+    db_copy = tmp_path / "Pytre_test.db"
+    shutil.copy(TEST_DB_PATH, db_copy)
+    monkeypatch.setattr(kee_module, "KEE_FILE", db_copy)
+    test_client = TestClient(create_app(master_key=TEST_DB_PASSWORD), client=("127.0.0.1", 12345))
+    test_client.post("/admin/login", data={"username": TEST_USERNAME, "password": TEST_USER_PASSWORD})
+    return test_client
+
+
+@pytest.fixture
 def auth_headers(client) -> dict[str, str]:
     """Bearer token headers for TEST_USERNAME, obtained via a real /login call against
     `client` - every protected route (/servers, /queries, /execute, /change-password) needs

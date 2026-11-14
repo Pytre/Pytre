@@ -15,7 +15,7 @@ I am not looking for contributions but if you have any questions I would be happ
 - [Architecture](#architecture)
 - [Queries](#queries): writing them, where they are read from
 - [Download](#download)
-- [Enterprise deployment](#enterprise-deployment): MSI, zip, update policy
+- [Enterprise deployment](#enterprise-deployment): MSI, zip, enterprise policy
 - [Server security](#server-security): reverse proxy, sign-in throttling, how queries are run, web administration
 - [Server options](#server-options)
 - [Setup from source](#setup-from-source)
@@ -45,11 +45,11 @@ Windows builds are published on the [Releases](https://github.com/Pytre/Pytre/re
 - client builds
     - `Pytre_Client_<version>.exe`: the client as a single portable executable
     - `Pytre_Client_<version>.zip`: the client as a folder, which starts faster
-    - `Pytre_Client_<version>.msi`: the same folder as a Windows installer (stable releases only), with a policy file turning updates off
+    - `Pytre_Client_<version>.msi`: the same folder as a Windows installer (stable releases only), with a policy file turning off updates and plain HTTP to remotes
 - server build
     - `Pytre_Server_<version>.exe`: the server as a single portable executable (console application with no automatic updates)
 
-The executables and the zip need no installation: run the executable, or extract the zip in a folder you can write to and run `Pytre_Client.exe` inside it. The client executable and the zip update themselves, unless an [update policy](#update-policy) turns updates off. As they are not signed, Windows SmartScreen may show a warning on first launch (*More info > Run anyway*). The MSI is meant for managed deployments, see [Enterprise deployment](#enterprise-deployment).
+The executables and the zip need no installation: run the executable, or extract the zip in a folder you can write to and run `Pytre_Client.exe` inside it. The client executable and the zip update themselves, unless an [enterprise policy](#enterprise-policy) turns updates off. As they are not signed, Windows SmartScreen may show a warning on first launch (*More info > Run anyway*). The MSI is meant for managed deployments, see [Enterprise deployment](#enterprise-deployment).
 
 The prebuilt client only runs as a pure client: hybrid mode needs `Pytre_Core/credentials_secrets.py` with your own key, so the client has to be built from source.
 
@@ -63,7 +63,7 @@ All three formats of the client suit a managed deployment. The server is only pu
 - `Pytre_Client_<version>.zip`: the same folder, to extract yourself, also published for pre-releases
 - `Pytre_Client_<version>.exe`: the client as a single executable
 
-The zip and the executable update themselves: deploy them with a `Pytre.policy.json` file to control their updates, see [Update policy](#update-policy).
+The zip and the executable update themselves: deploy them with a `Pytre.policy.json` file to control their updates, see [enterprise policy](#enterprise-policy).
 
 Releases are immutable and each one publishes `SHA256SUMS.txt`, so a file can be checked before being deployed, e.g. with `Get-FileHash <file> -Algorithm SHA256` in PowerShell.
 
@@ -75,7 +75,7 @@ Releases are immutable and each one publishes `SHA256SUMS.txt`, so a file can be
 - To uninstall: "Installed apps" in Windows settings, or `msiexec /x Pytre_Client_<version>.msi /qn`.
 - User data lives in `%LOCALAPPDATA%\Pytre` and is left untouched.
 - The upgrade code `{66048ACB-7CC6-4AEE-9BC4-C0F307486C78}` stays the same across versions, for detection rules.
-- It installs a `Pytre.policy.json` file turning updates off: new versions are deployed with a new MSI.
+- It installs a `Pytre.policy.json` file turning updates off (new versions are deployed with a new MSI) and plain HTTP to remotes other than the machine itself: remotes must use `https://`.
 
 ### Folder (zip)
 
@@ -83,25 +83,35 @@ Releases are immutable and each one publishes `SHA256SUMS.txt`, so a file can be
 - To update: close Pytre, delete the folder, then extract the new zip. Never extract over a previous version: files it no longer uses would stay behind.
 - User data lives in `%LOCALAPPDATA%\Pytre` and is left untouched.
 - To detect the installed version, read the file version of `Pytre_Client.exe`: `2.0.0.400` for 2.0.0, pre-releases being lower (`2.0.0.204` for 2.0.0-beta.4).
-- Add a `Pytre.policy.json` file next to `Pytre_Client.exe` to turn updates off. Without it, the client checks for new versions and, as it can't replace itself in a folder users can't write to, offers to open the download page.
+- Add a `Pytre.policy.json` file next to `Pytre_Client.exe` to turn updates off, see [Enterprise policy](#enterprise-policy). Without it, the client checks for new versions and, as it can't replace itself in a folder users can't write to, offers to open the download page.
 
-### Update policy
+### Enterprise policy
 
 Put a `Pytre.policy.json` file next to the client executable:
 
 ```json
-{ "update_policy": "disabled" }
+{
+    "updates": "disabled",
+    "plain_http_remotes": "disabled"
+}
 ```
 
-| `update_policy` | Behaviour |
+- Each key is optional. Values are case insensitive. Without the file, or without a key, the client behaves as `allowed` for it.
+- A file that can't be read, isn't valid JSON or holds an unknown value turns `disabled` what it can't read, and a warning is logged.
+- The policy only binds if users can't modify the file: install the executable and `Pytre.policy.json` in a folder users can't write to, such as `C:\Program Files\Pytre_Client`.
+- Keep `Pytre.policy.json` next to the executable if the deployment recreates the folder or uses a new one for each version.
+
+| `updates` | Behaviour |
 |---|---|
 | `allowed` | Checks for updates at startup by default, and on demand from the `?` menu. Users can turn off the startup check and choose the update channel in the About window |
 | `disabled` | Never checks for updates: the update menu is hidden, and the About window says updates are managed by the organization instead of showing the update settings |
+  
+| `plain_http_remotes` | Behaviour |
+|---|---|
+| `allowed` | A remote can be reached over plain HTTP (`http://`) on the machine itself, on a private network address (`10.*`, `172.16.*` to `172.31.*`, `192.168.*`...), or on any address if the option is enabled in its configuration |
+| `disabled` | Plain HTTP is only allowed to the machine itself (`localhost`, `127.0.0.1`, `::1`): every other remote must use `https://`, and the option of the remotes window is hidden |
 
-- Values are case insensitive. Without the file, or without `update_policy`, the client behaves as `allowed`.
-- A file that can't be read, isn't valid JSON or holds an unknown value disables updates, and a warning is logged.
-- The policy only binds if users can't modify the file: install the executable and `Pytre.policy.json` in a folder users can't write to, such as `C:\Program Files\Pytre_Client`.
-- Keep `Pytre.policy.json` next to the executable if the deployment recreates the folder or uses a new one for each version.
+With `plain_http_remotes` disabled, the passwords and tokens of the remotes never go unencrypted over the network. A remote reached over plain HTTP, on its own or through an SSO sign-in, is refused with a message asking for an `https://` address.
 
 ## Server security
 

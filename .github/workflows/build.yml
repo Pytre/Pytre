@@ -162,7 +162,7 @@ jobs:
           $install = Start-Process msiexec -ArgumentList "/i `"$msi`" /qn /l*v msi_install.log" -Wait -PassThru
           if ($install.ExitCode -ne 0) { throw "Install failed with exit code $($install.ExitCode)" }
           if (-not (Test-Path $exe)) { throw "$exe wasn't installed" }
-          if (-not (Test-Path "$env:ProgramFiles\Pytre_Client\Pytre.policy.json")) { throw "Update policy wasn't installed" }
+          if (-not (Test-Path "$env:ProgramFiles\Pytre_Client\Pytre.policy.json")) { throw "Enterprise policy wasn't installed" }
           $uninstall = Start-Process msiexec -ArgumentList "/x `"$msi`" /qn /l*v msi_uninstall.log" -Wait -PassThru
           if ($uninstall.ExitCode -ne 0) { throw "Uninstall failed with exit code $($uninstall.ExitCode)" }
           if (Test-Path $exe) { throw "$exe is still there after uninstall" }
@@ -263,7 +263,7 @@ jobs:
             describe 'Pytre_Server_.*\.exe' "Pytre_Server_*.exe" "server, portable single executable (console application)"
             echo
             echo "The client executable and the zip update themselves, unless an enterprise policy turns updates off."
-            if built '.*\.msi'; then echo "The MSI installs a policy file that disables updates."; fi
+            if built '.*\.msi'; then echo "The MSI installs a policy file that disables updates and plain HTTP to remotes."; fi
             echo
             echo "To verify a download: compare its hash with \`SHA256SUMS.txt\` (\`Get-FileHash <file>\` in PowerShell),"
             echo "or check its build provenance with \`gh attestation verify <file> --repo Pytre/Pytre\`."

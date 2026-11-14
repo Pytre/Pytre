@@ -12,7 +12,9 @@ import httpx2
 import jwt
 import pytest
 
+from Pytre_Core import remotes as remotes_module
 from Pytre_Core.app_folders import get_config_folder
+from Pytre_Core.policy import PlainHttpRemotesPolicy
 from Pytre_Core.remotes import (
     REMOTES_CIPHER,
     REMOTES_FILENAME,
@@ -78,6 +80,16 @@ def _make_soon_to_expire_token() -> str:
     invalid well before it actually expires, not just at the exact expiry instant."""
     payload = {"sub": "alice", "exp": datetime.now(timezone.utc) + timedelta(seconds=2)}
     return jwt.encode(payload, "test-secret-at-least-32-bytes-long", algorithm="HS256")
+
+
+REAL_PLAIN_HTTP_ALLOWED = remotes_module.plain_http_allowed  # kept before the fixture below replaces it
+
+
+@pytest.fixture(autouse=True)
+def plain_http_policy_allowed(monkeypatch):
+    """No test depends on a Pytre.policy.json lying next to the code, nor on the cached policy of another test: plain
+    HTTP to remotes is allowed unless a test monkeypatches plain_http_allowed() to say otherwise."""
+    monkeypatch.setattr("Pytre_Core.remotes.plain_http_allowed", lambda: True)
 
 
 @pytest.fixture
@@ -910,8 +922,8 @@ def test_login_refuses_plain_http_to_a_public_ip(address, remotes, monkeypatch):
 
 @pytest.mark.unit
 def test_login_allows_plain_http_to_a_public_ip_when_allow_unsecure_channel_is_true(address, remotes, monkeypatch):
-    """The explicit opt-out (e.g. an enterprise/Azure network not detected as private) bypasses
-    the channel_is_secure gate entirely - login() proceeds normally."""
+    """The explicit opt-out (e.g. an enterprise/Azure network not detected as private) lets a plain HTTP login
+    through when the enterprise policy allows plain HTTP - login() proceeds normally."""
     address.url = "http://8.8.8.8"
     address.allow_unsecure_channel = True
     monkeypatch.setattr(httpx2, "post", lambda **kwargs: _FakeResponse({"refresh_token": "r1", "access_token": "a1"}))
@@ -919,6 +931,136 @@ def test_login_allows_plain_http_to_a_public_ip_when_allow_unsecure_channel_is_t
     result = Remote(remotes, address).login()
 
     assert result is True
+
+
+# ================================================================================
+# Plain HTTP and the enterprise policy (plain_http_remotes)
+# ================================================================================
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("url", "allow_unsecure", "plain_http_allowed", "expected"),
+    [
+        ("https://srv.example.com", False, False, True),
+        ("http://127.0.0.1", False, False, True),
+        ("http://127.1.2.3", False, False, True),
+        ("http://localhost", False, False, True),
+        ("http://[::1]", False, False, True),
+        ("http://10.0.0.5", False, True, True),
+        ("http://10.0.0.5", False, False, False),
+        ("http://192.168.1.10", True, False, False),
+        ("http://srv.example.com", True, True, True),
+        ("http://srv.example.com", True, False, False),
+        ("http://srv.example.com", False, True, False),
+        ("http://8.8.8.8", False, True, False),
+    ],
+    ids=[
+        "https",
+        "loopback",
+        "loopback-range",
+        "localhost",
+        "ipv6-loopback",
+        "private-allowed",
+        "private-disabled",
+        "private-ticked-disabled",
+        "host-ticked-allowed",
+        "host-ticked-disabled",
+        "host-unticked-allowed",
+        "public-allowed",
+    ],
+)
+def test_channel_is_allowed(url, allow_unsecure, plain_http_allowed, expected):
+    address = RemoteAddress(url=url, port=8000, username="alice", allow_unsecure_channel=allow_unsecure)
+
+    assert address.channel_is_allowed(plain_http_allowed) is expected
+
+
+@pytest.mark.unit
+def test_check_channel_accepts_an_allowed_channel(address, remotes):
+    remote = Remote(remotes, address)  # http://127.0.0.1
+
+    remote.check_channel()
+
+    assert remote.last_error is None
+
+
+@pytest.mark.unit
+def test_check_channel_refusal_names_the_organization_when_the_policy_disables_plain_http(
+    address, remotes, monkeypatch
+):
+    monkeypatch.setattr("Pytre_Core.remotes.plain_http_allowed", lambda: False)
+    address.url = "http://10.0.0.5"
+    remote = Remote(remotes, address)
+
+    expected = "disabled by your organization: its address must start with https://"
+    with pytest.raises(RemoteInsecureChannelError, match=expected):
+        remote.check_channel()
+
+    assert isinstance(remote.last_error, RemoteInsecureChannelError)
+
+
+@pytest.mark.unit
+def test_check_channel_refusal_when_the_policy_allows_plain_http(address, remotes):
+    address.url = "http://8.8.8.8"
+
+    with pytest.raises(RemoteInsecureChannelError, match="not allowed over plain HTTP"):
+        Remote(remotes, address).check_channel()
+
+
+@pytest.mark.unit
+def test_login_ignores_allow_unsecure_channel_when_the_policy_disables_plain_http(address, remotes, monkeypatch):
+    """With plain_http_remotes disabled, neither a private address nor the user's opt-out lets credentials through."""
+    monkeypatch.setattr("Pytre_Core.remotes.plain_http_allowed", lambda: False)
+    address.url = "http://192.168.1.10"
+    address.allow_unsecure_channel = True
+
+    def fake_post(**kwargs):
+        pytest.fail("httpx2.post should not be called")
+
+    monkeypatch.setattr(httpx2, "post", fake_post)
+
+    with pytest.raises(RemoteInsecureChannelError):
+        Remote(remotes, address).login()
+
+
+@pytest.mark.unit
+def test_login_still_allows_plain_http_to_this_machine_when_the_policy_disables_it(address, remotes, monkeypatch):
+    monkeypatch.setattr("Pytre_Core.remotes.plain_http_allowed", lambda: False)
+    monkeypatch.setattr(httpx2, "post", lambda **kwargs: _FakeResponse({"refresh_token": "r1", "access_token": "a1"}))
+
+    assert Remote(remotes, address).login() is True  # http://127.0.0.1
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(("policy", "expected"), [("ALLOWED", True), ("DISABLED", False)])
+def test_plain_http_allowed_follows_the_policy(monkeypatch, policy, expected):
+    monkeypatch.setattr(PlainHttpRemotesPolicy, "load", classmethod(lambda cls: PlainHttpRemotesPolicy[policy]))
+    REAL_PLAIN_HTTP_ALLOWED.cache_clear()
+    try:
+        assert REAL_PLAIN_HTTP_ALLOWED() is expected
+    finally:
+        REAL_PLAIN_HTTP_ALLOWED.cache_clear()
+
+
+@pytest.mark.unit
+def test_plain_http_allowed_reads_the_policy_once(monkeypatch):
+    """The policy file doesn't change while the app runs: reading it at each login would only flood the logs."""
+    loads: list[int] = []
+
+    def fake_load(cls):
+        loads.append(1)
+        return PlainHttpRemotesPolicy.ALLOWED
+
+    monkeypatch.setattr(PlainHttpRemotesPolicy, "load", classmethod(fake_load))
+    REAL_PLAIN_HTTP_ALLOWED.cache_clear()
+    try:
+        REAL_PLAIN_HTTP_ALLOWED()
+        REAL_PLAIN_HTTP_ALLOWED()
+    finally:
+        REAL_PLAIN_HTTP_ALLOWED.cache_clear()
+
+    assert len(loads) == 1
 
 
 # ================================================================================

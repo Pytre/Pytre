@@ -10,7 +10,7 @@ import pytest
 from Pytre_Client.app import App
 from Pytre_Client.app_about import AboutWindow
 from Pytre_Core.about import AppStage
-from Pytre_Core.updater import UpdatePolicy
+from Pytre_Core.policy import UpdatePolicy
 from Pytre_Core.user_prefs import PrefEnum
 
 pytestmark = pytest.mark.unit

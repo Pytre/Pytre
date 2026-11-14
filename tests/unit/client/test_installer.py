@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from Pytre_Core.about import CLIENT_BASENAME, AppVersion
-from Pytre_Core.updater import POLICY_FILE
+from Pytre_Core.policy import POLICY_FILE
 
 pytestmark = pytest.mark.unit
 

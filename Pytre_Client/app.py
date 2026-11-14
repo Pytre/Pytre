@@ -26,7 +26,8 @@ from Pytre_Core.logs_central import ClientDriven as CentralLogs
 from Pytre_Core.old_files import delete_files, list_old_files
 from Pytre_Core.remotes import RemoteServer, RemoteAuthError, RemoteSsoRequiredError
 from Pytre_Core.servers import Server
-from Pytre_Core.updater import Release, UpdatePolicy, Updater, UpdateError
+from Pytre_Core.policy import UpdatePolicy
+from Pytre_Core.updater import Release, Updater, UpdateError
 from Pytre_Core.user_prefs import PrefEnum
 
 from Pytre_Core.sql_query.execution_runner import ExecutionRunner

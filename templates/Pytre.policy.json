@@ -1,1 +1,4 @@
-{ "update_policy": "disabled" }
+{
+    "updates": "disabled",
+    "plain_http_remotes": "disabled"
+}

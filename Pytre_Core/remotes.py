@@ -6,6 +6,7 @@ import logging
 from contextlib import contextmanager
 from collections.abc import Generator, Iterator
 from datetime import datetime, timedelta, timezone
+from functools import cache
 from pathlib import Path
 from typing import Self, Any, Protocol
 from urllib.parse import urlparse
@@ -15,6 +16,7 @@ import httpx2
 
 from Pytre_Core.app_folders import get_config_folder, REMOTES_FILENAME
 from Pytre_Core.keyring import KeyringCatalog
+from Pytre_Core.policy import PlainHttpRemotesPolicy
 from Pytre_Core.remote_protocol import decode_row_value, StreamKey
 from Pytre_Core.user_prefs import DisplayFormat
 from Pytre_Core.users import AuthType
@@ -29,6 +31,13 @@ _EXEC_TIMEOUT = 15 * 60  # seconds - timeout for SQL executions
 
 def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__) -> None:
     _log(msg, level=level, sublogger=sublogger)
+
+
+@cache
+def plain_http_allowed() -> bool:
+    """Whether the enterprise policy allows plain HTTP to remotes other than this machine, read once: the policy file
+    doesn't change while the app runs."""
+    return PlainHttpRemotesPolicy.load() is PlainHttpRemotesPolicy.ALLOWED
 
 
 # ------------------------------------------------------------------------------------------
@@ -347,16 +356,29 @@ class Remote:
         self.last_error = None
         return True
 
+    def check_channel(self) -> None:
+        """Raises RemoteInsecureChannelError if credentials and tokens may not be sent to this remote, see
+        RemoteAddress.channel_is_allowed()."""
+
+        allowed = plain_http_allowed()
+        if self.address.channel_is_allowed(allowed):
+            return
+
+        if not allowed:
+            msg = f"Plain HTTP to {self.id} is disabled by your organization: its address must start with https://"
+        else:
+            msg = f"Login to a non-local remote is not allowed over plain HTTP: {self.id}"
+
+        log(msg, logging.ERROR)
+
+        self.last_error = RemoteInsecureChannelError(msg)
+        raise self.last_error
+
     def login(self) -> bool:
         """Authenticates and store token on `address`. Returns True on success, raises on failure.
-        Refuses to send credentials over plain HTTP if not on localhost or on a private network or
-        explicitly allowed."""
+        Refuses to send credentials or tokens over a channel check_channel() doesn't allow."""
 
-        if not self.address.channel_is_secure and self.address.allow_unsecure_channel is False:
-            msg = f"Login to a non-local remote is not allowed over plain HTTP: {self.id}"
-            log(msg, logging.ERROR)
-            self.last_error = RemoteInsecureChannelError(msg)
-            raise self.last_error
+        self.check_channel()
 
         # try to get an access token only if refresh_token still valid
         if self.address.refresh_token_is_valid:
@@ -541,21 +563,6 @@ class RemoteAddress:
         return f"{self.username.strip()}@{self.url.strip()}:{str(self.port).strip()}".lower()
 
     @property
-    def channel_is_secure(self) -> bool:
-        """True for https protocol or "localhost" or any private-network/loopback address
-        (RFC 1918, 127.0.0.0/8, ::1...) - the only hosts allowed over plain HTTP."""
-        parsed_url = urlparse(self.url)
-
-        if parsed_url.scheme == "https":
-            return True
-
-        host = parsed_url.hostname or ""
-        try:
-            return host == "localhost" or ipaddress.ip_address(host).is_private
-        except ValueError:
-            return False
-
-    @property
     def description_for_ui(self) -> str:
         """Return `description` if not empty else fallback to `id`"""
         return self.description or self.id
@@ -569,6 +576,28 @@ class RemoteAddress:
     def access_token_is_valid(self) -> bool:
         """Return whether the access token exists, well-formed and not expired."""
         return self._token_is_valid(self.access_token)
+
+    def channel_is_allowed(self, allow_plain_http: bool) -> bool:
+        """True if credentials and tokens may be sent to this remote: always over HTTPS, and over plain HTTP to the
+        machine itself (localhost, 127.0.0.0/8, ::1). Over plain HTTP elsewhere only if `allow_plain_http`, and then
+        to a private network address (RFC 1918...) or when `allow_unsecure_channel` is set."""
+        parsed_url = urlparse(self.url)
+
+        if parsed_url.scheme == "https":
+            return True
+
+        host = parsed_url.hostname or ""
+        try:
+            address = ipaddress.ip_address(host)
+        except ValueError:
+            address = None  # a host name
+
+        if host == "localhost" or (address is not None and address.is_loopback):
+            return True
+        if not allow_plain_http:
+            return False
+
+        return (address is not None and address.is_private) or self.allow_unsecure_channel
 
     def _token_is_valid(self, token: str, min_remaining: timedelta = timedelta(seconds=5)) -> bool:
         """Return whether the token exists, well-formed, and won't expire within `min_remaining`."""

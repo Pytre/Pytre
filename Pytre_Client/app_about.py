@@ -4,7 +4,8 @@ from tkinter import ttk, font
 
 from Pytre_Core import about
 from Pytre_Core.app_folders import get_resources_folder
-from Pytre_Core.updater import UpdatePolicy, Updater
+from Pytre_Core.policy import UpdatePolicy
+from Pytre_Core.updater import Updater
 from Pytre_Core.user_prefs import PrefEnum, UserPrefs
 from Pytre_Core.utils import get_system
 

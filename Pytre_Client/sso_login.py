@@ -8,7 +8,7 @@ from tkinter import Event, ttk, messagebox
 import Pytre_Client.ui_utils as ui_utils
 from Pytre_Client.app_theme import set_theme
 from Pytre_Client.ui_utils_thread import tk_call_when_ready
-from Pytre_Core.remotes import Remote
+from Pytre_Core.remotes import Remote, RemoteInsecureChannelError
 from Pytre_Core.sso import LoopbackListener, SsoLoginCancelled, SsoLoginError, login_via_browser
 
 
@@ -96,6 +96,13 @@ def prompt_sso_login(
     waits for Pytre_Server's loopback redirect), shows a cancellable wait dialog, and calls
     on_done(success) back on the Tk thread once it's over - same contract as prompt_remote_credentials()
     except it can't return synchronously, the login itself being async."""
+
+    try:
+        remote.check_channel()  # a code is traded for tokens: the same rule as a password login
+    except RemoteInsecureChannelError as e:
+        messagebox.showerror("Connexion SSO", str(e), parent=parent)
+        on_done(False)
+        return
 
     dialog = SsoWaitDialog(remote.address.description_for_ui, parent=parent)
 

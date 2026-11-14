@@ -8,7 +8,15 @@ from collections.abc import Iterator
 
 from Pytre_Core import utils
 from Pytre_Core.about import APP_NAME
-from Pytre_Core.remotes import Remotes, Remote, RemoteAddress, RemoteAuthError, RemoteError, RemoteSsoRequiredError
+from Pytre_Core.remotes import (
+    Remotes,
+    Remote,
+    RemoteAddress,
+    RemoteAuthError,
+    RemoteError,
+    RemoteSsoRequiredError,
+    plain_http_allowed,
+)
 from Pytre_Core.users import AuthType
 
 import Pytre_Client.ui_utils as ui_utils
@@ -566,6 +574,11 @@ class RemoteDialog(tk.Toplevel):
                 my_entry = ttk.Entry(self.entries_frame, textvariable=my_tk_var)
 
             self.entries[key] = WidgetGroup(caption=caption, w_label=my_label, w_entry=my_entry, var=my_tk_var)
+
+            if key == "allow_unsecure_channel" and not plain_http_allowed():
+                # hidden but kept, so its value is saved unchanged: the policy ignores it, plain HTTP to another
+                # machine is not allowed
+                continue
 
             my_label.grid(row=num_row, column=label_col, columnspan=label_span, padx=2, pady=2, ipady=4, sticky="nswe")
             my_entry.grid(row=num_row, column=entry_col, columnspan=entry_span, padx=2, pady=2, sticky="nswe")

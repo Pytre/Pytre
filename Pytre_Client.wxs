@@ -13,12 +13,13 @@
     <Property Id="ARPPRODUCTICON" Value="app.ico" />
     <Property Id="ARPURLINFOABOUT" Value="$(HomepageLink)" />
 
-    <!-- The whole onedir build, with a policy file turning off its own updates: deployments install new versions -->
+    <!-- The whole onedir build, with a policy file turning off its own updates (deployments install new versions)
+         and plain HTTP to remotes -->
     <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="INSTALLFOLDER" Name="Pytre_Client">
         <Files Include="!(bindpath.Client)\**" />
-        <Component Id="UpdatePolicy">
-          <File Id="UpdatePolicy" Source="!(bindpath.Templates)\Pytre.policy.json" KeyPath="yes" />
+        <Component Id="EnterprisePolicy">
+          <File Id="EnterprisePolicy" Source="!(bindpath.Templates)\Pytre.policy.json" KeyPath="yes" />
         </Component>
       </Directory>
     </StandardDirectory>

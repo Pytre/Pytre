@@ -43,6 +43,10 @@ class OidcTokenError(OidcError):
     """Raised when an ID token fails signature, claim, or nonce validation."""
 
 
+class OidcUserInfoError(OidcError):
+    """Raised when the UserInfo endpoint is missing, can't be queried, or answers for another user."""
+
+
 @dataclass(frozen=True)
 class OidcDiscovery:
     """The subset of a discovery document actually used. `issuer` is the value the document
@@ -54,6 +58,7 @@ class OidcDiscovery:
     authorization_endpoint: str
     token_endpoint: str
     jwks_uri: str
+    userinfo_endpoint: str = ""  # only RECOMMENDED by the specification, may be absent
 
 
 @dataclass
@@ -93,6 +98,7 @@ class OidcClient:
             authorization_endpoint=data["authorization_endpoint"],
             token_endpoint=data["token_endpoint"],
             jwks_uri=data["jwks_uri"],
+            userinfo_endpoint=data.get("userinfo_endpoint", ""),
         )
         self._set_cache(self._discovery_cache, issuer, discovery, _DISCOVERY_CACHE_SECS)
 
@@ -138,18 +144,38 @@ class OidcClient:
 
         return claims
 
-    async def _fetch_json(self, url: str, error_cls: type[OidcError]) -> dict:
+    async def fetch_userinfo(self, discovery: OidcDiscovery, access_token: str, *, expected_sub: str) -> dict:
+        """Claims of the UserInfo endpoint for the user `access_token` was issued to.
+        Their `sub` must be the ID token's one (`expected_sub`), otherwise they may describe another user.
+        Raises OidcUserInfoError."""
+        if not discovery.userinfo_endpoint:
+            raise OidcUserInfoError("The identity provider doesn't announce a UserInfo endpoint")
+
+        headers = {"Authorization": f"Bearer {access_token}"}
+        claims = await self._fetch_json(discovery.userinfo_endpoint, OidcUserInfoError, headers=headers)
+
+        if claims.get("sub") != expected_sub:
+            raise OidcUserInfoError("UserInfo claims are not about the ID token's user")
+
+        return claims
+
+    async def _fetch_json(self, url: str, error_cls: type[OidcError], headers: dict[str, str] | None = None) -> dict:
         try:
             async with httpx2.AsyncClient(timeout=self._timeout) as client:
-                response = await client.get(url)
+                response = await client.get(url, headers=headers)
                 response.raise_for_status()
-                return response.json()
+                data = response.json()
         except httpx2.HTTPStatusError as e:
             raise error_cls(f"Request to {url} failed: HTTP {e.response.status_code}") from e
         except httpx2.RequestError as e:
             raise error_cls(f"Request to {url} failed: {e}") from e
         except ValueError as e:  # invalid JSON
             raise error_cls(f"Response from {url} isn't valid JSON") from e
+
+        if not isinstance(data, dict):
+            raise error_cls(f"Response from {url} isn't a JSON object")
+
+        return data
 
     async def _get_jwks(self, jwks_uri: str) -> dict:
         cached = self._get_cache(self._jwks_cache, jwks_uri)

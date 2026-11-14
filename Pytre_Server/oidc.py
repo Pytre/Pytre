@@ -13,7 +13,7 @@ import httpx2
 from authlib.common.errors import AuthlibBaseError
 from authlib.integrations.httpx_client import AsyncOAuth2Client
 
-from Pytre_Core.oidc_client import OidcError, new_token
+from Pytre_Core.oidc_client import OidcDiscovery, OidcError, new_token
 from Pytre_Core.oidc_providers import OidcProvider, OidcProviders
 from Pytre_Core.users import AuthType, OidcLink, User, Users
 from Pytre_Core.utils import log as _log
@@ -129,10 +129,37 @@ async def handle_callback(
     except OidcError as e:
         raise OidcLoginError(f"Invalid ID token: {e}") from e
 
+    # some IdP only serve the profile claims through UserInfo, the ID token only proving who the user is
+    if not claims.get(provider.username_claim):
+        claims = await _complete_with_userinfo(resources, discovery, token, claims)
+
     # link user - does blocking KeePass I/O, deferred to a worker thread so the event loop is not stalled
     user = await asyncio.to_thread(link_user, users, provider, claims, refresh_token)
 
     return user, pending.next_path
+
+
+async def _complete_with_userinfo(
+    resources: ServerResources, discovery: OidcDiscovery, token: dict, claims: dict
+) -> dict:
+    """Adds the UserInfo claims the ID token lacks or has blank, never overriding a filled one (those are signed).
+    Left unchanged when UserInfo can't be read: an already linked user only needs `sub`, link_user() reports the
+    claim otherwise."""
+
+    access_token = token.get("access_token")
+    if not discovery.userinfo_endpoint or not access_token:
+        return claims
+
+    try:
+        userinfo = await resources.oidc_client.fetch_userinfo(discovery, access_token, expected_sub=claims["sub"])
+    except OidcError as e:
+        log(f"SSO: UserInfo claims couldn't be read, only the ID token ones are used: {e}", logging.WARNING)
+        return claims
+
+    # remove blank claims if any so they count as missing, should be rare as an IdP usually omits them
+    signed_claims = {name: value for name, value in claims.items() if value != ""}
+
+    return {**userinfo, **signed_claims}
 
 
 def link_user(users: Users, provider: OidcProvider, claims: dict, refresh_token: str = "") -> User:

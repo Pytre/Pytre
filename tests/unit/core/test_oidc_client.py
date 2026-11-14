@@ -24,6 +24,7 @@ from Pytre_Core.oidc_client import (
     OidcDiscovery,
     OidcDiscoveryError,
     OidcTokenError,
+    OidcUserInfoError,
     new_token,
 )
 
@@ -165,6 +166,35 @@ async def test_discover_refetches_once_the_cache_entry_has_expired(install_trans
     assert second == first
     assert second is not first
     assert len(calls) == 2
+
+
+@pytest.mark.anyio
+async def test_discover_reads_the_userinfo_endpoint(install_transport):
+    install_transport(_responder(200, json_body=_discovery_doc(userinfo_endpoint=f"{ISSUER}/userinfo")))
+
+    discovery = await OidcClient().discover(ISSUER)
+
+    assert discovery.userinfo_endpoint == f"{ISSUER}/userinfo"
+
+
+@pytest.mark.anyio
+async def test_discover_accepts_a_document_without_userinfo_endpoint(install_transport):
+    """Only RECOMMENDED by the specification: its absence must not prevent logging in"""
+    install_transport(_responder(200, json_body=_discovery_doc()))
+
+    discovery = await OidcClient().discover(ISSUER)
+
+    assert discovery.userinfo_endpoint == ""
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("body", ['"issuer token_endpoint jwks_uri authorization_endpoint"', "[]", "null"])
+async def test_discover_raises_on_json_that_is_not_an_object(install_transport, body):
+    """A string would pass the required fields check by substring, and fail much later"""
+    install_transport(_responder(200, text=body))
+
+    with pytest.raises(OidcDiscoveryError, match="isn't a JSON object"):
+        await OidcClient().discover(ISSUER)
 
 
 # ================================================================================
@@ -362,6 +392,83 @@ def test_allowed_algorithms_excludes_none_and_hmac():
     forge its own signature (see validate_id_token's docstring)."""
     assert "none" not in ALLOWED_ALGORITHMS
     assert not any(alg.startswith("HS") for alg in ALLOWED_ALGORITHMS)
+
+
+# ================================================================================
+# fetch_userinfo()
+# ================================================================================
+
+USERINFO_URL = f"{ISSUER}/userinfo"
+
+
+def _userinfo_discovery(userinfo_endpoint: str = USERINFO_URL) -> OidcDiscovery:
+    return OidcDiscovery(
+        issuer=ISSUER,
+        authorization_endpoint=f"{ISSUER}/auth",
+        token_endpoint=f"{ISSUER}/token",
+        jwks_uri=f"{ISSUER}/jwks",
+        userinfo_endpoint=userinfo_endpoint,
+    )
+
+
+@pytest.mark.anyio
+async def test_fetch_userinfo_returns_the_claims_asked_with_the_access_token(install_transport):
+    requests: list[httpx2.Request] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        requests.append(request)
+        return httpx2.Response(200, json={"sub": "sub-123", "preferred_username": "jdupont"})
+
+    install_transport(handler)
+
+    claims = await OidcClient().fetch_userinfo(_userinfo_discovery(), "the-access-token", expected_sub="sub-123")
+
+    assert claims == {"sub": "sub-123", "preferred_username": "jdupont"}
+    assert str(requests[0].url) == USERINFO_URL
+    assert requests[0].headers["Authorization"] == "Bearer the-access-token"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("body", [{"sub": "someone-else", "preferred_username": "x"}, {"preferred_username": "x"}])
+async def test_fetch_userinfo_rejects_claims_about_another_user(install_transport, body):
+    """Their sub must be the ID token's, otherwise they may describe someone else"""
+    install_transport(_responder(200, json_body=body))
+
+    with pytest.raises(OidcUserInfoError, match="not about the ID token's user"):
+        await OidcClient().fetch_userinfo(_userinfo_discovery(), "token", expected_sub="sub-123")
+
+
+@pytest.mark.anyio
+async def test_fetch_userinfo_raises_without_userinfo_endpoint(install_transport):
+    install_transport(_raiser(AssertionError("no request expected")))
+
+    with pytest.raises(OidcUserInfoError, match="doesn't announce a UserInfo endpoint"):
+        await OidcClient().fetch_userinfo(_userinfo_discovery(""), "token", expected_sub="sub-123")
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "handler",
+    [
+        _responder(401, text="invalid token"),
+        _raiser(httpx2.ConnectError("refused")),
+        _responder(200, text="a.signed.jwt"),
+    ],
+    ids=["http-error", "network-error", "not-json"],
+)
+async def test_fetch_userinfo_raises_when_the_endpoint_fails(install_transport, handler):
+    install_transport(handler)
+
+    with pytest.raises(OidcUserInfoError):
+        await OidcClient().fetch_userinfo(_userinfo_discovery(), "token", expected_sub="sub-123")
+
+
+@pytest.mark.anyio
+async def test_fetch_userinfo_raises_on_json_that_is_not_an_object(install_transport):
+    install_transport(_responder(200, text='["sub-123"]'))
+
+    with pytest.raises(OidcUserInfoError, match="isn't a JSON object"):
+        await OidcClient().fetch_userinfo(_userinfo_discovery(), "token", expected_sub="sub-123")
 
 
 # ================================================================================

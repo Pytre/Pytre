@@ -15,7 +15,7 @@ import logging
 import shutil
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import ANY, AsyncMock, Mock
 
 import httpx2
 import pytest
@@ -23,7 +23,13 @@ from authlib.oauth2.rfc6749.errors import InvalidGrantError
 
 import Pytre_Core.kee as kee_module
 from Pytre_Core.kee import Kee
-from Pytre_Core.oidc_client import OidcClient, OidcDiscovery, OidcDiscoveryError, OidcTokenError
+from Pytre_Core.oidc_client import (
+    OidcClient,
+    OidcDiscovery,
+    OidcDiscoveryError,
+    OidcTokenError,
+    OidcUserInfoError,
+)
 from Pytre_Core.oidc_providers import OidcProvider, OidcProviders
 from Pytre_Core.users import AuthType, OidcLink, User, Users
 from Pytre_Server.oidc import (
@@ -450,6 +456,111 @@ async def test_handle_callback_returns_the_linked_user_and_the_stored_next_path(
     assert user is fake_user
     assert next_path == "/admin/servers"
     link_user_mock.assert_called_once_with(users, provider, {"sub": "sub-123"}, "")
+
+
+# ================================================================================
+# handle_callback() - username claim completed by UserInfo
+# ================================================================================
+
+USERINFO_URL = f"{ISSUER}/userinfo"
+
+
+async def _callback_claims(
+    oauth_client_factory,
+    monkeypatch,
+    *,
+    id_token_claims: dict,
+    userinfo_endpoint: str = USERINFO_URL,
+    access_token: str | None = "the-access-token",
+    userinfo: dict | None = None,
+    userinfo_exc: Exception | None = None,
+) -> tuple[dict, AsyncMock]:
+    """Runs handle_callback() and returns the claims link_user() received, with the fetch_userinfo() mock"""
+    resources = _resources(discover=_discovery(userinfo_endpoint=userinfo_endpoint), validate=id_token_claims)
+    fetch_userinfo = AsyncMock(return_value=userinfo or {}, side_effect=userinfo_exc)
+    monkeypatch.setattr(resources.oidc_client, "fetch_userinfo", fetch_userinfo)
+    oauth_client_factory.result = {"id_token": "fake-id-token"}
+    if access_token:
+        oauth_client_factory.result["access_token"] = access_token
+    provider = _provider()
+    state_token = resources.oidc_start_pending_login(provider.issuer, SsoFlow.ADMIN, "n", "v", "/admin")
+    link_user_mock = Mock(return_value=Mock(spec=User))
+    monkeypatch.setattr("Pytre_Server.oidc.link_user", link_user_mock)
+
+    await handle_callback(resources, _oidc_providers(provider), Mock(spec=Users), state_token, "code")
+
+    return link_user_mock.call_args.args[2], fetch_userinfo
+
+
+@pytest.mark.anyio
+async def test_handle_callback_doesnt_query_userinfo_when_the_id_token_has_the_username_claim(
+    oauth_client_factory, monkeypatch
+):
+    id_token_claims = {"sub": "sub-123", "preferred_username": "jdupont"}
+
+    claims, fetch_userinfo = await _callback_claims(oauth_client_factory, monkeypatch, id_token_claims=id_token_claims)
+
+    assert claims == id_token_claims
+    fetch_userinfo.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_handle_callback_completes_a_missing_username_claim_from_userinfo(oauth_client_factory, monkeypatch):
+    """Claims of the signed ID token always win over UserInfo's"""
+    claims, fetch_userinfo = await _callback_claims(
+        oauth_client_factory,
+        monkeypatch,
+        id_token_claims={"sub": "sub-123", "email": "signed@example.com"},
+        userinfo={"sub": "sub-123", "preferred_username": "jdupont", "email": "other@example.com"},
+    )
+
+    assert claims == {"sub": "sub-123", "preferred_username": "jdupont", "email": "signed@example.com"}
+    fetch_userinfo.assert_awaited_once_with(ANY, "the-access-token", expected_sub="sub-123")
+
+
+@pytest.mark.anyio
+async def test_handle_callback_completes_a_blank_username_claim_from_userinfo(oauth_client_factory, monkeypatch):
+    """A blank claim of the ID token counts as missing, unlike a filled one which always wins"""
+    claims, _fetch_userinfo = await _callback_claims(
+        oauth_client_factory,
+        monkeypatch,
+        id_token_claims={"sub": "sub-123", "preferred_username": "", "email": "signed@example.com"},
+        userinfo={"sub": "sub-123", "preferred_username": "jdupont", "email": "other@example.com"},
+    )
+
+    assert claims == {"sub": "sub-123", "preferred_username": "jdupont", "email": "signed@example.com"}
+
+
+@pytest.mark.anyio
+async def test_handle_callback_keeps_the_id_token_claims_when_userinfo_fails(
+    oauth_client_factory, monkeypatch, caplog
+):
+    """An already linked user only needs sub: a failing UserInfo endpoint must not lock it out"""
+    with caplog.at_level(logging.WARNING):
+        claims, _fetch_userinfo = await _callback_claims(
+            oauth_client_factory,
+            monkeypatch,
+            id_token_claims={"sub": "sub-123"},
+            userinfo_exc=OidcUserInfoError("UserInfo claims are not about the ID token's user"),
+        )
+
+    assert claims == {"sub": "sub-123"}
+    assert any("UserInfo claims couldn't be read" in r.message for r in caplog.records)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "overrides", [{"userinfo_endpoint": ""}, {"access_token": None}], ids=["no-endpoint", "no-access-token"]
+)
+async def test_handle_callback_doesnt_query_userinfo_without_endpoint_or_access_token(
+    oauth_client_factory, monkeypatch, overrides
+):
+    claims, fetch_userinfo = await _callback_claims(
+        oauth_client_factory, monkeypatch, id_token_claims={"sub": "sub-123"}, **overrides
+    )
+
+    assert claims == {"sub": "sub-123"}
+    fetch_userinfo.assert_not_awaited()
 
 
 # ================================================================================

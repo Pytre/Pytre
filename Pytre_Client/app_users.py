@@ -254,42 +254,40 @@ class UsersWindow(tk.Toplevel):
                 result_queue.put(users)
 
         def refresh_end(users: list[User]):
-            cols = self._tree_cols()
+            try:
+                cols = self._tree_cols()
 
-            self.tree.delete(*self.tree.get_children())
-            self.tree.delete(*self.detached_items)
-            self.detached_items = set()
-            self.groups = self.users.groups
+                self.tree.delete(*self.tree.get_children())
+                self.tree.delete(*self.detached_items)
+                self.detached_items = set()
+                self.groups = self.users.groups
 
-            for u in users:
-                values: list = []
-                for col in cols.keys():
-                    if col in self.users.attribs_cust:
-                        value = u.attribs_cust.get(col, "")
-                    else:
-                        value = getattr(u, col, "")
+                for u in users:
+                    values: list = []
+                    for col in cols.keys():
+                        if col in self.users.attribs_cust:
+                            value = u.attribs_cust.get(col, "")
+                        else:
+                            value = getattr(u, col, "")
 
-                    if col == "groups":
-                        assert isinstance(value, list)
-                        value.remove("all")
-                        value.sort()
-                        # self.groups.update(value)
-                        value = "".join([f"[{item}]" for item in value])
-                    if col == "admin":
-                        value = "\U0001f5f9" if value is True else "\U000000b7"
+                        if col == "groups":
+                            assert isinstance(value, list)
+                            value = "".join(f"[{group}]" for group in sorted(value) if group != "all")
+                        if col == "admin":
+                            value = "\U0001f5f9" if value is True else "\U000000b7"
 
-                    values.append(value)
+                        values.append(value)
 
-                try:
-                    self.tree.insert("", tk.END, iid=u.uuid, values=values)
-                except Exception as e:
-                    messagebox.showerror("Erreur chargement liste", str(e))
+                    try:
+                        self.tree.insert("", tk.END, iid=u.uuid, values=values)
+                    except Exception as e:
+                        messagebox.showerror("Erreur chargement liste", str(e))
 
-            self.tree_sort(sort_col)
-            self.tree_autosize()
-            self.tree_filter()
-
-            overlay.hide(callback=self.unlock_ui)
+                self.tree_sort(sort_col)
+                self.tree_autosize()
+                self.tree_filter()
+            finally:
+                overlay.hide(callback=self.unlock_ui)
 
             if notify_end:
                 messagebox.showinfo("Rechargement", "Ok liste des utilisateurs rechargées", parent=self)

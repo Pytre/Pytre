@@ -1,0 +1,6 @@
+{# Macros shared by the admin pages: {% from "admin/_macros.html" import info_tip %} #}
+
+{# An ⓘ after a label showing `text` on hover or keyboard focus (style .info-tip in base.html) #}
+{% macro info_tip(text) %}
+<span class="info-tip" tabindex="0" title="{{ text }}" aria-label="{{ text }}">ⓘ</span>
+{% endmacro %}

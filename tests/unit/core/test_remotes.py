@@ -3,6 +3,7 @@ Tests for Pytre_Core/remotes.py
 """
 
 import json
+import logging
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
@@ -1708,6 +1709,28 @@ def test_csv_import_skips_invalid_rows(no_remote_servers, tmp_path, remotes_file
     remotes.csv_import(csv_file)
 
     assert [r.address.url for r in remotes.remotes_dict.values()] == ["http://a"]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "bad_row",
+    ["http://b;8001;bob;s3cret", "http://b;8001;bob;Remote; B;s3cret;extra"],
+    ids=["missing-value", "extra-value"],
+)
+def test_csv_import_ignores_a_row_not_matching_the_header(no_remote_servers, tmp_path, remotes_file, caplog, bad_row):
+    """A missing delimiter would put the password into the description, shown in clear: the row is refused"""
+    remotes = Remotes(remotes_file)
+    csv_file = tmp_path / "remotes.csv"
+    csv_file.write_text(
+        f"url;port;username;description;password\nhttp://a;8000;alice;Remote A;pwd\n{bad_row}\n",
+        encoding="utf-8-sig",
+    )
+
+    with caplog.at_level(logging.WARNING):
+        remotes.csv_import(csv_file)
+
+    assert [r.address.url for r in remotes.remotes_dict.values()] == ["http://a"]
+    assert any("Row 3 ignored: its number of values doesn't match the header's" in r.message for r in caplog.records)
 
 
 @pytest.mark.unit

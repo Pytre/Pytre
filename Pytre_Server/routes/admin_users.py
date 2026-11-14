@@ -40,6 +40,7 @@ class UserForm(BaseModel):
     password: str = ""
     groups: list[str] = Field(default_factory=list)
     no_all_group: bool = False
+    sso_login: str | None = None  # None: not in the form (no provider registered), left as is
 
     async def apply_to(self, user: User, attribs_cust: dict[str, str]) -> None:
         """Copies the submitted values onto `user`.
@@ -55,6 +56,8 @@ class UserForm(BaseModel):
             user.password_hash = await asyncio.to_thread(hash_password, self.password)
         user.groups = self.groups
         user.no_all_group = self.no_all_group
+        if self.sso_login is not None:
+            user.sso_login = self.sso_login.strip()  # left empty, an OIDC account gets its Id (User.save())
         user.attribs_cust.update(attribs_cust)
 
 
@@ -69,21 +72,22 @@ def _form_context(state: ServerState, user: User) -> dict:
 
 
 def _apply_oidc_link(user: User, form_data: FormData) -> None:
-    """Applies the submitted provider and sub for the user OIDC link - read directly from the raw form.
-    No provider -> no link. A provider without sub -> the sub is set on the first login through that provider.
-    Unchanged issuer+sub -> refresh_token/last_verified preserved; any other value -> a fresh, unverified link.
-    Raises ValueError for a sub without a provider."""
+    """Applies the submitted provider of the user's OIDC link, and its unlinking - read directly from the raw form.
+    No provider -> no link. Another provider -> a fresh link, set on the first login through it. The sub is never
+    submitted: set on the first login, it is only removed by unlinking. Without OIDC section in the form (no
+    provider registered) the link is left as is."""
+
+    if "oidc_issuer" not in form_data:
+        return
+
+    if form_data.get("oidc_unlink") == "1":
+        user.sso_unlink()
+
     issuer = str(form_data.get("oidc_issuer", "")).strip()
-    sub = str(form_data.get("oidc_sub", "")).strip()
-
-    existing = user.oidc_link
-
     if not issuer:
-        if sub:
-            raise ValueError("Select a provider for the sub")
         user.oidc_link = None
-    elif existing is None or existing.issuer != issuer or existing.sub != sub:
-        user.oidc_link = OidcLink(issuer=issuer, sub=sub)
+    elif user.oidc_link is None or user.oidc_link.issuer != issuer:
+        user.oidc_link = OidcLink(issuer=issuer, sub="")
 
 
 async def _save_user(

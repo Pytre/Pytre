@@ -563,10 +563,17 @@ class UserDialog(tk.Toplevel):
             entries_caption[attr] = attr
 
         if self.parent.pwd_infos:
-            pwd_related = {"auth_type": "Auth", "password_hash": "Hash"}
+            pwd_related = {
+                "auth_type": "Auth",
+                "password_hash": "Hash",
+                "sso_login": "SSO login",
+                "sso_linked": "Lié SSO",
+            }
             items = list(entries_caption.items())
             items[1:1] = list(pwd_related.items())
             entries_caption = dict(items)
+
+        self.sso_linked_check: ttk.Checkbutton | None = None
 
         num_row = 0
         for key, caption in entries_caption.items():
@@ -579,6 +586,13 @@ class UserDialog(tk.Toplevel):
                 my_tk_var = tk.StringVar()
                 my_entry = ttk.Combobox(self.entries_frame, textvariable=my_tk_var, values=self.auth_values)
                 my_entry.configure(state="readonly" if len(AuthType) > 1 else "disable")
+                my_entry.bind("<<ComboboxSelected>>", lambda _: self.sso_login_default())
+            elif key == "sso_linked":
+                # set by the first SSO login: can only be unchecked, to unlink the account
+                my_tk_var = tk.BooleanVar(value=False)
+                my_entry = ttk.Checkbutton(self.entries_frame, variable=my_tk_var, onvalue=True, offvalue=False)
+                my_entry.configure(state="disabled")
+                self.sso_linked_check = my_entry
             else:
                 my_tk_var = tk.StringVar()
                 my_entry = ttk.Entry(self.entries_frame, textvariable=my_tk_var)
@@ -646,6 +660,9 @@ class UserDialog(tk.Toplevel):
 
             tk_var.set(val)
 
+        if self.sso_linked_check is not None and self.user.sso_linked:
+            self.sso_linked_check.configure(state="normal")
+
     def groups_set(self):
         for group in sorted(self.parent.groups):
             self.listbox.insert(tk.END, group)
@@ -658,6 +675,16 @@ class UserDialog(tk.Toplevel):
     def group_add(self):
         new_group = InputDialog.ask("Nouveau groupe", "Groupe à ajouter :", parent=self)
         ui_utils.listbox_add_sorted(self.listbox, new_group)
+
+    def sso_login_default(self):
+        """An OIDC account always has an SSO login: its Id unless another one is declared"""
+
+        if "sso_login" not in self.entries:
+            return
+
+        is_oidc = AuthType.from_value(self.entries["auth_type"].get()) is AuthType.OIDC
+        if is_oidc and not self.entries["sso_login"].get().strip():
+            self.entries["sso_login"].set(self.entries["username"].get().strip())
 
     def user_save(self):
         if self.user:
@@ -672,10 +699,15 @@ class UserDialog(tk.Toplevel):
             val = tk_var.get()
             if key == "auth_type":
                 user.auth_type = AuthType.from_value(val) or AuthType.NONE
+            elif key == "sso_linked":
+                continue  # read-only, unchecking it unlinks the account (below)
             elif key in self.users.attribs_cust:
                 user.attribs_cust[key] = val
             else:
                 setattr(user, key, val)
+
+        if "sso_linked" in self.entries and user.sso_linked and not self.entries["sso_linked"].get():
+            user.sso_unlink()
 
         user.groups = [self.listbox.get(line) for line in self.listbox.curselection()]
 

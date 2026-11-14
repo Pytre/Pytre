@@ -1,4 +1,5 @@
 {% extends "admin/base.html" %}
+{% from "admin/_macros.html" import info_tip %}
 {% block title %}{% if user.uuid %}Edit user{% else %}New user{% endif %} — Pytre Server{% endblock %}
 {% block main_class %}main-flush{% endblock %}
 {% block content %}
@@ -41,7 +42,12 @@
                     <label for="password">
                         {% if user.uuid %}Password (leave blank to keep the current one){% else %}Password{% endif %}
                     </label>
-                    <input type="password" id="password" name="password" autocomplete="new-password">
+                    <div class="field-with-icon password-field">
+                        <input type="password" id="password" name="password" autocomplete="new-password">
+                        <button type="button" class="field-icon" onclick="togglePasswordField(this)" title="Show/hide password">
+                            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>
+                        </button>
+                    </div>
                 </div>
                 {% if oidc_providers %}
                 <div id="oidc-section" style="display: contents;">
@@ -58,8 +64,21 @@
                         </select>
                     </div>
                     <div class="form-col" style="flex: 2;">
-                        <label for="oidc_sub">Sub</label>
-                        <input type="text" id="oidc_sub" name="oidc_sub" value="{{ user.oidc_link.sub if user.oidc_link else '' }}">
+                        <label for="sso_login">SSO login{{ info_tip("Value of the provider's username claim (for Entra ID usually the UPN, user@domain) matched at the first SSO login of the account, which then stays linked to its identity provider account") }}</label>
+                        <div class="field-with-icon">
+                            <input type="text" id="sso_login" name="sso_login" value="{{ user.sso_login }}">
+                            <input type="hidden" id="oidc_unlink" name="oidc_unlink" value="">
+                            {% if user.sso_linked %}
+                            {% set linked_title = "Linked to its identity provider account - click to remove the link" %}
+                            <button type="button" class="field-icon" id="sso-link-state" title="{{ linked_title }}" aria-label="{{ linked_title }}">
+                                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+                            </button>
+                            {% endif %}
+                            {% set not_linked_title = "Not linked yet - linked at the first SSO login of the account" %}
+                            <span class="field-icon" id="sso-not-linked" title="{{ not_linked_title }}" aria-label="{{ not_linked_title }}"{% if user.sso_linked %} hidden{% endif %}>
+                                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m18.84 12.25 1.72-1.71h-.02a5 5 0 0 0-.12-7.07 5 5 0 0 0-6.95 0l-1.72 1.71"/><path d="m5.17 11.75-1.71 1.71a5 5 0 0 0 .12 7.07 5 5 0 0 0 6.95 0l1.71-1.71"/><line x1="8" x2="8" y1="2" y2="5"/><line x1="2" x2="5" y1="8" y2="8"/><line x1="16" x2="16" y1="19" y2="22"/><line x1="19" x2="22" y1="16" y2="16"/></svg>
+                            </span>
+                        </div>
                     </div>
                 </div>
                 {% endif %}
@@ -140,21 +159,36 @@
             authTypeSelect.addEventListener("change", updateAuthTypeVisibility);
             updateAuthTypeVisibility();
 
-            // "Any" provider: the first login through any provider sets both - a sub alone is meaningless, so it's
-            // cleared and disabled (a disabled field isn't sent)
-            var oidcIssuerSelect = document.getElementById("oidc_issuer");
-            var oidcSubInput = document.getElementById("oidc_sub");
-            if (oidcIssuerSelect && oidcSubInput) {
-                function syncOidcSub() {
-                    var hasProvider = Boolean(oidcIssuerSelect.value);
-                    oidcSubInput.disabled = !hasProvider;
-                    oidcSubInput.placeholder = hasProvider ? "when empty set on first login" : "set on first login";
-                    if (!hasProvider) {
-                        oidcSubInput.value = "";
-                     }
+            // An OIDC account always has an SSO login: its Id unless another one is declared
+            var usernameInput = document.getElementById("username");
+            var ssoLoginInput = document.getElementById("sso_login");
+            if (ssoLoginInput) {
+                function syncSsoLogin() {
+                    var isOidc = authTypeSelect.value === "oidc";
+                    ssoLoginInput.required = isOidc;
+                    if (isOidc && !ssoLoginInput.value.trim()) {
+                        ssoLoginInput.value = usernameInput.value.trim();
+                    }
                 }
-                oidcIssuerSelect.addEventListener("change", syncOidcSub);
-                syncOidcSub();
+                authTypeSelect.addEventListener("change", syncSsoLogin);
+                syncSsoLogin();
+            }
+
+            // Removing the link is applied on save only, like every other change of the form
+            var linkedState = document.getElementById("sso-link-state");
+            var notLinkedState = document.getElementById("sso-not-linked");
+            var unlinkInput = document.getElementById("oidc_unlink");
+            if (linkedState && notLinkedState && unlinkInput) {
+                linkedState.addEventListener("click", function () {
+                    var message = "Remove the link to its identity provider account? The next SSO login links "
+                        + "the account again through its SSO login.";
+                    pytreConfirm(message).then(function (confirmed) {
+                        if (!confirmed) return;
+                        unlinkInput.value = "1";
+                        linkedState.hidden = true;
+                        notLinkedState.hidden = false;
+                    });
+                });
             }
         })();
         </script>

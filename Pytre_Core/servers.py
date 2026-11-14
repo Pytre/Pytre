@@ -215,6 +215,14 @@ class Servers:
 
             # read every row first: the import is all or nothing, refused before anything is changed
             rows = list(enumerate(csv_reader, start=2))
+
+            malformed_lines = [str(num) for num, row in rows if None in row or None in row.values()]
+            if malformed_lines:
+                raise ValueError(
+                    f"The number of values doesn't match the header on line(s) {', '.join(malformed_lines)}. "
+                    "Nothing was imported."
+                )
+
             refused_lines = [str(num) for num, row in rows if self._csv_import_row_moves_password(row, entries_dict)]
             if refused_lines:
                 raise ValueError(
@@ -226,7 +234,7 @@ class Servers:
             for row_num, row in rows:
                 server_id = row["id"].strip()
                 if not server_id:
-                    log(f"Ligne {row_num} ignorée : aucun id renseigné", logging.WARNING)
+                    log(f"Row {row_num} ignored: id is missing", logging.WARNING)
                     continue
 
                 # create or retrieve db entry

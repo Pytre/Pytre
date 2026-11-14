@@ -310,12 +310,11 @@
         (style="flex: ...") set per-template, since the ratio varies row by row. */
         .form-row { display: flex; gap: 12px; }
         .form-row .form-col { flex: 1; min-width: 0; }
-        .password-field { position: relative; }
-        .password-field input, .password-field .field-static { padding-right: 36px; }
-        /* Hides the browser's own built-in reveal icon (Edge/IE) so it can't overlap or
-        conflict with our custom .password-toggle button below. */
-        .password-field input::-ms-reveal, .password-field input::-ms-clear { display: none; }
-        .password-field .password-toggle {
+        /* An icon inside a field on its right (password toggle, clear button, SSO link state): a button when it acts,
+        plain otherwise */
+        .field-with-icon { position: relative; }
+        .field-with-icon input, .field-with-icon .field-static { padding-right: 36px; }
+        .field-with-icon .field-icon {
             position: absolute;
             z-index: 1;
             right: 2px;
@@ -330,12 +329,15 @@
             color: var(--text-secondary);
             border: none;
             border-radius: 4px;
-            cursor: pointer;
             font-size: 14px;
             line-height: 1;
         }
-        .password-field .password-toggle svg { pointer-events: none; }
-        .password-field .password-toggle:hover { opacity: 1; color: var(--text); background: var(--btn-secondary-bg); }
+        .field-with-icon .field-icon svg { pointer-events: none; }
+        .field-with-icon button.field-icon { cursor: pointer; }
+        .field-with-icon button.field-icon:hover { opacity: 1; color: var(--text); background: var(--btn-secondary-bg); }
+        /* A password field is a .field-with-icon whose icon toggles the password (togglePasswordField()). Hides the
+        browser's own built-in reveal icon (Edge/IE) so it can't overlap or conflict with that toggle. */
+        .password-field input::-ms-reveal, .password-field input::-ms-clear { display: none; }
         button, a.btn {
             display: inline-block;
             margin-top: 18px;

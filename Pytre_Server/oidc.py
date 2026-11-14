@@ -164,18 +164,23 @@ async def _complete_with_userinfo(
 
 def link_user(users: Users, provider: OidcProvider, claims: dict, refresh_token: str = "") -> User:
     """Finds the user for `claims`, linking it to the IdP account (`sub`) on first login.
-    Never creates a user - the account must already exist, with AuthType.OIDC. Once linked, only
+    Never creates a user - the account must already exist, with AuthType.OIDC. At the first login the account is
+    the one whose SSO login is the username claim's value (case ignored), never matched by its Id. Once linked, only
     `sub` is trusted for subsequent logins: the username claim is then neither required nor read."""
 
     sub = claims["sub"]  # already required present by OidcClient.validate_id_token()
 
-    # an already linked account is found by sub alone, otherwise by the username claim (first login)
+    # an already linked account is found by sub alone, otherwise by its declared SSO login (first login)
     user = users.find_user_by_oidc_link(provider.issuer, sub)
     if user is None:
-        claimed_username = claims.get(provider.username_claim)
-        if not claimed_username:
+        claimed_login = claims.get(provider.username_claim)
+        if not claimed_login:
             raise OidcLoginError(f"The identity provider didn't send a '{provider.username_claim}' claim.")
-        user = User(users, username=str(claimed_username))
+
+        user = users.find_user_by_sso_login(str(claimed_login), issuer=provider.issuer)
+        if user is None:
+            log(f"SSO rejected: no OIDC-enabled account has '{claimed_login}' as SSO login", logging.INFO)
+            raise OidcLoginError(f"No OIDC-enabled account matches '{claimed_login}'.")
 
     # validate that user exists and is set to use OIDC as authentification method
     if not user.exists or user.auth_type is not AuthType.OIDC:

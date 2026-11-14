@@ -9,6 +9,7 @@ REGRESSION TESTS:
 import pytest
 import csv
 import json
+import logging
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1410,9 +1411,9 @@ def test_user_save_rejects_duplicate_username(mock_kee):
 
     users = Users(mock_kee)
     user = User(users, detect_user=False)
-    user.username = "jdoe"
+    user.username = "JDoe"  # case ignored: the import already treats both as the same account
 
-    with pytest.raises(ValueError, match="est déjà utilisé"):
+    with pytest.raises(ValueError, match="Id 'JDoe' is already used"):
         user.save()
 
 
@@ -1801,7 +1802,17 @@ def test_csv_export_includes_password_hash_when_requested(mock_kee, tmp_path):
     lines = output_file.read_text(encoding="utf-8-sig").splitlines()
     header = lines[0].split(";")
     row = lines[1].split(";")
-    assert header == ["Id", "Display Name", "Admin", "Groups", "No All Group", "Auth", "Oidc Link", "Password Hash"]
+    assert header == [
+        "Id",
+        "Display Name",
+        "Admin",
+        "Groups",
+        "No All Group",
+        "Auth",
+        "Oidc Link",
+        "Sso Login",
+        "Password Hash",
+    ]
     assert len(row) == len(header)  # regression: header/data column count used to drift apart
     assert dict(zip(header, row))["Password Hash"] == "the-hash"
     assert dict(zip(header, row))["Auth"] == "basic"
@@ -2186,7 +2197,7 @@ def test_user_field_csv_status_splits_standard_from_auth_password_columns():
         UserField.GROUPS,
     }
     assert password == {UserField.PWD, UserField.PWD_HASH}
-    assert optional == {UserField.NO_ALL_GROUP, UserField.AUTH_TYPE, UserField.OIDC_LINK}
+    assert optional == {UserField.NO_ALL_GROUP, UserField.AUTH_TYPE, UserField.OIDC_LINK, UserField.SSO_LOGIN}
 
 
 @pytest.mark.unit
@@ -2456,6 +2467,7 @@ def _import_one_user(tmp_path, mock_kee, header: str, row: str) -> Mock:
     users = Users(mock_kee)
     new_entry = Mock()
     new_entry.set_custom_property = Mock()
+    new_entry.get_custom_property = Mock(return_value=None)  # a fresh entry has no property yet
     mock_kee.db.add_entry = Mock(return_value=new_entry)
 
     csv_file = tmp_path / "users.csv"
@@ -2466,13 +2478,27 @@ def _import_one_user(tmp_path, mock_kee, header: str, row: str) -> Mock:
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("value, expected", [("1", "true"), ("0", "false"), ("", "false"), (" 1 ", "true")])
+@pytest.mark.parametrize("value, expected", [("1", "true"), ("0", "false"), (" 1 ", "true")])
 def test_csv_import_writes_no_all_group_when_the_column_is_present(tmp_path, mock_kee, value, expected):
     new_entry = _import_one_user(
         tmp_path, mock_kee, "id;display name;admin;groups;no all group", f"newuser;New User;0;;{value}"
     )
 
     new_entry.set_custom_property.assert_any_call("no_all_group", expected)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "row, field",
+    [("newuser;New User;;;1", UserField.ADMIN), ("newuser;New User;1;;", UserField.NO_ALL_GROUP)],
+    ids=["admin", "no-all-group"],
+)
+def test_csv_import_keeps_admin_and_no_all_group_on_an_empty_cell(tmp_path, mock_kee, row, field):
+    """Emptying them would silently remove admin rights or the restriction: an empty cell keeps the saved value"""
+    new_entry = _import_one_user(tmp_path, mock_kee, "id;display name;admin;groups;no all group", row)
+
+    written_keys = [c.args[0] for c in new_entry.set_custom_property.call_args_list]
+    assert field.db_key not in written_keys
 
 
 @pytest.mark.unit
@@ -2543,6 +2569,7 @@ def test_csv_export_import_round_trips_no_all_group(mock_kee, tmp_path):
     mock_kee.grp_users.entries = []
     new_entry = Mock()
     new_entry.set_custom_property = Mock()
+    new_entry.get_custom_property = Mock(return_value=None)  # a fresh entry has no property yet
     mock_kee.db.add_entry = Mock(return_value=new_entry)
     Users(mock_kee).csv_import(output_file)
 
@@ -2650,3 +2677,299 @@ def test_replace_oidc_issuer_without_linked_users_changes_and_saves_nothing(real
 
     save_db.assert_not_called()
     assert _reloaded_link("user_a1") is not None
+
+
+# ================================================================================
+# SSO login - the claim value linking an OIDC account at its first SSO login
+# ================================================================================
+
+
+def _save_oidc_user(users: Users, username: str, sso_login: str = "", issuer: str | None = None) -> User:
+    """An OIDC account, reserved to `issuer` when given (a link without sub yet), any provider otherwise"""
+    user = User(users, detect_user=False)
+    user.username = username
+    user.auth_type = AuthType.OIDC
+    user.sso_login = sso_login
+    user.oidc_link = OidcLink(issuer=issuer, sub="") if issuer else None
+    user.save()
+    return user
+
+
+def _reloaded_user(username: str) -> User:
+    return User(Users(Kee(password=TEST_DB_PASSWORD)), username=username)
+
+
+@pytest.mark.unit
+def test_sso_login_is_saved_and_reloaded(real_users):
+    _save_oidc_user(real_users, "jdupont", sso_login="jean.dupont@example.com")
+
+    assert _reloaded_user("jdupont").sso_login == "jean.dupont@example.com"
+
+
+@pytest.mark.unit
+def test_an_oidc_account_without_sso_login_gets_its_id(real_users):
+    _save_oidc_user(real_users, "jdupont", sso_login="  ")
+
+    assert _reloaded_user("jdupont").sso_login == "jdupont"
+
+
+@pytest.mark.unit
+def test_a_non_oidc_account_gets_no_default_sso_login(real_users):
+    user = User(real_users, detect_user=False)
+    user.username = "basic_user"
+    user.auth_type = AuthType.BASIC
+    user.save()
+
+    assert _reloaded_user("basic_user").sso_login == ""
+
+
+@pytest.mark.unit
+def test_renaming_the_id_keeps_the_sso_login(real_users):
+    """The SSO login is the identity at the identity provider, independent from the Pytre Id"""
+    _save_oidc_user(real_users, "jdupont")
+    user = _reloaded_user("jdupont")
+    user.users = real_users
+    user.username = "jean_dupont"
+    user.save()
+
+    assert _reloaded_user("jean_dupont").sso_login == "jdupont"
+
+
+@pytest.mark.unit
+def test_saving_again_an_oidc_account_doesnt_conflict_with_itself(real_users):
+    _save_oidc_user(real_users, "jdupont", sso_login="jean.dupont@example.com")
+    user = User(real_users, username="jdupont")
+    user.display_name = "Jean Dupont"
+
+    user.save()  # no ValueError
+
+    assert _reloaded_user("jdupont").display_name == "Jean Dupont"
+
+
+@pytest.mark.unit
+def test_renaming_the_id_case_of_an_account_is_allowed(real_users):
+    _save_oidc_user(real_users, "jdupont")
+    user = User(real_users, username="jdupont")
+    user.username = "JDupont"
+
+    user.save()  # its own entry isn't a duplicate
+
+    assert _reloaded_user("JDupont").exists
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "first_issuer, second_issuer",
+    [(None, None), (ISSUER_A, ISSUER_A), (None, ISSUER_B), (ISSUER_B, None)],
+    ids=["any-any", "same-provider", "any-then-provider", "provider-then-any"],
+)
+def test_an_sso_login_used_by_an_overlapping_provider_is_refused(real_users, first_issuer, second_issuer):
+    """Case ignored; any provider overlaps every provider: one login could otherwise match two accounts"""
+    _save_oidc_user(real_users, "jdupont", sso_login="Jean.Dupont@example.com", issuer=first_issuer)
+
+    with pytest.raises(ValueError, match="SSO login 'jean.dupont@example.com' is already used by 'jdupont'"):
+        _save_oidc_user(real_users, "jdupont2", sso_login="jean.dupont@example.com", issuer=second_issuer)
+
+
+@pytest.mark.unit
+def test_the_same_sso_login_is_allowed_for_two_different_providers(real_users):
+    """`jdupont` at one identity provider and at another one may be two different people"""
+    _save_oidc_user(real_users, "jdupont_a", sso_login="jdupont", issuer=ISSUER_A)
+    _save_oidc_user(real_users, "jdupont_b", sso_login="jdupont", issuer=ISSUER_B)
+
+    assert real_users.find_user_by_sso_login("jdupont", issuer=ISSUER_A).username == "jdupont_a"
+    assert real_users.find_user_by_sso_login("jdupont", issuer=ISSUER_B).username == "jdupont_b"
+
+
+@pytest.mark.unit
+def test_the_sso_login_of_a_non_oidc_account_is_ignored(real_users):
+    user = User(real_users, detect_user=False)
+    user.username = "basic_user"
+    user.auth_type = AuthType.BASIC
+    user.sso_login = "jdupont"
+    user.save()
+
+    _save_oidc_user(real_users, "jdupont")  # no conflict
+
+    assert real_users.find_user_by_sso_login("jdupont").username == "jdupont"
+
+
+@pytest.mark.unit
+def test_find_user_by_sso_login_ignores_case_and_surrounding_spaces(real_users):
+    _save_oidc_user(real_users, "jdupont", sso_login="Jean.Dupont@Example.com")
+
+    found = real_users.find_user_by_sso_login("  jean.dupont@example.COM ")
+
+    assert found is not None and found.username == "jdupont"
+
+
+@pytest.mark.unit
+def test_find_user_by_sso_login_only_finds_the_accounts_a_provider_may_link(real_users):
+    _save_oidc_user(real_users, "any_provider", sso_login="any_login")
+    _save_oidc_user(real_users, "reserved_to_a", sso_login="reserved_login", issuer=ISSUER_A)
+
+    assert real_users.find_user_by_sso_login("any_login", issuer=ISSUER_B).username == "any_provider"
+    assert real_users.find_user_by_sso_login("reserved_login", issuer=ISSUER_B) is None
+    assert real_users.find_user_by_sso_login("reserved_login", issuer=ISSUER_A).username == "reserved_to_a"
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("sso_login", ["", "   ", "unknown"])
+def test_find_user_by_sso_login_returns_none_without_match(real_users, sso_login):
+    _save_oidc_user(real_users, "jdupont")
+
+    assert real_users.find_user_by_sso_login(sso_login) is None
+
+
+@pytest.mark.unit
+def test_sso_unlink_forgets_the_identity_provider_account_but_keeps_its_provider(real_users):
+    """The refresh token goes too: the account's current sessions can't be renewed through the old account"""
+    _save_linked_user(real_users, "jdupont", ISSUER_A, "sub-1")
+    user = User(real_users, username="jdupont")
+    assert user.sso_linked
+
+    user.sso_unlink()
+    user.save()
+
+    reloaded = _reloaded_user("jdupont")
+    assert not reloaded.sso_linked
+    assert reloaded.oidc_link == OidcLink(issuer=ISSUER_A, sub="")
+
+
+@pytest.mark.unit
+def test_sso_unlink_without_link_changes_nothing(real_users):
+    user = _save_oidc_user(real_users, "jdupont")
+
+    user.sso_unlink()
+
+    assert user.oidc_link is None and not user.sso_linked
+
+
+@pytest.mark.unit
+def test_check_oidc_issuer_move_refuses_a_login_already_used_with_the_new_issuer(real_users):
+    _save_oidc_user(real_users, "moved_user", sso_login="jdupont", issuer=ISSUER_A)
+    _save_oidc_user(real_users, "other_user", sso_login="jdupont", issuer=ISSUER_B)
+
+    with pytest.raises(ValueError, match="'jdupont' of 'moved_user' is already used by 'other_user'"):
+        real_users.check_oidc_issuer_move(ISSUER_A, ISSUER_B)
+
+    assert _reloaded_user("moved_user").oidc_link == OidcLink(issuer=ISSUER_A, sub="")  # nothing changed
+
+
+@pytest.mark.unit
+def test_check_oidc_issuer_move_accepts_logins_unused_with_the_new_issuer(real_users):
+    _save_oidc_user(real_users, "moved_user", sso_login="jdupont", issuer=ISSUER_A)
+    _save_oidc_user(real_users, "other_user", sso_login="someone_else", issuer=ISSUER_B)
+
+    real_users.check_oidc_issuer_move(ISSUER_A, ISSUER_B)  # no ValueError
+
+
+# ================================================================================
+# CSV import - SSO login, auth type and malformed rows (real KeePass database)
+# ================================================================================
+
+CSV_HEADER = "id;display name;admin;groups"
+
+
+def _import(users: Users, tmp_path, lines: list[str]) -> None:
+    csv_file = tmp_path / "import.csv"
+    csv_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    users.csv_import(csv_file)
+
+
+@pytest.mark.unit
+def test_csv_import_sets_the_declared_sso_login(real_users, tmp_path):
+    _import(real_users, tmp_path, [f"{CSV_HEADER};auth;sso login", "jdupont;;0;;oidc;jean.dupont@example.com"])
+
+    assert _reloaded_user("jdupont").sso_login == "jean.dupont@example.com"
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("header, row", [(";auth;sso login", ";oidc;"), (";auth", ";oidc")], ids=["empty", "no-column"])
+def test_csv_import_gives_its_id_to_an_oidc_account_without_sso_login(real_users, tmp_path, header, row):
+    _import(real_users, tmp_path, [CSV_HEADER + header, "jdupont;;0;" + row])
+
+    assert _reloaded_user("jdupont").sso_login == "jdupont"
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("header, row", [(";sso login", ";"), ("", "")], ids=["empty", "no-column"])
+def test_csv_import_keeps_the_saved_sso_login_without_value(real_users, tmp_path, header, row):
+    _save_oidc_user(real_users, "jdupont", sso_login="jean.dupont@example.com")
+
+    _import(real_users, tmp_path, [CSV_HEADER + header, "jdupont;Jean Dupont;0;" + row])
+
+    reloaded = _reloaded_user("jdupont")
+    assert reloaded.sso_login == "jean.dupont@example.com"
+    assert reloaded.display_name == "Jean Dupont"
+
+
+@pytest.mark.unit
+def test_csv_import_ignores_an_sso_login_already_used_but_imports_the_rest_of_the_row(real_users, tmp_path, caplog):
+    _save_oidc_user(real_users, "jdupont", sso_login="jean.dupont@example.com")
+
+    with caplog.at_level(logging.WARNING):
+        _import(
+            real_users,
+            tmp_path,
+            [f"{CSV_HEADER};auth;sso login", "jdupont2;Jean Dupont 2;0;finance;oidc;jean.dupont@example.com"],
+        )
+
+    reloaded = _reloaded_user("jdupont2")
+    assert reloaded.exists and reloaded.display_name == "Jean Dupont 2" and "finance" in reloaded.groups
+    assert reloaded.sso_login == ""
+    assert any("SSO login on row 2 ignored: already used by 'jdupont'" in r.message for r in caplog.records)
+
+
+@pytest.mark.unit
+def test_csv_import_detects_an_sso_login_used_twice_in_the_file(real_users, tmp_path):
+    _import(
+        real_users,
+        tmp_path,
+        [f"{CSV_HEADER};auth;sso login", "first;;0;;oidc;shared_login", "second;;0;;oidc;Shared_Login"],
+    )
+
+    assert _reloaded_user("first").sso_login == "shared_login"
+    assert _reloaded_user("second").sso_login == ""
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("value", ["", "not-an-auth-type"], ids=["empty", "invalid"])
+def test_csv_import_keeps_the_saved_auth_type_without_valid_value(real_users, tmp_path, value):
+    _save_oidc_user(real_users, "jdupont")
+
+    _import(real_users, tmp_path, [f"{CSV_HEADER};auth", f"jdupont;Jean Dupont;0;;{value}"])
+
+    reloaded = _reloaded_user("jdupont")
+    assert reloaded.auth_type is AuthType.OIDC
+    assert reloaded.display_name == "Jean Dupont"  # the row itself is imported
+
+
+@pytest.mark.unit
+def test_csv_import_gives_no_auth_type_to_a_new_account_without_valid_value(real_users, tmp_path):
+    _import(real_users, tmp_path, [f"{CSV_HEADER};auth", "newuser;;0;;not-an-auth-type"])
+
+    assert _reloaded_user("newuser").auth_type is AuthType.NONE
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("bad_row", ["short;Short", "long;Long;0;;extra"], ids=["missing-value", "extra-value"])
+def test_csv_import_ignores_a_row_not_matching_the_header(real_users, tmp_path, caplog, bad_row):
+    """A missing or unquoted delimiter shifts the values into the wrong columns: the row is refused"""
+    with caplog.at_level(logging.WARNING):
+        _import(real_users, tmp_path, [CSV_HEADER, bad_row, "valid;Valid;0;"])
+
+    assert not _reloaded_user(bad_row.split(";")[0]).exists
+    assert _reloaded_user("valid").exists
+    assert any("Row 2 ignored: its number of values doesn't match the header's" in r.message for r in caplog.records)
+
+
+@pytest.mark.unit
+def test_csv_export_exports_the_sso_login(real_users, tmp_path):
+    _save_oidc_user(real_users, "jdupont", sso_login="jean.dupont@example.com")
+    output_file = tmp_path / "export.csv"
+
+    real_users.csv_export(output_file)
+
+    rows = list(csv.DictReader(output_file.read_text(encoding="utf-8-sig").splitlines(), delimiter=";"))
+    assert next(row for row in rows if row["Id"] == "jdupont")["Sso Login"] == "jean.dupont@example.com"

@@ -234,10 +234,16 @@ class Remotes:
 
             # create remotes from file rows
             for row_num, row in enumerate(csv_reader, start=2):
+                # a row whose cells don't match the header is malformed (missing or unquoted delimiter)
+                if None in row or None in row.values():
+                    msg = f"Row {row_num} ignored: its number of values doesn't match the header's"
+                    log(msg, logging.WARNING)
+                    continue
+
                 try:
                     remote_address = RemoteAddress.from_dict(row)
                 except ValueError as err:
-                    log(f"Ligne {row_num} ignorée : données incomplètes : {err}", logging.WARNING)
+                    log(f"Row {row_num} ignored : incomplete data : {err}", logging.WARNING)
                     continue
 
                 existing_remote = self.find_remote_from_id(remote_address.id)

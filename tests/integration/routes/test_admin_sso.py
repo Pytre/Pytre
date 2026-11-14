@@ -421,6 +421,32 @@ def test_edit_provider_issuer_moves_the_links_of_its_users(isolated_admin_client
     assert found.username == "moved_a"
 
 
+def test_edit_provider_issuer_refuses_to_give_the_same_sso_login_to_two_accounts_of_it(isolated_admin_client):
+    """Links left to a deleted provider whose issuer is reused: checked before the provider or any account change"""
+    from Pytre_Core.users import AuthType, OidcLink, User
+
+    old_issuer, new_issuer = "https://idp-old-conflict.example.com", "https://idp-reused.example.com"
+    uuid = _create_provider(isolated_admin_client, old_issuer)
+    _link_user(isolated_admin_client, "moved_user", old_issuer, "sub-a")
+    leftover = User(isolated_admin_client.app.state.server.app_ctx.users, detect_user=False)
+    leftover.username = "leftover_user"
+    leftover.auth_type = AuthType.OIDC
+    leftover.sso_login = "moved_user"  # the moved account's SSO login, its Id by default
+    leftover.oidc_link = OidcLink(issuer=new_issuer, sub="")
+    leftover.save()
+
+    response = isolated_admin_client.post(
+        f"/admin/sso/{uuid}/edit", data=_new_provider_data(new_issuer, client_secret=""), follow_redirects=False
+    )
+
+    assert response.status_code == 200  # the form is redisplayed, no redirect to the list
+    assert "is already used by &#39;leftover_user&#39; with this issuer" in response.text
+    link = _link_of(isolated_admin_client, "moved_user")
+    assert link is not None and link.issuer == old_issuer
+    providers = isolated_admin_client.app.state.server.app_ctx.oidc_providers.get_all_providers(reload=True)
+    assert old_issuer in providers and new_issuer not in providers
+
+
 def test_edit_provider_label_only_keeps_the_links_untouched(isolated_admin_client):
     issuer = "https://idp-relabel.example.com"
     uuid = _create_provider(isolated_admin_client, issuer, label="Before")

@@ -737,15 +737,14 @@ def test_link_user_finds_a_returning_user_by_sub_even_when_the_username_claim_no
 
 
 def test_link_user_rejects_a_second_different_provider_once_already_linked(users):
-    """Only one OidcLink exists per user now (the model was simplified from a per-issuer dict once
-    the client's mediated-mode login settled on a single active provider) - a login via a
-    different provider than the one already linked must be rejected, not silently switch the
-    link over to it, same security posture as a mismatched sub on the same provider."""
+    """Only one OidcLink exists per user - a login via a different provider than the one already linked must
+    be rejected, not silently switch the link over to it: the account isn't even searched among that provider's
+    ones, same security posture as a mismatched sub on the same provider."""
     other_issuer = "https://other-idp.example.com"
     _oidc_user(users, "sso_user")
     link_user(users, _provider(), {"sub": "sub-a", "preferred_username": "sso_user"})
 
-    with pytest.raises(OidcLoginError, match="linked to a different"):
+    with pytest.raises(OidcLoginError, match="No OIDC-enabled account matches 'sso_user'"):
         link_user(users, _provider(issuer=other_issuer), {"sub": "sub-b", "preferred_username": "sso_user"})
 
     reloaded = _reloaded_user("sso_user").oidc_link
@@ -773,13 +772,13 @@ def test_link_user_with_a_pre_assigned_provider_rejects_another_provider(users, 
     other_issuer = "https://other-idp.example.com"
     _oidc_user(users, "sso_user", oidc_link=OidcLink(issuer=ISSUER, sub=""))
 
-    with caplog.at_level(logging.INFO), pytest.raises(OidcLoginError, match="linked to a different"):
+    with caplog.at_level(logging.INFO), pytest.raises(OidcLoginError, match="No OIDC-enabled account matches"):
         link_user(users, _provider(issuer=other_issuer), {"sub": "sub-x", "preferred_username": "sso_user"})
 
     reloaded = _reloaded_user("sso_user").oidc_link
     assert reloaded is not None
     assert (reloaded.issuer, reloaded.sub) == (ISSUER, "")  # still waiting for its own provider
-    assert any(f"linked to another identity provider ({ISSUER})" in r.message for r in caplog.records)
+    assert any("no OIDC-enabled account has 'sso_user' as SSO login" in r.message for r in caplog.records)
 
 
 def test_link_user_without_any_link_accepts_any_provider(users):
@@ -812,7 +811,64 @@ def test_link_user_logs_and_rejects_on_an_unknown_user(users, caplog):
         with pytest.raises(OidcLoginError):
             link_user(users, _provider(), {"sub": "sub-123", "preferred_username": "ghost"})
 
-    assert "not an OIDC-enabled" in caplog.text
+    assert "no OIDC-enabled account has 'ghost' as SSO login" in caplog.text
+
+
+def test_link_user_links_the_account_declaring_the_claim_value_as_sso_login(users):
+    """With Entra ID the claim is the UPN while the Pytre Id is the Windows session's: the SSO login links them"""
+    _oidc_user(users, "jdupont", sso_login="jean.dupont@example.com")
+
+    linked = link_user(users, _provider(), {"sub": "sub-123", "preferred_username": "Jean.Dupont@Example.com"})
+
+    assert linked.username == "jdupont"
+    assert linked.oidc_link is not None and linked.oidc_link.sub == "sub-123"
+
+
+def test_link_user_no_longer_matches_the_id_of_an_account_declaring_another_sso_login(users):
+    """The Id is never a second way in: only the declared SSO login links an account"""
+    _oidc_user(users, "jdupont", sso_login="jean.dupont@example.com")
+
+    with pytest.raises(OidcLoginError, match="No OIDC-enabled account matches 'jdupont'"):
+        link_user(users, _provider(), {"sub": "sub-123", "preferred_username": "jdupont"})
+
+    assert not _reloaded_user("jdupont").sso_linked
+
+
+def test_link_user_links_each_provider_to_the_account_reserved_to_it(users):
+    """The same login at two identity providers may be two different people"""
+    other_issuer = "https://other-idp.example.com"
+    _oidc_user(users, "jdupont_main", sso_login="jdupont", oidc_link=OidcLink(issuer=ISSUER, sub=""))
+    _oidc_user(users, "jdupont_other", sso_login="jdupont", oidc_link=OidcLink(issuer=other_issuer, sub=""))
+
+    main = link_user(users, _provider(), {"sub": "sub-main", "preferred_username": "jdupont"})
+    other = link_user(users, _provider(issuer=other_issuer), {"sub": "sub-other", "preferred_username": "jdupont"})
+
+    assert (main.username, other.username) == ("jdupont_main", "jdupont_other")
+
+
+def test_link_user_finds_a_linked_account_by_sub_even_after_its_sso_login_changed(users):
+    _oidc_user(users, "jdupont")
+    link_user(users, _provider(), {"sub": "sub-123", "preferred_username": "jdupont"})
+    user = User(users, username="jdupont")
+    user.sso_login = "jean.dupont@example.com"
+    user.save()
+
+    linked = link_user(users, _provider(), {"sub": "sub-123", "preferred_username": "jdupont"})
+
+    assert linked.username == "jdupont"
+
+
+def test_link_user_links_again_an_unlinked_account_through_its_sso_login(users):
+    """After the admin removed the link (identity provider account recreated, so a new sub)"""
+    _oidc_user(users, "jdupont")
+    link_user(users, _provider(), {"sub": "old-sub", "preferred_username": "jdupont"})
+    user = User(users, username="jdupont")
+    user.sso_unlink()
+    user.save()
+
+    linked = link_user(users, _provider(), {"sub": "new-sub", "preferred_username": "jdupont"})
+
+    assert linked.oidc_link is not None and linked.oidc_link.sub == "new-sub"
 
 
 def test_link_user_logs_a_mismatched_subject_rejection(users, caplog):

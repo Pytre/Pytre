@@ -146,8 +146,11 @@ def _save_provider(
     saved_issuer = provider.issuer  # empty for a new provider
     saved_uuid = provider.uuid
     provider_form.apply_to(provider)
+    issuer_changed = bool(saved_issuer) and saved_issuer != provider.issuer
 
     try:
+        if issuer_changed:
+            users.check_oidc_issuer_move(saved_issuer, provider.issuer)  # before anything is changed
         provider.save()
     except (ValueError, OSError) as e:
         provider.uuid = saved_uuid  # a failed creation must be displayed as "new" (its entry was discarded)
@@ -156,7 +159,7 @@ def _save_provider(
         return templates.TemplateResponse(request, "admin/oidc_provider_form.html", context)
 
     msg = f"OIDC provider '{provider.issuer}' saved by admin '{admin_username}' (enabled={provider.enabled})"
-    if saved_issuer and saved_issuer != provider.issuer:
+    if issuer_changed:
         nb_moved = users.replace_oidc_issuer(saved_issuer, provider.issuer)
         msg += f", {nb_moved} user link(s) moved from '{saved_issuer}'"
 

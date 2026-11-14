@@ -1,7 +1,5 @@
 {% extends "admin/base.html" %}
-{% macro info_tip(text) %}
-<span class="info-tip" tabindex="0" title="{{ text }}" aria-label="{{ text }}">ⓘ</span>
-{% endmacro %}
+{% from "admin/_macros.html" import info_tip %}
 {% block title %}{% if provider.uuid %}Edit SSO provider{% else %}New SSO provider{% endif %} — Pytre Server{% endblock %}
 {% block main_class %}main-flush{% endblock %}
 {% block content %}
@@ -56,9 +54,9 @@
                     <label for="client_secret">
                         {% if provider.uuid %}Client secret (leave blank to keep the current one){% else %}Client secret{% endif %}
                     </label>
-                    <div class="password-field">
+                    <div class="field-with-icon password-field">
                         <input type="password" id="client_secret" name="client_secret" autocomplete="new-password">
-                        <button type="button" class="password-toggle" onclick="togglePasswordField(this)" title="Show/hide password">
+                        <button type="button" class="field-icon" onclick="togglePasswordField(this)" title="Show/hide password">
                             <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>
                         </button>
                     </div>

@@ -86,6 +86,7 @@ class UserField(Enum):
     NO_ALL_GROUP = (_CsvStatus.OPTIONAL, "no all group", _DbKind.CUSTOM, "no_all_group")
     AUTH_TYPE = (_CsvStatus.OPTIONAL, "auth", _DbKind.CUSTOM, "auth_type")
     OIDC_LINK = (_CsvStatus.OPTIONAL, "oidc link", _DbKind.CUSTOM, "oidc_link")
+    SSO_LOGIN = (_CsvStatus.OPTIONAL, "sso login", _DbKind.CUSTOM, "sso_login")
 
     PWD = (_CsvStatus.PASSWORD, "password", _DbKind.NATIVE, "password")
     PWD_HASH = (_CsvStatus.PASSWORD, "password hash", _DbKind.NATIVE, "password")
@@ -319,12 +320,6 @@ class Users:
         if self.kee.db is None:
             raise RuntimeError("Database not opened, can't import csv")
 
-        # retrieve existing users
-        entries_dict = {}
-        u_entry: Entry
-        for u_entry in self.kee_grp.entries:
-            entries_dict[(u_entry.username or "").upper()] = u_entry
-
         # define expected columns
         cols_std = [c.csv_header for c in UserField if c.csv_status is _CsvStatus.REQUIRED]
         cols_pwd = [c for c in UserField if c.csv_status is _CsvStatus.PASSWORD]
@@ -361,35 +356,48 @@ class Users:
 
             # process rows
             for row_num, row in enumerate(csv_reader, start=2):
+                # a row whose cells don't match the header is malformed (missing or unquoted delimiter)
+                if None in row or None in row.values():
+                    msg = f"Row {row_num} ignored: its number of values doesn't match the header's"
+                    log(msg, logging.WARNING)
+                    continue
+
                 username = row[UserField.ID.csv_header].strip()
                 if not username:
-                    log(f"Ligne {row_num} ignorée : aucun id renseigné", logging.WARNING)
+                    log(f"Row {row_num} ignored: id is missing", logging.WARNING)
                     continue
 
                 # create or retrieve db entry
-                if username.upper() in entries_dict.keys():
-                    u_entry = entries_dict[username.upper()]
-                    u_entry.username = username
-                else:
-                    u_entry = self.kee.db.add_entry(self.kee_grp, "", username, "")
+                u_entry = self.find_entry_by_username(username) or self.kee.db.add_entry(self.kee_grp, "", "", "")
+                u_entry.username = username
 
                 # update standard and optional infos
                 u_entry.title = row.get(UserField.DISPLAY_NAME.csv_header, "").strip()
 
                 for user_field in (UserField.ADMIN, UserField.NO_ALL_GROUP):
-                    if user_field.csv_header in row:
-                        is_set = row[user_field.csv_header].strip() == "1"
+                    declared = (row.get(user_field.csv_header) or "").strip()
+                    if declared:
+                        is_set = declared == "1"
                         u_entry.set_custom_property(user_field.db_key, "true" if is_set else "false")
 
+                # update authentification type
                 auth_field = UserField.AUTH_TYPE
-                if auth_field.csv_header in row:
-                    value = row[auth_field.csv_header].strip()
-                    auth_type = AuthType.from_value(value)
+                declared = (row.get(auth_field.csv_header) or "").strip()
+                current = u_entry.get_custom_property(auth_field.db_key)
+                if declared:
+                    auth_type = AuthType.from_value(declared)
                     if auth_type is None:
-                        log(f"Row {row_num} ignored : '{value}' is not a valid auth type", logging.WARNING)
-                        continue
+                        log(f"Auth type on row {row_num} ignored: value '{declared}' is not valid", logging.WARNING)
+                        auth_type = None if current else AuthType.NONE
+                elif not current:
+                    auth_type = AuthType.NONE
+                else:
+                    auth_type = None  # no value: the saved value is kept
+
+                if auth_type:
                     u_entry.set_custom_property(auth_field.db_key, auth_type.value)
 
+                # update oidc link
                 oidc_field = UserField.OIDC_LINK
                 if oidc_field.csv_header in row:
                     saved_link = load_oidc_link(u_entry.get_custom_property(oidc_field.db_key) or "")
@@ -405,6 +413,28 @@ class Users:
 
                     if new_link:
                         u_entry.set_custom_property(oidc_field.db_key, json.dumps(new_link), protect=True)
+
+                # update SSO login
+                sso_login_field = UserField.SSO_LOGIN
+                current = u_entry.get_custom_property(sso_login_field.db_key)
+                is_oidc = u_entry.get_custom_property(UserField.AUTH_TYPE.db_key) == AuthType.OIDC.value
+                declared = (row.get(sso_login_field.csv_header) or "").strip()
+                if declared:
+                    sso_login = declared
+                elif is_oidc and not current:
+                    sso_login = username  # an OIDC account should always have one
+                else:
+                    sso_login = ""  # no value: the saved value is kept
+
+                if sso_login:
+                    link = load_oidc_link(u_entry.get_custom_property(UserField.OIDC_LINK.db_key) or "")
+                    issuer = link.issuer if link else None
+                    owner = self.find_user_by_sso_login(sso_login, issuer=issuer, exclude_uuid=str(u_entry.uuid))
+                    if owner:
+                        msg = f"SSO login on row {row_num} ignored: already used by '{owner.username}'"
+                        log(msg, logging.WARNING)
+                    else:
+                        u_entry.set_custom_property(sso_login_field.db_key, sso_login)
 
                 # update password related infos
                 for col in cols_pwd_in_csv:
@@ -514,11 +544,13 @@ class Users:
         domain_and_name = f"{domain}\\{name}" if domain else name
         return domain_and_name
 
-    def find_entry_by_username(self, username: str) -> Entry | None:
+    def find_entry_by_username(self, username: str, exclude_uuid: str = "") -> Entry | None:
         if self.kee_grp is None:
             raise ValueError("No KeePass group selected, cannot find user entry by username")
 
         for entry in self.kee_grp.entries:
+            if str(entry.uuid) == exclude_uuid:
+                continue
             if entry.username and username.upper() == entry.username.upper():
                 return entry
 
@@ -529,6 +561,33 @@ class Users:
             raise RuntimeError("Database not opened, can't find user by uuid")
         entry = self.kee.db.find_entries(uuid=UUID(uuid), first=True)
         return User(self, entry=entry) if entry and isinstance(entry, Entry) else None
+
+    def find_user_by_sso_login(self, sso_login: str, issuer: str | None = None, exclude_uuid: str = "") -> User | None:
+        """The OIDC user declaring `sso_login` (case ignored) whose provider overlaps `issuer`: the same one, or
+        either of them being any provider (no OIDC link, or `issuer` None)"""
+
+        if self.kee.db is None:
+            raise RuntimeError("Database not opened, can't find user by SSO login")
+        if self.kee_grp is None:
+            raise ValueError("No KeePass group selected, cannot find user by SSO login")
+
+        wanted = sso_login.strip().casefold()
+        if not wanted:
+            return None
+
+        for entry in self.kee_grp.entries:
+            if str(entry.uuid) == exclude_uuid:
+                continue
+            if entry.get_custom_property(UserField.AUTH_TYPE.db_key) != AuthType.OIDC.value:
+                continue
+            if wanted != (entry.get_custom_property(UserField.SSO_LOGIN.db_key) or "").strip().casefold():
+                continue
+
+            link = load_oidc_link(entry.get_custom_property(UserField.OIDC_LINK.db_key) or "")
+            if issuer is None or link is None or link.issuer == issuer:
+                return User(self, entry=entry)
+
+        return None
 
     def find_user_by_oidc_link(self, issuer: str, sub: str) -> User | None:
         if self.kee_grp is None:
@@ -571,6 +630,21 @@ class Users:
 
         return len(users)
 
+    def check_oidc_issuer_move(self, old_issuer: str, new_issuer: str) -> None:
+        """Raises ValueError if moving the OIDC links of `old_issuer` to `new_issuer` would give two accounts of
+        the same provider the same SSO login - checked before anything is changed"""
+        moved = self.find_users_by_oidc_issuer(old_issuer) if old_issuer else []
+        moved_uuids = {user.uuid for user in moved}
+        for user in moved:
+            if user.auth_type is not AuthType.OIDC or not user.sso_login:
+                continue
+            owner = self.find_user_by_sso_login(user.sso_login, issuer=new_issuer, exclude_uuid=user.uuid)
+            if owner and owner.uuid not in moved_uuids:
+                raise ValueError(
+                    f"SSO login '{user.sso_login}' of '{user.username}' is already used by "
+                    f"'{owner.username}' with this issuer"
+                )
+
 
 class AuthType(Enum):
     """Authentication types to identify how to interpret User.password_hash."""
@@ -601,6 +675,7 @@ class User:
         self._pwd_changed_at: datetime | None = None
         self.auth_type: AuthType = AuthType.NONE
         self.oidc_link: OidcLink | None = None
+        self.sso_login: str = ""  # claim value linking an OIDC account at its first SSO login
 
         self.exists: bool = False
         self.is_authorized: bool = False
@@ -645,6 +720,18 @@ class User:
         (used server-side to invalidate JWTs issued before this change)."""
         return self._pwd_changed_at
 
+    @property
+    def sso_linked(self) -> bool:
+        """Linked to an identity provider account, then found by its sub at every SSO login"""
+        return self.oidc_link is not None and bool(self.oidc_link.sub)
+
+    def sso_unlink(self) -> None:
+        """Forgets the identity provider account, its refresh token included so the account's current sessions
+        can't be renewed, but keeps the assigned provider: the next SSO login links it again through sso_login.
+        Not saved."""
+        if self.oidc_link is not None:
+            self.oidc_link = OidcLink(self.oidc_link.issuer, sub="")
+
     def user_info(self, attr: str) -> str:
         """Returns an attribute value exposed to a SQL query's USER_INFO(...)"""
 
@@ -658,6 +745,7 @@ class User:
             "uuid": self.uuid,
             "id": self.username,
             "auth_type": self.auth_type.name,
+            "sso_login": self.sso_login,
             "password_changed_at": self.password_changed_at or "",
             "exist_in_settings": self.exists,
             "is_authorized": self.is_authorized,
@@ -719,6 +807,8 @@ class User:
                     self._pwd_changed_at = None
             elif property == UserField.OIDC_LINK.db_key:
                 self.oidc_link = load_oidc_link(value)
+            elif property == UserField.SSO_LOGIN.db_key:
+                self.sso_login = value
             else:
                 self.attribs_cust[property] = value
 
@@ -750,11 +840,18 @@ class User:
         if self.users.kee.db is None:
             raise RuntimeError("Database not opened, can't save it")
 
-        # control
-        if next(
-            (u for u in self.users.kee_grp.entries if u.username == self.username and str(u.uuid) != self.uuid), None
-        ):
-            raise ValueError(f"{self.username} est déjà utilisé comme identifiant")
+        # control username is not already used
+        owner = self.users.find_entry_by_username(self.username, exclude_uuid=self.uuid)
+        if owner:
+            raise ValueError(f"Id '{self.username}' is already used")
+
+        # control that the SSO login is not already used
+        if self.auth_type is AuthType.OIDC:
+            self.sso_login = self.sso_login.strip() or self.username
+            issuer = self.oidc_link.issuer if self.oidc_link else None
+            owner = self.users.find_user_by_sso_login(self.sso_login, issuer=issuer, exclude_uuid=self.uuid)
+            if owner:
+                raise ValueError(f"SSO login '{self.sso_login}' is already used by '{owner.username}'")
 
         # Get existing entry or create a new one
         u_entry = self.users.kee.db.find_entries(uuid=UUID(self.uuid), first=True) if self.uuid else None
@@ -779,6 +876,7 @@ class User:
         u_entry.set_custom_property(UserField.AUTH_TYPE.db_key, self.auth_type.value)
         u_entry.set_custom_property(UserField.PWD_CHANGED_AT.db_key, pwd_changed_at_val)
         u_entry.set_custom_property(UserField.OIDC_LINK.db_key, oidc_link, protect=True)
+        u_entry.set_custom_property(UserField.SSO_LOGIN.db_key, self.sso_login)
 
         for attr, val in self.attribs_cust.items():
             u_entry.set_custom_property(attr, val)

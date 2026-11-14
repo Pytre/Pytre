@@ -1556,6 +1556,23 @@ def _import_file(tmp_path: Path, *rows: dict[str, str]) -> Path:
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize("bad_line", ["OTHER;only two values", "OTHER" + ";x" * 14], ids=["missing", "extra"])
+def test_csv_import_refuses_the_whole_file_with_a_row_not_matching_the_header(mock_kee, tmp_path, bad_line):
+    """A missing or unquoted delimiter shifts the values (a host into the port...): nothing is imported"""
+    entry = _stored_entry("SRV")
+    mock_kee.grp_servers.entries = [entry]
+    csv_file = _import_file(tmp_path, {"description": "changed"})
+    with open(csv_file, "a", encoding="utf-8", newline="") as f:
+        f.write(bad_line + "\r\n")
+
+    with pytest.raises(ValueError, match=r"doesn't match the header on line\(s\) 3\. Nothing was imported"):
+        Servers(mock_kee).csv_import(csv_file)
+
+    entry.set_custom_property.assert_not_called()
+    mock_kee.save_db.assert_not_called()
+
+
+@pytest.mark.unit
 def test_csv_import_refuses_a_target_change_without_the_password(mock_kee, tmp_path):
     entry = _stored_entry("SRV")
     mock_kee.grp_servers.entries = [entry]

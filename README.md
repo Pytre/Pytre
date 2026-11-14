@@ -149,6 +149,11 @@ Values are passed to the database as query parameters, except for `@!` parameter
 
 Database credentials stay on the server: a client only ever gets the identifier and description of each SQL server.
 
+The SQL account of each server must be read-only, and only reach the databases its queries need. Connections ask for a read-only access (read-only intent on SQL Server, read-only transactions on PostgreSQL), but this doesn't prevent writing: a query can change it. Only the rights of the account do:
+
+- SQL Server: a login mapped to a user with `db_datareader` only, in each database used, never `db_datawriter`, `db_owner` or `sysadmin`,
+- PostgreSQL: a role with `CONNECT` on the database, `USAGE` on its schemas and `SELECT` on their tables, never a superuser or the owner of the tables.
+
 ### Web administration
 
 The web administration is served at `/admin`, by the same process and on the same port as the client API. Opening the server's address in a browser redirects to it.

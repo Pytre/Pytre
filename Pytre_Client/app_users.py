@@ -1,5 +1,6 @@
 import logging
 import tkinter as tk
+from dataclasses import dataclass
 from tkinter import ttk, Event, font, messagebox, filedialog
 from threading import Thread
 from queue import Queue
@@ -494,6 +495,18 @@ class UsersWindow(tk.Toplevel):
         csv_process_async(csv_task_cfg)
 
 
+@dataclass
+class AuthField:
+    """Label and entry of a user field only meaningful with one auth type, hidden with the others"""
+
+    label: ttk.Label
+    entry: ttk.Entry | ttk.Checkbutton
+    auth_type: AuthType
+
+    def shown_for(self, auth_type: AuthType) -> bool:
+        return auth_type is self.auth_type
+
+
 class UserDialog(tk.Toplevel):
     def __init__(self, parent: UsersWindow, user: User | None = None):
         super().__init__(master=parent)
@@ -518,6 +531,7 @@ class UserDialog(tk.Toplevel):
             self.set_entries()
 
         self.groups_set()
+        self.update_auth_fields()
 
     # ------------------------------------------------------------------------------------------
     # Création de l'interface
@@ -528,7 +542,7 @@ class UserDialog(tk.Toplevel):
         else:
             self.title(f"{APP_NAME} - Modification utilisateur")
 
-        self.minsize(width=400, height=100)
+        self.minsize(width=400, height=425)
         self.geometry(f"+{self.parent.winfo_x() + 200}+{self.parent.winfo_y() + 150}")
         self.resizable(True, True)
 
@@ -547,32 +561,38 @@ class UserDialog(tk.Toplevel):
         self._setup_groups()
         self._setup_buttons()
 
+        # size for the largest content (every auth field shown), so changing the auth type never resizes it
+        self.update_idletasks()
+        self.geometry(f"{self.winfo_reqwidth()}x{self.winfo_reqheight()}")
+
     def _setup_entries(self):
         self.entries_frame.columnconfigure(1, weight=1)
 
+        self.entries: dict[str, tk.Variable] = {}
+        self.auth_fields: dict[str, AuthField] = {}  # hidden or shown depending on the selected auth type
+
+        # default entries
         entries_caption: dict[str, str] = {
             "username": "Id",
             "display_name": "Libellé",
             "admin": "Admin",
         }
-
-        self.entries: dict[str, tk.Variable] = {}
         for attr in self.users.attribs_cust:
             entries_caption[attr] = attr
 
+        # authentication related fields: label, and the auth type they're only meaningful with (None: always shown)
+        auth_related: dict[str, tuple[str, AuthType | None]] = {
+            "auth_type": ("Auth", None),
+            "password_hash": ("Hash", AuthType.BASIC),
+            "sso_login": ("SSO login", AuthType.OIDC),
+            "sso_linked": ("Lié SSO", AuthType.OIDC),
+        }
         if self.parent.pwd_infos:
-            pwd_related = {
-                "auth_type": "Auth",
-                "password_hash": "Hash",
-                "sso_login": "SSO login",
-                "sso_linked": "Lié SSO",
-            }
-            items = list(entries_caption.items())
-            items[1:1] = list(pwd_related.items())
-            entries_caption = dict(items)
+            items_list = list(entries_caption.items())
+            items_list[1:1] = [(key, caption) for key, (caption, _) in auth_related.items()]
+            entries_caption = dict(items_list)
 
-        self.sso_linked_check: ttk.Checkbutton | None = None
-
+        # create widgets
         num_row = 0
         for key, caption in entries_caption.items():
             my_label = ttk.Label(self.entries_frame, text=f"{caption} : ")
@@ -584,19 +604,23 @@ class UserDialog(tk.Toplevel):
                 my_tk_var = tk.StringVar()
                 my_entry = ttk.Combobox(self.entries_frame, textvariable=my_tk_var, values=self.auth_values)
                 my_entry.configure(state="readonly" if len(AuthType) > 1 else "disable")
-                my_entry.bind("<<ComboboxSelected>>", lambda _: self.sso_login_default())
             elif key == "sso_linked":
                 # set by the first SSO login: can only be unchecked, to unlink the account
                 my_tk_var = tk.BooleanVar(value=False)
                 my_entry = ttk.Checkbutton(self.entries_frame, variable=my_tk_var, onvalue=True, offvalue=False)
                 my_entry.configure(state="disabled")
-                self.sso_linked_check = my_entry
             else:
                 my_tk_var = tk.StringVar()
                 my_entry = ttk.Entry(self.entries_frame, textvariable=my_tk_var)
 
+            # define auth_type binds and widgets infos to toggle visibility depending on auth_type
             self.entries[key] = my_tk_var
+            if key == "auth_type":
+                my_entry.bind("<<ComboboxSelected>>", lambda _: self.auth_type_changed())
+            elif key in auth_related and (field_auth_type := auth_related[key][1]) is not None:
+                self.auth_fields[key] = AuthField(label=my_label, entry=my_entry, auth_type=field_auth_type)
 
+            # display widgets
             my_label.grid(row=num_row, column=0, padx=2, pady=2, sticky="nswe")
             my_entry.grid(row=num_row, column=1, padx=2, pady=2, sticky="nswe")
             num_row += 1
@@ -609,6 +633,7 @@ class UserDialog(tk.Toplevel):
         self.new_grp = ttk.Button(self.groups_frame, text="+", width=3, command=self.group_add)
 
         self.listbox = tk.Listbox(self.groups_frame, selectmode=tk.MULTIPLE, activestyle="none", relief="groove")
+        self.listbox.configure(height=5)
         if theme_is_on():
             self.listbox.configure(selectbackground=ThemeColors.accent, selectforeground=ThemeColors.text_secondary)
         ybar = ttk.Scrollbar(self.groups_frame, orient="vertical", command=self.listbox.yview)
@@ -658,8 +683,9 @@ class UserDialog(tk.Toplevel):
 
             tk_var.set(val)
 
-        if self.sso_linked_check is not None and self.user.sso_linked:
-            self.sso_linked_check.configure(state="normal")
+        sso_linked = self.auth_fields.get("sso_linked")
+        if sso_linked is not None and self.user.sso_linked:
+            sso_linked.entry.configure(state="normal")
 
     def groups_set(self):
         for group in sorted(self.parent.groups):
@@ -673,6 +699,27 @@ class UserDialog(tk.Toplevel):
     def group_add(self):
         new_group = InputDialog.ask("Nouveau groupe", "Groupe à ajouter :", parent=self)
         ui_utils.listbox_add_sorted(self.listbox, new_group)
+
+    def auth_type_changed(self):
+        self.sso_login_default()
+        self.update_auth_fields()
+
+    def update_auth_fields(self):
+        """Shows only the fields meaningful with the selected auth type"""
+
+        if "auth_type" not in self.entries:
+            return  # no authentication fields displayed
+
+        auth_type = AuthType.from_value(self.entries["auth_type"].get())
+
+        for field in self.auth_fields.values():
+            show = auth_type is not None and field.shown_for(auth_type)
+            if show:
+                field.label.grid()
+                field.entry.grid()
+            else:
+                field.label.grid_remove()
+                field.entry.grid_remove()
 
     def sso_login_default(self):
         """An OIDC account always has an SSO login: its Id unless another one is declared"""

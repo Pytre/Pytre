@@ -1,0 +1,14 @@
+{
+    "prod_basic": {
+        "url": "https://pytre-basic.example.com",
+        "port": 443,
+        "description": "Pytre (basic)",
+        "auth_method": "basic"
+    },
+    "prod_sso": {
+        "url": "https://pytre-sso.example.com",
+        "port": 443,
+        "description": "Pytre (SSO)",
+        "auth_method": "oidc"
+    }
+}

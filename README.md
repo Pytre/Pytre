@@ -76,6 +76,7 @@ Releases are immutable and each one publishes `SHA256SUMS.txt`, so a file can be
 - User data lives in `%LOCALAPPDATA%\Pytre` and is left untouched.
 - The upgrade code `{66048ACB-7CC6-4AEE-9BC4-C0F307486C78}` stays the same across versions, for detection rules.
 - It installs a `Pytre.policy.json` file turning updates off (new versions are deployed with a new MSI) and plain HTTP to remotes other than the machine itself: remotes must use `https://`.
+- It doesn't install any remote: add a `Pytre.remotes.json` file next to `Pytre_Client.exe` after the install, see [Deployed remotes](#deployed-remotes).
 
 ### Folder (zip)
 
@@ -84,6 +85,7 @@ Releases are immutable and each one publishes `SHA256SUMS.txt`, so a file can be
 - User data lives in `%LOCALAPPDATA%\Pytre` and is left untouched.
 - To detect the installed version, read the file version of `Pytre_Client.exe`: `2.0.0.400` for 2.0.0, pre-releases being lower (`2.0.0.204` for 2.0.0-beta.4).
 - Add a `Pytre.policy.json` file next to `Pytre_Client.exe` to turn updates off, see [Enterprise policy](#enterprise-policy). Without it, the client checks for new versions and, as it can't replace itself in a folder users can't write to, offers to open the download page.
+- Add a `Pytre.remotes.json` file next to `Pytre_Client.exe` to give users their remotes, see [Deployed remotes](#deployed-remotes).
 
 ### Enterprise policy
 
@@ -112,6 +114,32 @@ Put a `Pytre.policy.json` file next to the client executable:
 | `disabled` | Plain HTTP is only allowed to the machine itself (`localhost`, `127.0.0.1`, `::1`): every other remote must use `https://`, and the option of the remotes window is hidden |
 
 With `plain_http_remotes` disabled, the passwords and tokens of the remotes never go unencrypted over the network. A remote reached over plain HTTP, on its own or through an SSO sign-in, is refused with a message asking for an `https://` address.
+
+### Deployed remotes
+
+Put a `Pytre.remotes.json` file next to the client executable, encoded in UTF-8, to give every user the remotes of the organization: they only have to log in. A template is available in [templates/Pytre.remotes.json](templates/Pytre.remotes.json).
+
+```json
+{
+    "production": {
+        "url": "https://pytre.example.com",
+        "port": 443,
+        "description": "Pytre",
+        "auth_method": "oidc"
+    }
+}
+```
+
+- Each key is a name of your choice, unique in the file. `url` and `port` are required. `auth_method` is `basic` (default) or `oidc` for an SSO sign-in. `allow_unsecure_channel` is optional, see below.
+- `username` is optional: without it, the user's Windows session name is used (`DOMAIN\name`). Users can change it.
+- Never put a password or a token in the file: `password`, `encrypted_pwd` and `token` are ignored.
+- A remote is identified by its URL and port. A remote the user already has on the same URL and port becomes a deployed one and keeps the user's username, password and session.
+- The file is applied each time the remotes are loaded: at startup and when they are reloaded. The description, authentication method and `allow_unsecure_channel` follow the file; a change of authentication method signs the user out of that remote. A change of URL or port gives a new remote: users log in again.
+- A remote removed from the file is removed from the users' remotes, and all deployed remotes are removed without the file.
+- A file that can't be read, isn't valid JSON or holds an invalid remote is ignored as a whole, the deployed remotes are left unchanged and a warning is logged.
+- In the remotes window, a deployed remote can't be deleted and only its username, password and "ask to log in at startup" option can be changed. Importing a CSV file never changes it.
+- At startup, the remotes users have to log in to are offered in a single question: log in to each of them, ignore it this time, or stop asking - an option of each remote, in the remotes window.
+- The [enterprise policy](#enterprise-policy) applies to them: with `plain_http_remotes` disabled, `allow_unsecure_channel` has no effect.
 
 ## Server security
 

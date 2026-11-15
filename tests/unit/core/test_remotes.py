@@ -16,6 +16,7 @@ from Pytre_Core import remotes as remotes_module
 from Pytre_Core.app_folders import get_config_folder
 from Pytre_Core.policy import PlainHttpRemotesPolicy
 from Pytre_Core.remotes import (
+    MANAGED_REMOTES_FILENAME,
     REMOTES_CIPHER,
     REMOTES_FILENAME,
     Remote,
@@ -31,7 +32,7 @@ from Pytre_Core.remotes import (
     Remotes,
     detail_from_response,
 )
-from Pytre_Core.users import AuthType
+from Pytre_Core.users import AuthType, Users
 from Pytre_Core.user_prefs import DisplayFormat
 
 
@@ -92,6 +93,15 @@ def plain_http_policy_allowed(monkeypatch):
     monkeypatch.setattr("Pytre_Core.remotes.plain_http_allowed", lambda: True)
 
 
+@pytest.fixture(autouse=True)
+def install_folder(tmp_path_factory, monkeypatch) -> Any:
+    """Folder of the remotes deployed by the administrator, isolated per test: no test reads a Pytre.remotes.json
+    lying next to the code. Kept out of tmp_path, which tests may expect empty."""
+    folder = tmp_path_factory.mktemp("install")
+    monkeypatch.setattr("Pytre_Core.remotes.get_install_folder", lambda: folder)
+    return folder
+
+
 @pytest.fixture
 def auto_login_ok(monkeypatch):
     """Makes any Remote.login() call succeed via a full /login round trip, without caring
@@ -103,8 +113,9 @@ def auto_login_ok(monkeypatch):
 @pytest.fixture
 def address() -> RemoteAddress:
     """Loopback host so login()'s HTTPS-or-local gate doesn't get in the way of tests that
-    aren't specifically about that gate - see the dedicated tests near Remote.login()."""
-    return RemoteAddress(url="http://127.0.0.1", port=8000, username="alice")
+    aren't specifically about that gate - see the dedicated tests near Remote.login(). A saved
+    password, as login() never calls /login without one."""
+    return RemoteAddress(url="http://127.0.0.1", port=8000, username="alice", password="secret")
 
 
 @pytest.fixture
@@ -124,6 +135,12 @@ def _write_remotes_file(path, addresses: list[RemoteAddress]) -> None:
 
 def _read_remotes_file(path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _comparable(address_dict: dict) -> dict:
+    """`address_dict` (RemoteAddress.to_dict()) with its secrets decrypted: each encryption gives a different text"""
+    decrypted = {key: REMOTES_CIPHER.decrypt(address_dict[key]) for key in ("encrypted_pwd", "token")}
+    return address_dict | decrypted
 
 
 @pytest.fixture
@@ -214,6 +231,8 @@ def test_remote_address_to_dict_round_trips():
         "token": "",
         "allow_unsecure_channel": False,
         "auth_method": "basic",
+        "managed": False,
+        "ask_for_login": True,
     }
 
 
@@ -1584,8 +1603,8 @@ def test_remotes_init_does_not_fetch_servers(monkeypatch, remotes_file):
 
 @pytest.mark.unit
 def test_get_all_servers_reload_refreshes_every_remote_and_merges_them(monkeypatch, remotes_file, auto_login_ok):
-    addr1 = RemoteAddress(url="http://127.0.0.1", port=8000, username="alice")
-    addr2 = RemoteAddress(url="http://127.0.0.1", port=8001, username="bob")
+    addr1 = RemoteAddress(url="http://127.0.0.1", port=8000, username="alice", password="secret")
+    addr2 = RemoteAddress(url="http://127.0.0.1", port=8001, username="bob", password="secret")
     _write_remotes_file(remotes_file, [addr1, addr2])
     payload = _servers_payload([{"id": "s1", "description": "Server 1"}])
     monkeypatch.setattr(httpx2, "get", lambda **kwargs: _FakeResponse(payload))
@@ -1601,7 +1620,7 @@ def test_get_all_servers_reload_refreshes_every_remote_and_merges_them(monkeypat
 def test_get_all_servers_without_reload_assembles_from_current_state(monkeypatch, remotes_file, auto_login_ok):
     """No network call: assembles servers_dict from whatever each remote already holds in
     memory, rather than returning a possibly-empty separately-tracked cache."""
-    addr = RemoteAddress(url="http://127.0.0.1", port=8000, username="alice")
+    addr = RemoteAddress(url="http://127.0.0.1", port=8000, username="alice", password="secret")
     _write_remotes_file(remotes_file, [addr])
     payload = _servers_payload([{"id": "s1", "description": "Server 1"}])
     monkeypatch.setattr(httpx2, "get", lambda **kwargs: _FakeResponse(payload))
@@ -1694,7 +1713,9 @@ def test_save_adds_new_remote(no_remote_servers, address, remotes_file):
 
     assert [r.address.id for r in remotes.remotes_dict.values()] == [address.id]
     saved = _read_remotes_file(remotes_file)
-    assert saved == {address.uuid: {k: v for k, v in address.to_dict().items() if k != "uuid"}}
+    assert {k: _comparable(v) for k, v in saved.items()} == {
+        address.uuid: _comparable({k: v for k, v in address.to_dict().items() if k != "uuid"})
+    }
 
 
 @pytest.mark.unit
@@ -2024,10 +2045,10 @@ def test_remote_server_serialize(address, remotes):
 
     data = server.serialize()
 
-    assert data == {
+    assert data | {"address": _comparable(data["address"])} == {
         "id_on_remote": "SRV1",
         "description": "Server 1",
-        "address": address.to_dict(),
+        "address": _comparable(address.to_dict()),
         "user_infos": None,
     }
 
@@ -2458,3 +2479,345 @@ def test_execute_lets_errors_of_the_caller_through_unchanged(remote_server, monk
 def test_remotes_default_to_the_file_of_the_user_config_folder():
     """Resolved when Remotes is built, not at import: follows the folder of the running platform"""
     assert Remotes().remotes_file == get_config_folder() / REMOTES_FILENAME
+
+
+@pytest.mark.unit
+def test_remotes_default_to_the_managed_file_of_the_install_folder(install_folder):
+    assert Remotes().managed_file == install_folder / MANAGED_REMOTES_FILENAME
+
+
+# ================================================================================
+# Remotes deployed by the administrator
+# ================================================================================
+
+
+@pytest.fixture
+def managed_file(install_folder) -> Any:
+    """Pytre.remotes.json of the install folder, absent until a test writes it"""
+    return install_folder / MANAGED_REMOTES_FILENAME
+
+
+@pytest.fixture
+def session_username(monkeypatch) -> str:
+    username = "DOMAIN\\bob"
+    monkeypatch.setattr(Users, "get_current_username", staticmethod(lambda: username))
+    return username
+
+
+def _write_managed_file(path, entries: dict, encoding: str = "utf-8") -> None:
+    path.write_text(json.dumps(entries), encoding=encoding)
+
+
+_DEPLOYED_A = {"url": "https://a.example.com", "port": 443, "description": "Remote A", "auth_method": "basic"}
+
+
+@pytest.mark.unit
+def test_remote_address_from_a_former_file_is_not_managed_and_asks_for_login():
+    address = RemoteAddress.from_dict({"url": "http://a", "port": 8000, "username": "alice"})
+
+    assert address.managed is False
+    assert address.ask_for_login is True
+
+
+@pytest.mark.unit
+def test_remote_address_managed_and_ask_for_login_round_trip():
+    address = RemoteAddress(url="http://a", port=8000, username="alice", managed=True, ask_for_login=False)
+
+    rebuilt = RemoteAddress.from_dict(address.to_dict())
+
+    assert rebuilt.managed is True
+    assert rebuilt.ask_for_login is False
+
+
+@pytest.mark.unit
+def test_remote_address_base_id_ignores_case_and_a_trailing_slash():
+    address = RemoteAddress(url="https://A.example.com/", port=443, username="Alice")
+
+    assert address.base_id == "https://a.example.com:443"
+    assert address.id == "alice@https://a.example.com:443"
+
+
+@pytest.mark.unit
+def test_login_without_password_raises_without_any_network_call(remotes, monkeypatch):
+    """An empty login would count as a failed attempt for the server's sign-in throttling"""
+    monkeypatch.setattr(httpx2, "post", lambda **kwargs: pytest.fail("no request expected"))
+    remote = Remote(remotes, RemoteAddress(url="http://127.0.0.1", port=8000, username="alice"))
+
+    with pytest.raises(RemoteAuthError, match="No password saved"):
+        remote.login()
+
+    assert isinstance(remote.last_error, RemoteAuthError)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "error, ask_for_login, expected",
+    [
+        (RemoteAuthError("refused"), True, True),
+        (RemoteSsoRequiredError("expired"), True, True),
+        (RemoteAuthError("refused"), False, False),
+        (RemoteRequestError("unreachable"), True, False),
+        (None, True, False),
+    ],
+)
+def test_asking_for_login_selects_the_remotes_refused_for_lack_of_session(remotes, error, ask_for_login, expected):
+    remote = Remote(remotes, RemoteAddress(url="http://a", port=8000, username="alice", ask_for_login=ask_for_login))
+    remote.last_error = error
+    remotes.remotes_dict = {remote.uuid: remote}
+
+    assert (remotes.asking_for_login() == [remote]) is expected
+
+
+@pytest.mark.unit
+def test_sync_managed_adds_a_deployed_remote_with_the_session_username(remotes_file, managed_file, session_username):
+    _write_managed_file(managed_file, {"prod": _DEPLOYED_A})
+
+    remotes = Remotes(remotes_file)
+
+    [remote] = remotes.remotes_dict.values()
+    assert remote.managed is True
+    assert remote.address.username == session_username
+    assert remote.address.description == "Remote A"
+    assert remote.address.ask_for_login is True
+    assert [v["managed"] for v in _read_remotes_file(remotes_file).values()] == [True]  # saved at once
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("username, expected", [("carol", "carol"), ("", "DOMAIN\\bob")])
+def test_sync_managed_uses_the_username_of_the_file_if_any(
+    remotes_file, managed_file, session_username, username, expected
+):
+    _write_managed_file(managed_file, {"prod": _DEPLOYED_A | {"username": username}})
+
+    [remote] = Remotes(remotes_file).remotes_dict.values()
+
+    assert remote.address.username == expected
+
+
+@pytest.mark.unit
+def test_sync_managed_updates_the_fields_of_the_file_and_keeps_the_user_ones(remotes_file, managed_file):
+    token = _make_token()
+    address = RemoteAddress(
+        url="https://a.example.com",
+        port=443,
+        username="alice",
+        password="secret",
+        refresh_token=token,
+        description="Old",
+        managed=True,
+        ask_for_login=False,
+    )
+    _write_remotes_file(remotes_file, [address])
+    _write_managed_file(managed_file, {"prod": _DEPLOYED_A | {"allow_unsecure_channel": True, "username": "carol"}})
+
+    [remote] = Remotes(remotes_file).remotes_dict.values()
+
+    assert remote.uuid == address.uuid
+    assert (remote.address.description, remote.address.allow_unsecure_channel) == ("Remote A", True)
+    assert (remote.address.username, remote.address.password) == ("alice", "secret")
+    assert remote.address.refresh_token == token  # same server and auth method: the session is kept
+    assert remote.address.ask_for_login is False
+
+
+@pytest.mark.unit
+def test_sync_managed_clears_the_tokens_when_the_auth_method_changes(remotes_file, managed_file):
+    address = RemoteAddress(
+        url="https://a.example.com", port=443, username="alice", refresh_token=_make_token(), managed=True
+    )
+    _write_remotes_file(remotes_file, [address])
+    _write_managed_file(managed_file, {"prod": _DEPLOYED_A | {"auth_method": "oidc"}})
+
+    [remote] = Remotes(remotes_file).remotes_dict.values()
+
+    assert remote.uuid == address.uuid
+    assert remote.address.auth_method is AuthType.OIDC
+    assert remote.address.refresh_token == ""
+
+
+@pytest.mark.unit
+def test_sync_managed_replaces_a_remote_whose_port_changed(remotes_file, managed_file, session_username):
+    """A remote is identified by its url and port: another port is another remote"""
+    address = RemoteAddress(
+        url="https://a.example.com", port=443, username="alice", refresh_token=_make_token(), managed=True
+    )
+    _write_remotes_file(remotes_file, [address])
+    _write_managed_file(managed_file, {"prod": _DEPLOYED_A | {"port": 8443}})
+
+    [remote] = Remotes(remotes_file).remotes_dict.values()
+
+    assert remote.uuid != address.uuid
+    assert remote.address.port == 8443
+    assert (remote.address.username, remote.address.refresh_token) == (session_username, "")
+
+
+@pytest.mark.unit
+def test_sync_managed_adopts_the_user_remote_of_the_same_server(remotes_file, managed_file, session_username):
+    address = RemoteAddress(url="https://A.example.com/", port=443, username="alice", password="secret")
+    _write_remotes_file(remotes_file, [address])
+    _write_managed_file(managed_file, {"prod": _DEPLOYED_A})
+
+    [remote] = Remotes(remotes_file).remotes_dict.values()
+
+    assert remote.uuid == address.uuid
+    assert remote.managed is True
+    assert (remote.address.username, remote.address.password) == ("alice", "secret")
+    assert remote.address.url == "https://a.example.com"
+
+
+@pytest.mark.unit
+def test_sync_managed_adopts_the_user_remote_of_the_same_id_first(remotes_file, managed_file):
+    other = RemoteAddress(url="https://a.example.com", port=443, username="admin")
+    same = RemoteAddress(url="https://a.example.com", port=443, username="carol")
+    _write_remotes_file(remotes_file, [other, same])
+    _write_managed_file(managed_file, {"prod": _DEPLOYED_A | {"username": "carol"}})
+
+    remotes = Remotes(remotes_file)
+
+    assert {r.address.username: r.managed for r in remotes.remotes_dict.values()} == {"admin": False, "carol": True}
+
+
+@pytest.mark.unit
+def test_sync_managed_removes_the_remotes_no_longer_deployed(remotes_file, managed_file):
+    gone = RemoteAddress(url="https://gone.example.com", port=443, username="alice", managed=True)
+    own = RemoteAddress(url="https://own.example.com", port=443, username="alice")
+    _write_remotes_file(remotes_file, [gone, own])
+    _write_managed_file(managed_file, {"prod": _DEPLOYED_A})
+
+    remotes = Remotes(remotes_file)
+
+    assert sorted(r.address.url for r in remotes.remotes_dict.values()) == [
+        "https://a.example.com",
+        "https://own.example.com",
+    ]
+    assert gone.uuid not in _read_remotes_file(remotes_file)
+
+
+@pytest.mark.unit
+def test_sync_managed_removes_every_managed_remote_without_the_file(remotes_file):
+    managed = RemoteAddress(url="https://a.example.com", port=443, username="alice", managed=True)
+    own = RemoteAddress(url="https://own.example.com", port=443, username="alice")
+    _write_remotes_file(remotes_file, [managed, own])
+
+    remotes = Remotes(remotes_file)
+
+    assert list(remotes.remotes_dict) == [own.uuid]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "content",
+    [
+        "{not json",
+        json.dumps([_DEPLOYED_A]),
+        json.dumps({"prod": _DEPLOYED_A, "broken": {"url": "https://b.example.com"}}),
+        json.dumps({"prod": _DEPLOYED_A, "broken": "https://b.example.com"}),
+    ],
+    ids=["invalid_json", "not_an_object", "entry_without_port", "entry_not_an_object"],
+)
+def test_sync_managed_leaves_the_managed_remotes_unchanged_on_an_invalid_file(
+    remotes_file, managed_file, caplog, content
+):
+    managed = RemoteAddress(url="https://gone.example.com", port=443, username="alice", managed=True)
+    _write_remotes_file(remotes_file, [managed])
+    managed_file.write_text(content, encoding="utf-8")
+
+    with caplog.at_level(logging.WARNING):
+        remotes = Remotes(remotes_file)
+
+    assert list(remotes.remotes_dict) == [managed.uuid]
+    assert any("deployed remotes left unchanged" in r.message for r in caplog.records)
+
+
+@pytest.mark.unit
+def test_sync_managed_never_reads_secrets_from_the_file(remotes_file, managed_file):
+    """Values encrypted on another machine can't be decrypted: they must not even be read"""
+    secrets = {"password": "clear", "encrypted_pwd": "not-a-fernet-token", "token": "not-a-fernet-token"}
+    _write_managed_file(managed_file, {"prod": _DEPLOYED_A | secrets})
+
+    [remote] = Remotes(remotes_file).remotes_dict.values()
+
+    assert (remote.address.password, remote.address.refresh_token) == ("", "")
+
+
+@pytest.mark.unit
+def test_sync_managed_reads_a_file_with_a_byte_order_mark(remotes_file, managed_file):
+    _write_managed_file(managed_file, {"prod": _DEPLOYED_A}, encoding="utf-8-sig")
+
+    assert len(Remotes(remotes_file).remotes_dict) == 1
+
+
+@pytest.mark.unit
+def test_sync_managed_gives_a_new_uuid_to_a_key_already_used_by_a_user_remote(remotes_file, managed_file):
+    own = RemoteAddress(url="https://own.example.com", port=443, username="alice")
+    _write_remotes_file(remotes_file, [own])
+    _write_managed_file(managed_file, {own.uuid: _DEPLOYED_A})
+
+    remotes = Remotes(remotes_file)
+
+    assert len(remotes.remotes_dict) == 2
+    assert remotes.remotes_dict[own.uuid].address.url == "https://own.example.com"
+
+
+@pytest.mark.unit
+def test_sync_managed_saves_nothing_when_nothing_changed(remotes_file, managed_file, monkeypatch):
+    _write_managed_file(managed_file, {"prod": _DEPLOYED_A})
+    remotes = Remotes(remotes_file)
+    monkeypatch.setattr(remotes, "save_remotes", lambda: pytest.fail("nothing to save"))
+
+    assert remotes.sync_managed() is False
+
+
+@pytest.mark.unit
+def test_sync_managed_never_overwrites_a_user_file_that_could_not_be_fully_read(remotes_file, managed_file):
+    """Saving it would lose the remotes that couldn't be read"""
+    own = RemoteAddress(url="https://own.example.com", port=443, username="alice")
+    _write_remotes_file(remotes_file, [own])
+    data = _read_remotes_file(remotes_file) | {"broken": {"url": "https://b.example.com"}}
+    remotes_file.write_text(json.dumps(data), encoding="utf-8")
+    _write_managed_file(managed_file, {"prod": _DEPLOYED_A})
+
+    remotes = Remotes(remotes_file)
+
+    assert list(remotes.remotes_dict) == [own.uuid]  # the readable remotes are loaded
+    assert _read_remotes_file(remotes_file) == data
+
+
+@pytest.mark.unit
+def test_csv_import_never_changes_a_managed_remote(tmp_path, remotes_file, managed_file, caplog):
+    _write_managed_file(managed_file, {"prod": _DEPLOYED_A | {"username": "alice"}})
+    remotes = Remotes(remotes_file)
+    csv_file = tmp_path / "remotes.csv"
+    csv_file.write_text(
+        "url;port;username;description\nhttps://a.example.com;443;alice;Changed\n", encoding="utf-8-sig"
+    )
+
+    with caplog.at_level(logging.WARNING):
+        remotes.csv_import(csv_file)
+
+    [remote] = remotes.remotes_dict.values()
+    assert (remote.managed, remote.address.description) == (True, "Remote A")
+    assert any("is deployed by your administrator" in r.message for r in caplog.records)
+
+
+@pytest.mark.unit
+def test_csv_import_never_creates_a_managed_remote(tmp_path, remotes_file):
+    remotes = Remotes(remotes_file)
+    csv_file = tmp_path / "remotes.csv"
+    csv_file.write_text("url;port;username;description;managed\nhttp://a;8000;alice;A;true\n", encoding="utf-8-sig")
+
+    remotes.csv_import(csv_file)
+
+    [remote] = remotes.remotes_dict.values()
+    assert remote.managed is False
+
+
+@pytest.mark.unit
+def test_delete_refuses_a_managed_remote(remotes_file, managed_file):
+    _write_managed_file(managed_file, {"prod": _DEPLOYED_A})
+    remotes = Remotes(remotes_file)
+    [remote] = remotes.remotes_dict.values()
+
+    with pytest.raises(ValueError, match="deployed by your administrator"):
+        remote.delete()
+
+    assert remote.uuid in _read_remotes_file(remotes_file)

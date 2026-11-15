@@ -9,6 +9,7 @@ from collections.abc import Iterator
 from Pytre_Core import utils
 from Pytre_Core.about import APP_NAME
 from Pytre_Core.remotes import (
+    MANAGED_FIELDS,
     Remotes,
     Remote,
     RemoteAddress,
@@ -150,10 +151,11 @@ class RemotesWindow(tk.Toplevel):
 
     def _tree_cols(self) -> dict:
         cols = {
-            "description": {"text": "Libellé", "minwidth": 175, "stretch": False},
-            "url": {"text": "URL", "minwidth": 275, "stretch": True},
+            "description": {"text": "Libellé", "minwidth": 125, "stretch": False},
+            "url": {"text": "URL", "minwidth": 200, "stretch": True},
             "port": {"text": "Port", "minwidth": 50, "stretch": False},
             "username": {"text": "Login", "minwidth": 100, "stretch": False},
+            "managed": {"text": "Gérée", "minwidth": 50, "stretch": False},
         }
 
         return cols
@@ -186,6 +188,8 @@ class RemotesWindow(tk.Toplevel):
         for col, attr in cols.items():
             self.tree.heading(col, text=attr["text"], command=lambda c=col: self.tree_header_click(c))
             self.tree.column(col, width=attr["minwidth"], minwidth=attr["minwidth"], stretch=attr["stretch"])
+            if col in ["managed"]:
+                self.tree.column(col, anchor=tk.CENTER)
 
     def tree_filter(self, cols: list[str] = []):
         cols = cols if cols else list(self._tree_cols().keys())
@@ -273,6 +277,8 @@ class RemotesWindow(tk.Toplevel):
                 for col in cols.keys():
                     try:
                         value = getattr(remote.address, col)
+                        if isinstance(value, bool):
+                            value = "\u2713" if value is True else ""
                         values.append(value)
                     except AttributeError:
                         log(f"Error trying to retrieve inexistant attributes {col} for remotes object", logging.ERROR)
@@ -382,15 +388,15 @@ class RemotesWindow(tk.Toplevel):
 
         nb_ok, errors = 0, []
         for item in items:
+            remote: Remote | None = self.remotes.find_remote_from_uuid(item)
             try:
-                remote: Remote | None = self.remotes.find_remote_from_uuid(items[0])
                 if remote:
                     remote.delete()
                     self.remotes_modified = True
                 self.tree.delete(item)
                 nb_ok += 1
-            except LookupError:
-                errors.append(item)
+            except (LookupError, ValueError) as e:
+                errors.append(f"{remote.address.description_for_ui if remote else item} : {e}")
 
         self._delete_after_msg(nb_ok, errors)
 
@@ -419,10 +425,11 @@ class RemotesWindow(tk.Toplevel):
         else:
             msg = f"{nb_ok} remotes ont été supprimées"
 
-        if len(errors) == 1 and nb_ok:
-            msg = msg + f" et {len(errors)} n'a pas pu l'être :\n{errors[0]}"
-        elif len(errors) > 1 and nb_ok:
-            msg = msg + f" et {len(errors)} n'ont pas pas pu l'être :\n- " + "\n- ".join(errors)
+        if len(errors) == 1:
+            msg = msg + f" :\n{errors[0]}" if not nb_ok else msg + f" et 1 n'a pas pu l'être :\n{errors[0]}"
+        elif len(errors) > 1:
+            details = "\n- " + "\n- ".join(errors)
+            msg = msg + f" :{details}" if not nb_ok else msg + f" et {len(errors)} n'ont pas pu l'être :{details}"
 
         messagebox.showinfo(title="Suppression", message=msg, parent=self)
 
@@ -499,6 +506,8 @@ class RemoteDialog(tk.Toplevel):
 
         if self.remote:
             self.set_entries()
+            if self.remote.managed:
+                self._setup_managed_fields_state()
 
     # ------------------------------------------------------------------------------------------
     # Création de l'interface
@@ -506,6 +515,8 @@ class RemoteDialog(tk.Toplevel):
     def _setup_ui(self):
         if not self.remote:
             self.title(f"{APP_NAME} - Ajout remote")
+        elif self.remote.managed:
+            self.title(f"{APP_NAME} - Modification remote (déployée par votre administrateur)")
         else:
             self.title(f"{APP_NAME} - Modification remote")
 
@@ -538,6 +549,7 @@ class RemoteDialog(tk.Toplevel):
             "username": "Login",
             "password": "Mot de passe",
             "allow_unsecure_channel": "Autoriser sur un canal non sécurisé",
+            "ask_for_login": "Demander de se connecter au démarrage",
         }
         self.entries: dict[str, WidgetGroup] = {}
 
@@ -559,10 +571,11 @@ class RemoteDialog(tk.Toplevel):
             elif key == "port":
                 my_tk_var = tk.IntVar()
                 my_entry = ttk.Entry(self.entries_frame, textvariable=my_tk_var)
-            elif key == "allow_unsecure_channel":
+            elif key in ("allow_unsecure_channel", "ask_for_login"):
                 label_col, entry_col = 0, 2
                 label_span, entry_span = 2, 1
-                my_tk_var = tk.BooleanVar()
+                default_value = True if key == "ask_for_login" else False
+                my_tk_var = tk.BooleanVar(value=default_value)
                 my_entry = ttk.Checkbutton(self.entries_frame, variable=my_tk_var, onvalue=True, offvalue=False)
             elif key == "auth_method":
                 my_tk_var = tk.StringVar(value=str(AuthType.BASIC))
@@ -594,6 +607,13 @@ class RemoteDialog(tk.Toplevel):
 
         self.btn_save.grid(row=0, column=1, padx=2, pady=2, sticky="nse")
         self.btn_cancel.grid(row=0, column=2, padx=2, pady=2, sticky="nse")
+
+    def _setup_managed_fields_state(self) -> None:
+        """The fields of a remote deployed by the administrator are kept in sync with its file"""
+        for key in MANAGED_FIELDS:
+            widget = self.entries[key].w_entry
+            if isinstance(widget, (ttk.Entry, ttk.Checkbutton)):
+                widget.configure(state="disabled")
 
     # ------------------------------------------------------------------------------------------
     # Définition des évènements générer par les traitements

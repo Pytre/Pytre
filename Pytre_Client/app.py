@@ -2,14 +2,15 @@ import logging
 import tkinter as tk
 import traceback
 import webbrowser
-from threading import Thread
-from types import TracebackType
-from queue import Queue as ThreadQueue
-from tkinter import Event as tkEvent, ttk, messagebox, font
-
+from collections.abc import Callable
 from dataclasses import dataclass
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
+from queue import Queue as ThreadQueue
+from threading import Thread
+from tkinter import Event as tkEvent, ttk, messagebox, font
+from types import TracebackType
+
 
 from Pytre_Core import utils
 from Pytre_Core.about import APP_NAME, CLIENT_BASENAME, AppVersion, full_version
@@ -24,11 +25,12 @@ from Pytre_Core.context import AppContext, AppMode, UserContext, detect_client_m
 from Pytre_Core.credentials import secret_key_available
 from Pytre_Core.logs_central import ClientDriven as CentralLogs
 from Pytre_Core.old_files import delete_files, list_old_files
-from Pytre_Core.remotes import RemoteServer, RemoteAuthError, RemoteSsoRequiredError
+from Pytre_Core.remotes import Remote, RemoteServer, RemoteAuthError, RemoteSsoRequiredError
 from Pytre_Core.servers import Server
 from Pytre_Core.policy import UpdatePolicy
 from Pytre_Core.updater import Release, Updater, UpdateError
 from Pytre_Core.user_prefs import PrefEnum
+from Pytre_Core.users import AuthType
 
 from Pytre_Core.sql_query.execution_runner import ExecutionRunner
 from Pytre_Core.sql_query.execution_msg import ExecResultMsg
@@ -900,6 +902,7 @@ class App(tk.Toplevel):
         remote_target = remote_server
         refresh_local = remote_server is None and self.app_ctx.acts_as_server
         first_load = self._queries_first_load
+        at_startup = self._queries_first_load  # first_load is also true for a remote server loaded for the first time
 
         if remote_server:
             first_load = first_load or self.queries_by_remote_server.get(remote_server.id, None) is None
@@ -956,7 +959,7 @@ class App(tk.Toplevel):
                 if not self.app_ctx.acts_as_server and not self.user_ctx.remotes.remotes_dict:
                     self.output_msg("Aucune remote, ajouter en une : Préférences -> Remotes...\n", "end")
 
-                self.after_idle(self.check_for_update_at_startup)
+                self.after_idle(lambda: self.ask_for_remote_logins(on_end=self.check_for_update_at_startup))
 
             # liste des erreurs si problèmes rencontrés
             errors_msg: list[str] = errors.get("local", []) + errors.get("remote", [])
@@ -979,7 +982,9 @@ class App(tk.Toplevel):
             if hide_end_msg:
                 pass
             elif errors.get("cnx_error"):
-                if remote_target and isinstance(remote_target.last_error, RemoteSsoRequiredError):
+                if at_startup and remote_target and isinstance(remote_target.last_error, RemoteAuthError):
+                    pass  # offered with the other remotes asking for a login, see ask_for_remote_logins()
+                elif remote_target and isinstance(remote_target.last_error, RemoteSsoRequiredError):
                     on_done = lambda ok: self.refresh_queries(remote_server=remote_target) if ok else None
                     prompt_sso_login(self, remote_target.remote, on_done=on_done)
                 elif remote_target and isinstance(remote_target.last_error, RemoteAuthError):
@@ -998,6 +1003,47 @@ class App(tk.Toplevel):
         reload `remote_server` queries."""
         if prompt_remote_credentials(remote_server.remote, self):
             self.refresh_queries(remote_server=remote_server)
+
+    def ask_for_remote_logins(self, on_end: Callable[[], None]) -> None:
+        """Offers in a single question to log in to the remotes asking for it, see Remotes.asking_for_login(), then
+        calls `on_end` once the question and the logins are over"""
+        remotes = self.user_ctx.remotes.asking_for_login()
+        if not remotes:
+            on_end()
+            return
+
+        names = "\n".join(f"- {r.address.description_for_ui}" for r in remotes)
+        header = "1 remote demande" if len(remotes) == 1 else f"{len(remotes)} remotes demandent"
+        buttons = ("Se connecter", "Ignorer", "Ne plus demander")
+        answer = MsgDialog.ask("Connexion aux remotes", f"{header} une connexion :\n{names}", buttons, parent=self)
+
+        if answer == buttons[0]:
+            self._login_remotes(remotes, on_end)
+            return
+
+        if answer == buttons[2]:
+            for r in remotes:
+                r.address.ask_for_login = False
+            self.user_ctx.remotes.save_remotes()
+            self.output_msg("Connexion au démarrage désactivée, réactivable dans Préférences -> Remotes...\n", "end")
+
+        on_end()
+
+    def _login_remotes(self, remotes: list[Remote], on_end: Callable[[], None], logged_in: bool = False) -> None:
+        """Logs in to the first of `remotes` then to the next ones, each login cancellable, and reloads the remotes
+        once at the end if any login succeeded"""
+        if not remotes:
+            if logged_in:
+                self.refresh_queries(reload_remotes=True, hide_end_msg=True)
+            on_end()
+            return
+
+        remote, others = remotes[0], remotes[1:]
+        if remote.address.auth_method is AuthType.OIDC:
+            prompt_sso_login(self, remote, on_done=lambda ok: self._login_remotes(others, on_end, logged_in or ok))
+        else:
+            ok = prompt_remote_credentials(remote, parent=self)
+            self._login_remotes(others, on_end, logged_in or ok)
 
     def refresh_servers(self, reload_servers: bool = False, reload_remotes: bool = False):
         # refresh servers_dict with local and remote servers

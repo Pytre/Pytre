@@ -14,14 +14,18 @@ from uuid import uuid4
 
 import httpx2
 
-from Pytre_Core.app_folders import get_config_folder, REMOTES_FILENAME
+from Pytre_Core.app_folders import get_config_folder, get_install_folder, REMOTES_FILENAME
 from Pytre_Core.keyring import KeyringCatalog
 from Pytre_Core.policy import PlainHttpRemotesPolicy
 from Pytre_Core.remote_protocol import decode_row_value, StreamKey
 from Pytre_Core.user_prefs import DisplayFormat
-from Pytre_Core.users import AuthType
+from Pytre_Core.users import AuthType, Users
 from Pytre_Core.utils import detect_encoding, log as _log
 
+
+MANAGED_REMOTES_FILENAME: str = "Pytre.remotes.json"  # remotes deployed by the administrator, next to the executable
+MANAGED_FIELDS = ("url", "port", "description", "auth_method", "allow_unsecure_channel")  # the file's, kept in sync
+_SECRET_KEYS = ("password", "encrypted_pwd", "token")  # keys to never read from the managed remotes file
 
 REMOTES_CIPHER: KeyringCatalog = KeyringCatalog.REMOTES_ENCRYPTION_KEY
 
@@ -127,16 +131,19 @@ def detail_from_response(response: JsonResponse | None, fallback: str) -> str:
 class Remotes:
     """Manages configured remotes of an user. Servers are not fetched on initialization."""
 
-    def __init__(self, remotes_file: Path | None = None):
+    def __init__(self, remotes_file: Path | None = None, managed_file: Path | None = None):
         self.remotes_file: Path = remotes_file or get_config_folder() / REMOTES_FILENAME
-        self.remotes_dict: dict[str, Remote] = {}
+        self.managed_file: Path = managed_file or get_install_folder() / MANAGED_REMOTES_FILENAME
+
+        self.remotes_dict: dict[str, Remote] = {}  # key is set to the uuid
         self.servers_dict: dict[str, RemoteServer] = {}
 
         self.get_all_remotes(reload=True)
 
     def get_all_remotes(self, reload: bool = False) -> dict[str, Remote]:
-        if reload:
-            self.load_remotes()
+        # synced only over a fully loaded file: saving it would otherwise drop the remotes that couldn't be read
+        if reload and self.load_remotes():
+            self.sync_managed()
 
         return self.remotes_dict
 
@@ -152,39 +159,74 @@ class Remotes:
 
         return self.servers_dict
 
+    def asking_for_login(self) -> list[Remote]:
+        """Remotes to offer a login to: their last call was refused for lack of a session or of valid credentials,
+        and the user didn't opt out. Meaningful once the remotes were called, e.g. after
+        get_all_servers(reload=True)"""
+        return [
+            r
+            for r in self.remotes_dict.values()
+            if r.address.ask_for_login and isinstance(r.last_error, RemoteAuthError)
+        ]
+
     def load_remotes(self) -> bool:
-        """Load `remotes_dict` from a json file. Returns whether it succeeded."""
+        """Load user remotes, the readable ones if some can't be. Returns whether all were loaded."""
+        self.remotes_dict, all_loaded = self._load_remotes(self.remotes_file)
+        return all_loaded
+
+    def _load_managed(self) -> dict[str, Remote] | None:
+        """Load managed remotes by base_id, their secrets never read and their username defaulting to the
+        session's. Empty without file, None if the file or one of its remotes can't be read."""
+
+        defaults = {"username": Users.get_current_username()}
+        managed_dict, all_loaded = self._load_remotes(self.managed_file, ignored_keys=_SECRET_KEYS, defaults=defaults)
+        managed_dict = {r.base_id: r for r in managed_dict.values()}  # keyed by base_id.
+
+        if not all_loaded:
+            log(f"{self.managed_file.name} ignored, deployed remotes left unchanged", logging.WARNING)
+            return None
+
+        return managed_dict
+
+    def _load_remotes(
+        self, json_file: Path, ignored_keys: tuple[str, ...] = (), defaults: dict | None = None
+    ) -> tuple[dict[str, Remote], bool]:
+        """Load remotes from a json file, the readable ones if some can't be: `ignored_keys` are never read and
+        `defaults` fill the values a remote lacks or leaves empty. Returns whether all were loaded."""
         json_dict = {}
         remotes_dict: dict[str, Remote] = {}
         load_issues: bool = False
 
         # read data from json
-        if self.remotes_file.exists():
+        if json_file.exists():
             try:
-                with open(self.remotes_file, mode="r", encoding="utf-8") as f:
+                with open(json_file, mode="r", encoding="utf-8-sig") as f:
                     json_dict = json.load(f)
-                    assert isinstance(json_dict, dict)
             except (json.JSONDecodeError, UnicodeDecodeError, IOError) as e:
                 log(f"Error while loading remotes json file : {e}", logging.WARNING)
                 load_issues = True
-            except AssertionError as e:
-                msg = f"Content from remotes json file was exepected to be a dict but got {type(json_dict).__name__}"
+
+            if not isinstance(json_dict, dict):
+                msg = f"Content from remotes json file was expected to be a dict but got {type(json_dict).__name__}"
                 log(msg, logging.ERROR)
+                json_dict = {}
                 load_issues = True
 
         # convert json data to a dictionary of remotes
         for key, val in json_dict.items():
             try:
-                if key in remotes_dict:
-                    log(f"Loaded remote from json ignored, uuid already exists : {val}")
-                remotes_dict[key] = Remote(self, RemoteAddress.from_dict({"uuid": key} | val))
+                if not isinstance(val, dict):
+                    raise TypeError(f"expected a dict, got {type(val).__name__}")
+
+                val_kept = {k: v for k, v in val.items() if k not in ignored_keys}
+                val_kept |= {k: v for k, v in (defaults or {}).items() if not val_kept.get(k)}
+
+                remotes_dict[key] = Remote(self, RemoteAddress.from_dict({"uuid": key} | val_kept))
             except (TypeError, ValueError) as e:
                 log(f"Remote json load error for {val}: {e}", logging.WARNING)
                 load_issues = True
 
-        self.remotes_dict = remotes_dict
-
-        return not load_issues
+        return remotes_dict, not load_issues
 
     def save_remotes(self) -> bool:
         """Save `remotes_dict` to a json file. Only RemoteAddress is saved. Returns whether it succeeded."""
@@ -201,6 +243,49 @@ class Remotes:
             return False
 
         return True
+
+    def sync_managed(self) -> bool:
+        """Applies the remotes deployed by the administrator onto `remotes_dict`, saved at once if anything changed.
+        A deployed remote updates the managed one of the same base_id, otherwise adopts the user's one with the same
+        base_id, the one of the same id first, otherwise is added.
+        A managed remote no longer deployed is removed. A file that can't be read changes nothing.
+        Returns whether `remotes_dict` changed."""
+
+        deployed = self._load_managed()
+        if deployed is None:
+            return False
+
+        changed = False
+
+        # managed remotes: updated from the file, removed once no longer deployed
+        for remote in [r for r in self.remotes_dict.values() if r.managed]:  # copy as self.remotes_dict could change
+            wanted = deployed.pop(remote.base_id, None)
+            if wanted is None:
+                del self.remotes_dict[remote.uuid]
+                log(f"Remote no longer deployed by the administrator removed: {remote.id}", logging.INFO)
+                changed = True
+            else:
+                changed = remote.address.sync_with(wanted.address) or changed
+
+        # deployed remotes without a managed one: the user's remote of the same base_id is adopted, otherwise it is added
+        for wanted in deployed.values():
+            adopted = self.find_remote_from_id(wanted.id) or self.find_remote_from_base_id(wanted.base_id)
+            if adopted is not None:
+                changed = adopted.address.sync_with(wanted.address, is_managed=True) or changed
+                log(f"Remote converted as deployed by the administrator: {adopted.id}", logging.INFO)
+            else:
+                while wanted.uuid in self.remotes_dict:  # a key of the file colliding with one of the user's remotes
+                    wanted.address.uuid = str(uuid4())
+                wanted.address.managed = True
+                self.remotes_dict[wanted.uuid] = wanted
+                log(f"Remote deployed by the administrator added: {wanted.id}", logging.INFO)
+                changed = True
+
+        # remotes deployed by the administrator, saved at once so the user's file reflects them
+        if changed:
+            self.save_remotes()
+
+        return changed
 
     def csv_import(self, filepath: Path | str, delimiter: str = ";", quotechar: str = '"') -> bool:
         """Import remotes from a csv file.
@@ -251,11 +336,18 @@ class Remotes:
 
                 try:
                     remote_address = RemoteAddress.from_dict(row)
+                    remote_address.managed = False  # only the administrator's file deploys remotes
                 except ValueError as err:
                     log(f"Row {row_num} ignored : incomplete data : {err}", logging.WARNING)
                     continue
 
                 existing_remote = self.find_remote_from_id(remote_address.id)
+
+                if existing_remote and existing_remote.address.managed:
+                    msg = f"Row {row_num} ignored : {remote_address.id} is deployed by your administrator"
+                    log(msg, logging.WARNING)
+                    continue
+
                 if existing_remote:
                     remote_address.uuid = existing_remote.uuid  # update UUID for imported remote with existing one
                     if remote_address.password == "":  # retrieve previous password if missing from imported remote
@@ -303,6 +395,10 @@ class Remotes:
         """Find and return a remote from it's id (case insensitive)"""
         return next((r for r in self.remotes_dict.values() if r.id.lower() == id.lower()), None)
 
+    def find_remote_from_base_id(self, base_id: str) -> Remote | None:
+        """Find and return a remote from it's base_id (case insensitive)"""
+        return next((r for r in self.remotes_dict.values() if r.base_id.lower() == base_id.lower()), None)
+
 
 class Remote:
     """Local handle for a Pytre_Server instance.
@@ -322,14 +418,24 @@ class Remote:
             self.refresh_servers()
 
     @property
-    def uuid(self):
+    def uuid(self) -> str:
         """Mirror the RemoteAddress which define this remote instance"""
         return self.address.uuid
 
     @property
-    def id(self):
-        """Mirror the RemoteAddress which define this remote instance : username@url:port"""
+    def base_id(self) -> str:
+        """Mirror the RemoteAddress which define this remote instance: url:port"""
+        return self.address.base_id
+
+    @property
+    def id(self) -> str:
+        """Mirror the RemoteAddress which define this remote instance: username@url:port"""
         return self.address.id
+
+    @property
+    def managed(self) -> bool:
+        """Mirror the RemoteAddress which define this remote instance"""
+        return self.address.managed
 
     @property
     def auth_headers(self) -> dict[str, str]:
@@ -399,11 +505,18 @@ class Remote:
                 log(f"Failed to retrieve an acces token for {self.id} : {e}", logging.DEBUG)
                 self.address.access_token = ""
 
-        # an SSO remote has no password to fall back on - an interactive browser login is required
+        # control: with an SSO remote an expired session requires an interactive browser to login
         if self.address.auth_method is AuthType.OIDC:
             msg = f"SSO session expired for {self.id}, interactive login required"
             log(msg, logging.INFO)
             self.last_error = RemoteSsoRequiredError(msg)
+            raise self.last_error
+
+        # control: without password login is not possible
+        if not self.address.password:
+            msg = f"No password saved for {self.id}, login required"
+            log(msg, logging.INFO)
+            self.last_error = RemoteAuthError(msg)
             raise self.last_error
 
         # if retrieving access token failed then renew refresh token
@@ -521,6 +634,9 @@ class Remote:
         if remote is None:
             raise LookupError("Remote not found")
 
+        if self.address.managed:
+            raise ValueError(f"{self.id} is deployed by your administrator and can't be deleted")
+
         del self.remotes.remotes_dict[self.uuid]
         self.remotes.save_remotes()
 
@@ -541,6 +657,8 @@ class RemoteAddress:
         description: str = "",
         refresh_token: str = "",
         allow_unsecure_channel: bool = False,
+        managed: bool = False,
+        ask_for_login: bool = True,
     ):
         self.uuid: str = uuid if not uuid == "" else str(uuid4())
         self.url: str = url
@@ -552,15 +670,25 @@ class RemoteAddress:
         self.refresh_token: str = refresh_token
         self.access_token: str = ""  # in memory only, to_dict / from_dict don't use it
         self.allow_unsecure_channel = allow_unsecure_channel
+        self.managed: bool = managed  # deployed by the administrator (MANAGED_REMOTES_FILE), kept in sync with it
+        self.ask_for_login: bool = ask_for_login  # whether the client asks to log in when no session is available
+
+    @property
+    def base_id(self) -> str:
+        """Base identity of a remote as url:port"""
+        for val in (self.url, self.port):
+            if str(val).strip() == "":
+                raise ValueError("All values to build id must be set")
+
+        return f"{self.url.strip().rstrip('/').lower()}:{self.port}"
 
     @property
     def id(self) -> str:
         """Return as username@url:port"""
-        for val in (self.url, self.port, self.username):
-            if str(val).strip() == "":
-                raise ValueError("All values to build id must be set")
+        if self.username.strip() == "":
+            raise ValueError("All values to build id must be set")
 
-        return f"{self.username.strip()}@{self.url.strip()}:{str(self.port).strip()}".lower()
+        return f"{self.username.strip()}@{self.base_id}".lower()
 
     @property
     def description_for_ui(self) -> str:
@@ -599,6 +727,25 @@ class RemoteAddress:
 
         return (address is not None and address.is_private) or self.allow_unsecure_channel
 
+    def sync_with(self, wanted: RemoteAddress, is_managed: bool | None = None) -> bool:
+        """Sync infos with `wanted`. Force `managed` if `is_managed` not None. Returns if there was any change."""
+        changed = False
+
+        if is_managed is not None and self.managed != is_managed:
+            self.managed = is_managed
+            changed = True
+
+        if (self.url, self.port, self.auth_method) != (wanted.url, wanted.port, wanted.auth_method):
+            self.refresh_token = ""
+            self.access_token = ""
+
+        for field in MANAGED_FIELDS:
+            if getattr(self, field) != getattr(wanted, field):
+                setattr(self, field, getattr(wanted, field))
+                changed = True
+
+        return changed
+
     def _token_is_valid(self, token: str, min_remaining: timedelta = timedelta(seconds=5)) -> bool:
         """Return whether the token exists, well-formed, and won't expire within `min_remaining`."""
         try:
@@ -634,6 +781,8 @@ class RemoteAddress:
             "encrypted_pwd": REMOTES_CIPHER.encrypt(self.password),
             "description": self.description,
             "allow_unsecure_channel": self.allow_unsecure_channel,
+            "managed": self.managed,
+            "ask_for_login": self.ask_for_login,
             "token": REMOTES_CIPHER.encrypt(self.refresh_token),
         }
 
@@ -664,6 +813,8 @@ class RemoteAddress:
             "password": pwd_key,
             "description": None,
             "allow_unsecure_channel": None,
+            "managed": None,
+            "ask_for_login": None,
             "refresh_token": "token",
         }
 
@@ -680,8 +831,10 @@ class RemoteAddress:
             elif key == "auth_method":
                 auth_type = AuthType.from_value(str(val)) if val else None
                 val = auth_type if auth_type is not None and auth_type is not AuthType.NONE else AuthType.BASIC
-            elif key == "allow_unsecure_channel":
+            elif key in ("allow_unsecure_channel", "managed"):
                 val = str(val).lower() == "true" if val else False
+            elif key == "ask_for_login":
+                val = str(val).lower() != "false" if val not in (None, "") else True  # absent from a former file
             # convert None val for other optional attributes
             else:
                 val = val if val else ""

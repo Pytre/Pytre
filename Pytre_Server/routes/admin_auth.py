@@ -1,7 +1,7 @@
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from urllib.parse import quote, quote_plus
+from urllib.parse import quote
 
 import jwt
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, Response, status
@@ -9,6 +9,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from starlette.middleware.base import RequestResponseEndpoint
 
 from Pytre_Core.context import UserContext
+from Pytre_Core.remote_protocol import SsoErrorCode
 from Pytre_Core.users import AuthType, User, hash_password
 from Pytre_Core.utils import log as _log
 
@@ -32,6 +33,28 @@ router = APIRouter()
 
 def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__) -> None:
     _log(msg, level=level, sublogger=sublogger)
+
+
+SSO_ERROR_MESSAGES: dict[SsoErrorCode, str] = {
+    SsoErrorCode.DENIED: "The identity provider refused the sign-in.",
+    SsoErrorCode.EXPIRED: "This sign-in link has expired or was already used - please try again.",
+    SsoErrorCode.UNAVAILABLE: "SSO sign-in is unavailable for now, try again later, or sign in with your password.",
+    SsoErrorCode.FAILED: "The SSO sign-in failed, see the server logs for details.",
+    SsoErrorCode.NOT_ADMIN: "This account is not an administrator.",
+}
+
+
+def _sso_error_message(error: str) -> str:
+    """Message of the SsoErrorCode `error`, from the login page URL. Nothing for any other value: the page never shows
+    a text taken from the URL, which anyone crafting a link could choose."""
+    try:
+        return SSO_ERROR_MESSAGES[SsoErrorCode(error)]
+    except ValueError:
+        return ""
+
+
+def _sso_error_redirect(code: SsoErrorCode) -> RedirectResponse:
+    return RedirectResponse(f"/admin/login?error={code}", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @dataclass
@@ -231,7 +254,7 @@ def admin_login_form(
         next=next,
         no_admin_yet=no_admin_yet,
         show_bootstrap_form=no_admin_yet and is_loopback(request),
-        error=error,
+        error=_sso_error_message(error),
         sso_providers=sso_providers,
     )
 
@@ -357,7 +380,8 @@ async def admin_login_sso_start(
     try:
         auth_url = await start_login(state.resources, oidc_provider, SsoFlow.ADMIN, _safe_next(next))
     except OidcLoginError as e:
-        return RedirectResponse(f"/admin/login?error={quote_plus(str(e))}", status_code=status.HTTP_303_SEE_OTHER)
+        log(f"SSO sign-in to the web admin could not start ({e.code}): {e}", logging.WARNING)
+        return _sso_error_redirect(e.code)
 
     return RedirectResponse(auth_url, status_code=status.HTTP_303_SEE_OTHER)
 
@@ -371,8 +395,11 @@ async def finish_sso_login(
     if the user denied consent or the provider itself failed."""
 
     if error:
-        error_msg = quote_plus(error_description or error)
-        return RedirectResponse(f"/admin/login?error={error_msg}", status_code=status.HTTP_303_SEE_OTHER)
+        log(
+            f"SSO sign-in to the web admin refused by the identity provider: "
+            f"{error[:100]!r}: {error_description[:1000]!r}"
+        )
+        return _sso_error_redirect(SsoErrorCode.DENIED)
 
     try:
         user, next_path = await handle_callback(
@@ -383,11 +410,13 @@ async def finish_sso_login(
             code,
         )
     except OidcLoginError as e:
-        return RedirectResponse(f"/admin/login?error={quote_plus(str(e))}", status_code=status.HTTP_303_SEE_OTHER)
+        level = logging.INFO if e.code is SsoErrorCode.EXPIRED else logging.WARNING
+        log(f"SSO sign-in to the web admin failed ({e.code}): {e}", level)
+        return _sso_error_redirect(e.code)
 
     if not user.admin:
-        error_msg = quote_plus("This account is not an administrator.")
-        return RedirectResponse(f"/admin/login?error={error_msg}", status_code=status.HTTP_303_SEE_OTHER)
+        log(f"SSO sign-in to the web admin refused for '{user.username}': not an administrator", logging.WARNING)
+        return _sso_error_redirect(SsoErrorCode.NOT_ADMIN)
 
     response = RedirectResponse(_safe_next(next_path), status_code=status.HTTP_303_SEE_OTHER)
     _issue_session_cookie(response, request, state, user.username)

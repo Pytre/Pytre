@@ -18,6 +18,7 @@ from authlib.oauth2.rfc7636 import create_s256_code_challenge
 
 from Pytre_Core.about import APP_NAME
 from Pytre_Core.oidc_client import new_token
+from Pytre_Core.remote_protocol import SsoErrorCode
 
 
 class SsoLoginError(Exception):
@@ -28,6 +29,24 @@ class SsoLoginError(Exception):
 class SsoLoginCancelled(SsoLoginError):
     """Raised when the login was interrupted by a call to LoopbackListener.shutdown() (e.g. the
     user clicked "Cancel") rather than by an actual failure."""
+
+
+SSO_ERROR_MESSAGES: dict[SsoErrorCode, str] = {
+    SsoErrorCode.DENIED: "Le fournisseur d'identité a refusé la connexion.",
+    SsoErrorCode.EXPIRED: "La connexion a expiré, merci de recommencer.",
+    SsoErrorCode.UNAVAILABLE: "La connexion SSO n'est pas disponible pour le moment, contactez votre administrateur.",
+    SsoErrorCode.FAILED: "La connexion SSO a échoué, contactez votre administrateur.",
+}
+SSO_ERROR_DEFAULT_MSG = "La connexion SSO a échoué."
+
+
+def sso_error_message(error: str) -> str:
+    """Message of the SsoErrorCode `error` sent by the server. The default message for any other value: never a text
+    taken from the redirect, which anyone crafting a link could choose - and what an older server sends."""
+    try:
+        return SSO_ERROR_MESSAGES.get(SsoErrorCode(error), SSO_ERROR_DEFAULT_MSG)
+    except ValueError:
+        return SSO_ERROR_DEFAULT_MSG
 
 
 @dataclass
@@ -161,7 +180,7 @@ def login_via_browser(
     result = listener.wait_for_result()
 
     if result.error:
-        raise SsoLoginError(f"Login failed: {result.error}")
+        raise SsoLoginError(sso_error_message(result.error))
     if result.state != state:
         raise SsoLoginError("State mismatch - the response did not come from the started login")
     if not result.code:

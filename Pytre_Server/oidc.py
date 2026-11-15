@@ -15,6 +15,7 @@ from authlib.integrations.httpx_client import AsyncOAuth2Client
 
 from Pytre_Core.oidc_client import OidcDiscovery, OidcError, new_token
 from Pytre_Core.oidc_providers import OidcProvider, OidcProviders
+from Pytre_Core.remote_protocol import SsoErrorCode
 from Pytre_Core.users import AuthType, OidcLink, User, Users
 from Pytre_Core.utils import log as _log
 
@@ -32,9 +33,14 @@ def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__)
 
 class OidcLoginError(Exception):
     """Raised for any failure of the SSO login flow - an unknown/expired/reused state, a failed
-    code exchange, an invalid ID token, or a rejected user linkage. The route only ever needs to
-    catch this one type; the underlying cause (OidcError, Authlib's own errors) is kept as
-    __cause__ when there is one."""
+    code exchange, an invalid ID token, or a rejected user linkage. The route only ever needs to catch this
+    one type; the underlying cause (OidcError, Authlib's own errors) is kept as __cause__ when there is one.
+    The message names what failed, for the server logs only: the user is shown the message of `code`, as the details
+    could reveal which accounts exist."""
+
+    def __init__(self, message: str, code: SsoErrorCode = SsoErrorCode.FAILED) -> None:
+        super().__init__(message)
+        self.code: SsoErrorCode = code
 
 
 class OidcReverifyError(Exception):
@@ -55,7 +61,7 @@ async def start_login(resources: ServerResources, provider: OidcProvider, flow: 
     try:
         discovery = await resources.oidc_client.discover(provider.issuer)
     except OidcError as e:
-        raise OidcLoginError(f"Could not reach the identity provider: {e}") from e
+        raise OidcLoginError(f"Could not reach the identity provider: {e}", SsoErrorCode.UNAVAILABLE) from e
 
     nonce = new_token()
     code_verifier = new_token()
@@ -90,18 +96,18 @@ async def handle_callback(
     whether this succeeds or not, since it's popped before any of the steps that can fail."""
     pending = resources.oidc_pop_pending_login(state_token)
     if pending is None:
-        raise OidcLoginError("This sign-in link has expired or was already used - please try again.")
+        raise OidcLoginError("This sign-in link has expired or was already used.", SsoErrorCode.EXPIRED)
 
     # retrieve oidc provider - re-looked-up now, not trusted from what start_login saw earlier
     provider = oidc_providers.get_all_providers().get(pending.provider_issuer)
     if provider is None or not provider.is_usable:
-        raise OidcLoginError("This identity provider is no longer usable.")
+        raise OidcLoginError("This identity provider is no longer usable.", SsoErrorCode.UNAVAILABLE)
 
     # re-fetch discovery (cached) to get the token endpoint
     try:
         discovery = await resources.oidc_client.discover(provider.issuer)
     except OidcError as e:
-        raise OidcLoginError(f"Could not reach the identity provider: {e}") from e
+        raise OidcLoginError(f"Could not reach the identity provider: {e}", SsoErrorCode.UNAVAILABLE) from e
 
     # fetch OAuth2 token - same redirect URI as start_login(), rebuilt from the provider looked up again above
     client = AsyncOAuth2Client(provider.client_id, provider.client_secret, redirect_uri=callback_url(provider))

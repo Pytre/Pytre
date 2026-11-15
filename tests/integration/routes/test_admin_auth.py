@@ -11,7 +11,6 @@ import logging
 import time
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock
-from urllib.parse import unquote
 
 import jwt
 import pytest
@@ -19,9 +18,11 @@ from fastapi.testclient import TestClient
 
 from Pytre_Core.context import AppContext
 from Pytre_Core.oidc_client import OidcDiscoveryError
+from Pytre_Core.remote_protocol import SsoErrorCode
 from Pytre_Core.users import AuthType, Users, User, hash_password
 from Pytre_Server.app import create_app
 from Pytre_Server.auth_token import JWT_ALGORITHM, TokenType, create_token, decode_token
+from Pytre_Server.routes.admin_auth import SSO_ERROR_MESSAGES
 from tests.integration.conftest import TEST_DB_PASSWORD, TEST_USER_PASSWORD, TEST_USERNAME
 from tests.integration.routes.conftest import (
     IP_THRESHOLD,
@@ -428,17 +429,19 @@ def test_sso_start_with_an_unknown_provider_redirects_to_login_without_starting_
     assert isolated_client.app.state.server.resources.oidc_pending == {}
 
 
-def test_sso_start_surfaces_a_discovery_failure(isolated_client, monkeypatch):
+def test_sso_start_surfaces_a_discovery_failure(isolated_client, monkeypatch, caplog):
+    """The login page gets the code only: the detail of the failure goes to the server logs."""
     app_ctx = isolated_client.app.state.server.app_ctx
     provider = make_oidc_provider(app_ctx)
     resources = isolated_client.app.state.server.resources
     monkeypatch.setattr(resources.oidc_client, "discover", AsyncMock(side_effect=OidcDiscoveryError("unreachable")))
 
-    response = isolated_client.get(f"/admin/login/sso?provider={provider.uuid}", follow_redirects=False)
+    with caplog.at_level(logging.INFO):
+        response = isolated_client.get(f"/admin/login/sso?provider={provider.uuid}", follow_redirects=False)
 
     assert response.status_code == 303
-    assert response.headers["location"].startswith("/admin/login?error=")
-    assert "unreachable" in unquote(response.headers["location"])
+    assert response.headers["location"] == "/admin/login?error=unavailable"
+    assert any(r.levelno == logging.WARNING and "unreachable" in r.message for r in caplog.records)
 
 
 def test_sso_login_full_flow_sets_cookie_and_redirects_to_next(isolated_client, install_idp_transport, fake_token_exchange):
@@ -540,21 +543,77 @@ def test_sso_callback_state_is_single_use(isolated_client, install_idp_transport
 
 
 def test_sso_callback_surfaces_an_idp_error_param_without_attempting_an_exchange(
-    isolated_client, install_idp_transport, fake_token_exchange
+    isolated_client, install_idp_transport, fake_token_exchange, caplog
+):
+    """The identity provider's own text is never carried to the login page: it could be anyone's, see SsoErrorCode."""
+    app_ctx = isolated_client.app.state.server.app_ctx
+    provider = make_oidc_provider(app_ctx)
+    state_token = _start_sso(isolated_client, fake_token_exchange, provider.uuid)
+
+    with caplog.at_level(logging.INFO):
+        response = isolated_client.get(
+            f"/login/sso/callback?state={state_token}&error=access_denied&error_description=User+cancelled",
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/admin/login?error=denied"
+    assert "admin_session" not in response.headers.get("set-cookie", "")
+    assert any("'access_denied': 'User cancelled'" in r.message for r in caplog.records)
+
+
+@pytest.mark.parametrize("code", list(SsoErrorCode))
+def test_login_page_shows_the_message_of_each_sso_error_code(client, code):
+    response = client.get(f"/admin/login?error={code}")
+
+    assert SSO_ERROR_MESSAGES[code] in response.text
+
+
+def test_login_page_never_shows_a_text_taken_from_the_url(client):
+    """Anyone can craft a link to the real login page: a free text there would be a phishing message."""
+    response = client.get("/admin/login?error=Session+expired.+Call+the+helpdesk+at+555-0100")
+
+    assert response.status_code == 200
+    assert "helpdesk" not in response.text
+    assert 'class="error form-error"' not in response.text
+
+
+def test_sso_callback_logs_the_identity_provider_text_escaped(
+    isolated_client, install_idp_transport, fake_token_exchange, caplog
+):
+    """The identity provider's text comes from the request: a line break in it must not forge a log line."""
+    app_ctx = isolated_client.app.state.server.app_ctx
+    provider = make_oidc_provider(app_ctx)
+    state_token = _start_sso(isolated_client, fake_token_exchange, provider.uuid)
+
+    with caplog.at_level(logging.INFO):
+        isolated_client.get(
+            f"/login/sso/callback?state={state_token}&error=access_denied"
+            "&error_description=cancelled%0A2026-11-15+WARNING+Admin+%27x%27+logged+in",
+            follow_redirects=False,
+        )
+
+    [record] = [r for r in caplog.records if "refused by the identity provider" in r.message]
+    assert "\n" not in record.message  # one log line, whatever the identity provider sent
+    assert "cancelled\\n2026-11-15" in record.message  # the line break is written escaped: a backslash and an n
+
+
+def test_sso_callback_truncates_the_identity_provider_text_in_the_logs(
+    isolated_client, install_idp_transport, fake_token_exchange, caplog
 ):
     app_ctx = isolated_client.app.state.server.app_ctx
     provider = make_oidc_provider(app_ctx)
     state_token = _start_sso(isolated_client, fake_token_exchange, provider.uuid)
 
-    response = isolated_client.get(
-        f"/login/sso/callback?state={state_token}&error=access_denied&error_description=User+cancelled",
-        follow_redirects=False,
-    )
+    with caplog.at_level(logging.INFO):
+        isolated_client.get(
+            f"/login/sso/callback?state={state_token}&error=access_denied&error_description={'x' * 5000}",
+            follow_redirects=False,
+        )
 
-    assert response.status_code == 303
-    assert response.headers["location"].startswith("/admin/login?error=")
-    assert "User cancelled" in unquote(response.headers["location"].replace("+", " "))
-    assert "admin_session" not in response.headers.get("set-cookie", "")
+    [record] = [r for r in caplog.records if "refused by the identity provider" in r.message]
+    assert "x" * 1000 in record.message
+    assert "x" * 1001 not in record.message
 
 
 def test_sso_callback_shows_the_generic_page_for_an_idp_error_without_state(isolated_client):
@@ -577,9 +636,7 @@ def test_sso_callback_rejects_a_non_admin_user(isolated_client, install_idp_tran
     )
 
     assert response.status_code == 303
-    assert "not+an+administrator" in response.headers["location"] or "administrator" in unquote(
-        response.headers["location"]
-    )
+    assert response.headers["location"] == "/admin/login?error=not_admin"
     assert "admin_session" not in response.headers.get("set-cookie", "")
 
 

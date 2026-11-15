@@ -159,7 +159,8 @@ def test_sso_start_surfaces_a_discovery_failure_to_the_loopback(isolated_client,
     assert response.status_code == 303
     location = response.headers["location"]
     assert location.startswith(f"http://127.0.0.1:{CLIENT_PORT}/?")
-    assert "unreachable" in unquote(location)
+    assert "error=unavailable" in location
+    assert "unreachable" not in unquote(location)  # the detail stays in the server logs
 
 
 # ================================================================================
@@ -208,7 +209,8 @@ def test_sso_callback_surfaces_an_idp_error_to_the_loopback_without_attempting_a
     location = response.headers["location"]
     assert location.startswith(f"http://127.0.0.1:{CLIENT_PORT}/?")
     assert f"state={CLIENT_STATE}" in location
-    assert "User" in unquote(location)
+    assert "error=denied" in location
+    assert "User" not in unquote(location)  # the identity provider's own text is never carried to the client
 
 
 def test_sso_callback_rejects_a_non_oidc_user_with_a_loopback_error(

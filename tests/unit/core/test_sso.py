@@ -16,7 +16,16 @@ import httpx2
 import pytest
 from authlib.oauth2.rfc7636 import create_s256_code_challenge
 
-from Pytre_Core.sso import LoopbackListener, SsoLoginCancelled, SsoLoginError, login_via_browser
+from Pytre_Core.remote_protocol import SsoErrorCode
+from Pytre_Core.sso import (
+    SSO_ERROR_DEFAULT_MSG,
+    SSO_ERROR_MESSAGES,
+    LoopbackListener,
+    SsoLoginCancelled,
+    SsoLoginError,
+    login_via_browser,
+    sso_error_message,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -200,11 +209,19 @@ def test_login_via_browser_rejects_a_state_mismatch():
         login_via_browser("http://pytre.example.com", open_browser, timeout_secs=5)
 
 
-def test_login_via_browser_propagates_an_error_from_the_server_or_idp():
-    with pytest.raises(SsoLoginError, match="access_denied"):
+def test_login_via_browser_shows_the_message_of_the_error_code_from_the_server():
+    with pytest.raises(SsoLoginError, match="Le fournisseur d'identité a refusé la connexion."):
+        login_via_browser("http://pytre.example.com", _open_browser_that_calls_back(error="denied"), timeout_secs=5)
+
+
+def test_login_via_browser_never_shows_a_text_received_as_error():
+    """The loopback redirect could be crafted by anyone: an older server's or an attacker's text isn't shown."""
+    with pytest.raises(SsoLoginError) as exc_info:
         login_via_browser(
-            "http://pytre.example.com", _open_browser_that_calls_back(error="access_denied"), timeout_secs=5
+            "http://pytre.example.com", _open_browser_that_calls_back(error="Call the helpdesk"), timeout_secs=5
         )
+
+    assert str(exc_info.value) == SSO_ERROR_DEFAULT_MSG
 
 
 def test_login_via_browser_rejects_a_missing_code():
@@ -265,3 +282,23 @@ def test_login_via_browser_handles_a_trailing_slash_in_server_url(monkeypatch):
     login_via_browser("http://pytre.example.com/", _open_browser_that_calls_back(code="c1"), timeout_secs=5)
 
     assert captured["url"] == "http://pytre.example.com/login/sso/token"
+
+
+# ================================================================================
+# sso_error_message - the code sent by the server, shown in French
+# ================================================================================
+
+
+@pytest.mark.parametrize("code", [c for c in SsoErrorCode if c is not SsoErrorCode.NOT_ADMIN])
+def test_sso_error_message_of_each_code_the_server_sends_to_the_client(code):
+    assert sso_error_message(code) == SSO_ERROR_MESSAGES[code]
+
+
+def test_sso_error_message_of_a_code_never_sent_to_the_client_is_the_default_one():
+    """not_admin only concerns the web administration: shown anyway, it must not raise."""
+    assert sso_error_message(SsoErrorCode.NOT_ADMIN) == SSO_ERROR_DEFAULT_MSG
+
+
+@pytest.mark.parametrize("error", ["Call the helpdesk at 555-0100", "access_denied", ""])
+def test_sso_error_message_of_any_other_text_is_the_default_one(error):
+    assert sso_error_message(error) == SSO_ERROR_DEFAULT_MSG

@@ -9,6 +9,7 @@ Only one usable OIDC provider is supported for this flow - the client has no way
 """
 
 import json
+import logging
 from urllib.parse import quote_plus
 
 from authlib.oauth2.rfc7636 import create_s256_code_challenge
@@ -16,6 +17,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
 
+from Pytre_Core.remote_protocol import SsoErrorCode
+from Pytre_Core.utils import log as _log
 from Pytre_Server.auth_token import TokenType, create_token
 from Pytre_Server.oidc import OidcLoginError, handle_callback, start_login
 from Pytre_Server.server_state import ServerState, SsoFlow, get_server_state
@@ -24,6 +27,10 @@ from Pytre_Server.server_state import ServerState, SsoFlow, get_server_state
 router = APIRouter(prefix="/login/sso")
 
 LOGIN_FAILED_HTML = "<html><body>Login failed or expired - you may close this window and try again.</body></html>"
+
+
+def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__) -> None:
+    _log(msg, level=level, sublogger=sublogger)
 
 
 def _build_loopback_redirect_uri(port: int) -> str:
@@ -54,8 +61,10 @@ def _decode_bridge(next_path: str) -> dict[str, str] | None:
     return bridge
 
 
-def _error_redirect(redirect_uri: str, client_state: str, message: str) -> RedirectResponse:
-    url = f"{redirect_uri}?error={quote_plus(message)}&state={quote_plus(client_state)}"
+def _error_redirect(redirect_uri: str, client_state: str, code: SsoErrorCode) -> RedirectResponse:
+    """Bounces back to the client's loopback listener with the code of the failure, never a message: see
+    SsoErrorCode."""
+    url = f"{redirect_uri}?error={code}&state={quote_plus(client_state)}"
     return RedirectResponse(url, status_code=303)
 
 
@@ -81,7 +90,9 @@ async def sso_start(
 
     usable = list(state.app_ctx.oidc_providers.get_usable_providers().values())
     if len(usable) != 1:
-        return _error_redirect(redirect_uri, client_state, "SSO is not available on this server.")
+        msg = f"Client SSO sign-in refused: {len(usable)} usable identity providers, it needs exactly one"
+        log(msg, logging.WARNING)
+        return _error_redirect(redirect_uri, client_state, SsoErrorCode.UNAVAILABLE)
     provider = usable[0]
 
     bridge = _encode_bridge(redirect_uri, client_state, code_challenge)
@@ -89,7 +100,8 @@ async def sso_start(
     try:
         auth_url = await start_login(state.resources, provider, SsoFlow.CLIENT, bridge)
     except OidcLoginError as e:
-        return _error_redirect(redirect_uri, client_state, str(e))
+        log(f"Client SSO sign-in could not start ({e.code}): {str(e)!r}", logging.WARNING)
+        return _error_redirect(redirect_uri, client_state, e.code)
 
     return RedirectResponse(auth_url, status_code=303)
 
@@ -106,14 +118,17 @@ async def finish_sso_login(
         return HTMLResponse(LOGIN_FAILED_HTML)  # no redirect_uri to safely bounce back to
 
     if error:
-        return _error_redirect(bridge["redirect_uri"], bridge["state"], error_description or error)
+        log(f"Client SSO sign-in refused by the identity provider: {error[:100]!r}: {error_description[:1000]!r}")
+        return _error_redirect(bridge["redirect_uri"], bridge["state"], SsoErrorCode.DENIED)
 
     try:
         user, _next_path = await handle_callback(
             state.resources, state.app_ctx.oidc_providers, state.app_ctx.users, state_token, code
         )
     except OidcLoginError as e:
-        return _error_redirect(bridge["redirect_uri"], bridge["state"], str(e))
+        level = logging.INFO if e.code is SsoErrorCode.EXPIRED else logging.WARNING
+        log(f"Client SSO sign-in failed ({e.code}): {str(e)!r}", level)
+        return _error_redirect(bridge["redirect_uri"], bridge["state"], e.code)
 
     # unlike the admin webui, no admin-only check here - any AuthType.OIDC user link_user() accepts can sign in
     client_code = state.resources.client_code_start_pending(user.username, bridge["code_challenge"])

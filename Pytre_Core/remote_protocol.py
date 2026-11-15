@@ -58,3 +58,19 @@ def decode_row_value(value: Any) -> Any:
         return Decimal(value["$decimal"])
 
     return value
+
+
+# ------------------------------------------------------------------------------------------
+# SSO sign-in errors
+# ------------------------------------------------------------------------------------------
+class SsoErrorCode(StrEnum):
+    """Why a SSO sign-in failed, sent by Pytre_Server in the `error` query parameter of its redirects to the login
+    page of the web administration, or to the loopback listener of the client, instead of a message: a free text
+    could be chosen by anyone crafting a link.
+    Each side shows its own message for a code, the detail stays in the server logs."""
+
+    DENIED = "denied"  # refused by the identity provider: consent denied, account blocked there...
+    EXPIRED = "expired"  # unknown, expired or already used sign-in state
+    UNAVAILABLE = "unavailable"  # SSO not configured, or identity provider unreachable
+    FAILED = "failed"  # any other failure: code exchange, invalid ID token, account not linked...
+    NOT_ADMIN = "not_admin"  # a valid account without admin rights, web administration only

@@ -60,6 +60,9 @@ def lower_ip_threshold(client: TestClient) -> None:
     resources.login_throttle.ip.max_attempts = IP_THRESHOLD
 
 
+TESTCLIENT_HOST = "testclient"  # the client address of a request made by a TestClient, unless given another one
+
+
 def client_from(client: TestClient, host: str) -> TestClient:
     """A client of the same app as `client`, connecting from the address `host`."""
     return TestClient(client.app, client=(host, 50000))

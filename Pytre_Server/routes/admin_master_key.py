@@ -20,19 +20,14 @@ import logging
 from fastapi import APIRouter, Depends, Form, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from Pytre_Core.utils import log as _log
-
+from Pytre_Server.audit import audit
 from Pytre_Server.master_key import delete_master_key, get_master_key, set_master_key
 from Pytre_Server.routes.admin_auth import is_loopback, require_local_connection
-from Pytre_Server.server_state import ServerState, get_server_state
+from Pytre_Server.server_state import client_host, get_server_state, ServerState
 from Pytre_Server.templating import templates
 
 
 router = APIRouter(prefix="/master-key")
-
-
-def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__) -> None:
-    _log(msg, level=level, sublogger=sublogger)
 
 
 def _context(msg: str | None = None, error: str | None = None, is_local: bool = True) -> dict:
@@ -56,15 +51,19 @@ def master_key_set_form(request: Request, error: str | None = None) -> HTMLRespo
 
 
 @router.post("/reveal")
-def master_key_reveal(admin_username: str = Depends(require_local_connection)) -> dict[str, str | None]:
-    log(f"Master key revealed by admin '{admin_username}'", logging.WARNING)
+def master_key_reveal(
+    request: Request, admin_username: str = Depends(require_local_connection)
+) -> dict[str, str | None]:
+    msg = f"Master key revealed by admin {admin_username!r}"
+    audit("master_key.reveal", client_host(request), msg, actor=admin_username, level=logging.WARNING)
     return {"value": get_master_key()}
 
 
 @router.post("/delete")
-def master_key_delete(admin_username: str = Depends(require_local_connection)) -> RedirectResponse:
+def master_key_delete(request: Request, admin_username: str = Depends(require_local_connection)) -> RedirectResponse:
     delete_master_key()
-    log(f"Master key deleted from keyring by admin '{admin_username}'", logging.WARNING)
+    msg = f"Master key deleted from keyring by admin {admin_username!r}"
+    audit("master_key.delete", client_host(request), msg, actor=admin_username, level=logging.WARNING)
     return RedirectResponse(url="/admin/master-key?msg=Master+key+deleted", status_code=status.HTTP_303_SEE_OTHER)
 
 
@@ -86,7 +85,10 @@ def master_key_set(
         return templates.TemplateResponse(request, "admin/master_key_set_form.html", _context(error=error))
 
     set_master_key(password)
-    log(f"Master key set/changed in keyring by admin '{admin_username}'", logging.WARNING)
+
+    msg = f"Master key set/changed in keyring by admin {admin_username!r}"
+    audit("master_key.set", client_host(request), msg, actor=admin_username, level=logging.WARNING)
+
     return RedirectResponse(url="/admin/master-key?msg=Master+key+saved", status_code=status.HTTP_303_SEE_OTHER)
 
 
@@ -115,7 +117,10 @@ def master_key_change_db_password(
         return templates.TemplateResponse(request, "admin/master_key_set_form.html", _context(error=error))
 
     set_master_key(password)  # keep the keyring in sync - only after re-encryption succeeded
-    log(f"Database master password changed (Pytre.db re-encrypted) by admin '{admin_username}'", logging.WARNING)
+
+    msg = f"Database master password changed (Pytre.db re-encrypted) by admin {admin_username!r}"
+    audit("master_key.db_password_change", client_host(request), msg, actor=admin_username, level=logging.WARNING)
+
     return RedirectResponse(
         url="/admin/master-key?msg=Database+password+changed", status_code=status.HTTP_303_SEE_OTHER
     )

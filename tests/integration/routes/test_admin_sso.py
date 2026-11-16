@@ -9,7 +9,10 @@ import re
 
 import pytest
 
+from Pytre_Server.audit import SECRET_CHANGED
+from tests.conftest import audit_fields, audit_records
 from tests.integration.conftest import TEST_USERNAME
+from tests.integration.routes.conftest import TESTCLIENT_HOST
 
 pytestmark = pytest.mark.integration
 
@@ -65,10 +68,12 @@ def test_create_provider_is_logged_with_the_admin_username(isolated_admin_client
     with caplog.at_level(logging.INFO):
         isolated_admin_client.post("/admin/sso/new", data=_new_provider_data("https://idp-logged.example.com"))
 
-    assert any(
-        f"OIDC provider 'https://idp-logged.example.com' saved by admin '{TEST_USERNAME}'" in r.message
-        for r in caplog.records
+    [record] = audit_records(caplog, "sso_provider.create")
+    assert record.levelno == logging.WARNING
+    assert record.message.startswith(
+        f"SSO provider 'https://idp-logged.example.com' created by admin '{TEST_USERNAME}' from {TESTCLIENT_HOST}"
     )
+    assert audit_fields(record)["changes"]["client_secret"] == SECRET_CHANGED
 
 
 def test_create_provider_round_trip_keeps_each_field_distinct(isolated_admin_client):
@@ -232,9 +237,10 @@ def test_delete_single_provider_is_logged_with_the_admin_username(isolated_admin
     with caplog.at_level(logging.INFO):
         isolated_admin_client.post(f"/admin/sso/{uuid}/delete")
 
-    assert any(
-        f"OIDC provider 'https://idp-delete-logged.example.com' deleted by admin '{TEST_USERNAME}'" in r.message
-        for r in caplog.records
+    [record] = audit_records(caplog, "sso_provider.delete")
+    assert record.levelno == logging.WARNING
+    assert record.message == (
+        f"SSO provider 'https://idp-delete-logged.example.com' deleted by admin '{TEST_USERNAME}' from {TESTCLIENT_HOST}"
     )
 
 
@@ -269,14 +275,12 @@ def test_bulk_delete_is_logged_per_provider_with_the_admin_username(isolated_adm
     with caplog.at_level(logging.INFO):
         isolated_admin_client.post("/admin/sso/delete", data={"uuids": [uuid_a, uuid_b]})
 
-    assert any(
-        f"OIDC provider 'https://idp-bulk-log-a.example.com' deleted by admin '{TEST_USERNAME}' (bulk)" in r.message
-        for r in caplog.records
-    )
-    assert any(
-        f"OIDC provider 'https://idp-bulk-log-b.example.com' deleted by admin '{TEST_USERNAME}' (bulk)" in r.message
-        for r in caplog.records
-    )
+    records = audit_records(caplog, "sso_provider.delete")
+    assert [audit_fields(r)["target"] for r in records] == [
+        "https://idp-bulk-log-a.example.com",
+        "https://idp-bulk-log-b.example.com",
+    ]
+    assert all(r.levelno == logging.WARNING for r in records)
 
 
 def test_bulk_delete_reports_partial_failure(isolated_admin_client):
@@ -413,7 +417,13 @@ def test_edit_provider_issuer_moves_the_links_of_its_users(isolated_admin_client
         assert (link.issuer, link.sub) == (new_issuer, sub)
         assert link.refresh_token == ""  # issued by the old issuer
         assert link.last_verified is None
-    assert any(f"2 user link(s) moved from '{old_issuer}'" in r.message for r in caplog.records)
+    moved = audit_records(caplog, "user.update")
+    assert sorted(audit_fields(r)["target"] for r in moved) == ["moved_a", "moved_b"]
+    assert all("(SSO provider issuer changed)" in r.message for r in moved)
+    assert {audit_fields(r)["target"]: audit_fields(r)["changes"]["oidc_link"] for r in moved}["moved_a"] == [
+        {"issuer": old_issuer, "sub": "sub-a"},
+        {"issuer": new_issuer, "sub": "sub-a"},
+    ]
 
     # a later SSO login through the provider, now reporting the new issuer, finds the user by its sub
     found = isolated_admin_client.app.state.server.app_ctx.users.find_user_by_oidc_link(new_issuer, "sub-a")
@@ -495,7 +505,11 @@ def test_delete_provider_removes_the_links_of_its_users_only(isolated_admin_clie
     kept = _link_of(isolated_admin_client, "kept_user")
     assert kept is not None
     assert kept.issuer == other_issuer
-    assert any(f"'{issuer}' deleted by admin '{TEST_USERNAME}', 1 user link(s) removed" in r.message for r in caplog.records)
+    [unlinked] = audit_records(caplog, "user.update")  # only the user linked to the deleted provider
+    assert audit_fields(unlinked)["target"] == "unlinked_user"
+    assert audit_fields(unlinked)["changes"] == {"oidc_link": [{"issuer": issuer, "sub": "sub-d"}, None]}
+    assert "(SSO provider deleted)" in unlinked.message
+    assert len(audit_records(caplog, "sso_provider.delete")) == 1
 
 
 def test_bulk_delete_removes_the_links_and_reports_them(isolated_admin_client):
@@ -560,3 +574,66 @@ def test_providers_list_shows_the_number_of_linked_users(isolated_admin_client):
     assert _list_row_cells(list_page, issuer)[5] == "1"
     assert _list_row_cells(list_page, unused_issuer)[5] == "0"
     assert 'data-linked="1"' in list_page  # used by the bulk delete confirmation
+
+
+# ================================================================================
+# Audit log
+# ================================================================================
+
+AUDIT_ISSUER = "https://idp-audit.example.com"
+
+
+def test_edit_provider_is_audited_as_a_warning_with_what_changed(isolated_admin_client, caplog):
+    """The providers decide who may sign in: any change of theirs is worth a warning"""
+    uuid = _create_provider(isolated_admin_client, AUDIT_ISSUER)
+    data = _new_provider_data(AUDIT_ISSUER, client_secret="")
+    del data["enabled"]  # an unticked checkbox isn't sent
+    caplog.clear()
+
+    with caplog.at_level(logging.INFO):
+        isolated_admin_client.post(f"/admin/sso/{uuid}/edit", data=data)
+
+    [record] = audit_records(caplog)
+    assert record.levelno == logging.WARNING
+    assert record.message == (
+        f"SSO provider '{AUDIT_ISSUER}' updated by admin '{TEST_USERNAME}' from {TESTCLIENT_HOST}: enabled true -> false"
+    )
+    assert audit_fields(record)["event"] == "sso_provider.update"
+
+
+def test_edit_provider_client_secret_is_audited_without_its_value(isolated_admin_client, caplog):
+    uuid = _create_provider(isolated_admin_client, AUDIT_ISSUER)
+
+    with caplog.at_level(logging.INFO):
+        isolated_admin_client.post(f"/admin/sso/{uuid}/edit", data=_new_provider_data(AUDIT_ISSUER, client_secret="n3w"))
+
+    [record] = audit_records(caplog, "sso_provider.update")
+    assert audit_fields(record)["changes"] == {"client_secret": SECRET_CHANGED}
+    assert "n3w" not in record.message
+    assert "s3cret" not in record.message
+
+
+def test_edit_provider_without_change_is_not_audited(isolated_admin_client, caplog):
+    uuid = _create_provider(isolated_admin_client, AUDIT_ISSUER)
+    caplog.clear()
+
+    with caplog.at_level(logging.INFO):
+        response = isolated_admin_client.post(
+            f"/admin/sso/{uuid}/edit", data=_new_provider_data(AUDIT_ISSUER, client_secret=""), follow_redirects=False
+        )
+
+    assert response.status_code == 303
+    assert audit_records(caplog) == []
+
+
+def test_bulk_delete_provider_audits_the_links_it_removed(isolated_admin_client, caplog):
+    uuid = _create_provider(isolated_admin_client, AUDIT_ISSUER)
+    _link_user(isolated_admin_client, "bulk_unlinked", AUDIT_ISSUER, "sub-u")
+
+    with caplog.at_level(logging.INFO):
+        isolated_admin_client.post("/admin/sso/delete", data={"uuids": [uuid]})
+
+    [unlinked] = audit_records(caplog, "user.update")
+    assert audit_fields(unlinked)["target"] == "bulk_unlinked"
+    assert audit_fields(unlinked)["changes"] == {"oidc_link": [{"issuer": AUDIT_ISSUER, "sub": "sub-u"}, None]}
+    assert "(SSO provider deleted)" in unlinked.message

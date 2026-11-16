@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from Pytre_Server.audit import MAX_VALUE_LEN, shorten
 from Pytre_Server.auth_token import TokenType
 from Pytre_Server.login_throttle import (
     IP_MAX_ATTEMPTS,
@@ -17,6 +18,7 @@ from Pytre_Server.login_throttle import (
     _FailureCounter,
     _KnownAddresses,
 )
+from tests.conftest import audit_fields, audit_records
 
 pytestmark = pytest.mark.unit
 
@@ -111,7 +113,7 @@ def test_username_from_address_throttle_logs_once_as_info(throttle, caplog):
 
     records = [r for r in caplog.records if "throttled" in r.message]
     assert [r.message for r in records] == [
-        "User on address 'alice@10.0.0.1' has been throttled, too many failed login attempts"
+        "User on address 'alice@10.0.0.1' has been throttled, too many failed login attempts from 10.0.0.1"
     ]
     assert records[0].levelno == logging.INFO
 
@@ -364,7 +366,7 @@ def test_failure_counter_never_tracks_more_keys_than_max_tracked():
     counter = _counter(max_tracked=3)
 
     for i in range(10):
-        counter.record_failing(f"key{i}")
+        counter.record_failing(f"key{i}", HOST)
         assert len(counter.failed_login) <= 3
 
     assert list(counter.failed_login) == ["key7", "key8", "key9"]
@@ -399,12 +401,56 @@ def test_failure_counter_logs_with_its_label_and_level(caplog):
     counter = _FailureCounter("Address", max_attempts=2, max_tracked=3, log_level=logging.WARNING)
 
     with caplog.at_level(logging.INFO):
-        counter.record_failing("10.0.0.1")
-        counter.record_failing("10.0.0.1")
+        counter.record_failing("10.0.0.1", HOST)
+        counter.record_failing("10.0.0.1", HOST)
 
     records = [r for r in caplog.records if "throttled" in r.message]
-    assert [r.message for r in records] == ["Address '10.0.0.1' has been throttled, too many failed login attempts"]
+    assert [r.message for r in records] == [
+        "Address '10.0.0.1' has been throttled, too many failed login attempts from 10.0.0.1"
+    ]
     assert records[0].levelno == logging.WARNING
+
+
+def test_failure_counter_logs_its_throttle_as_an_audit_event(caplog):
+    counter = _counter(max_attempts=1)
+
+    with caplog.at_level(logging.INFO):
+        counter.record_failing("alice", HOST)
+
+    [record] = audit_records(caplog)
+    assert audit_fields(record) == {
+        "event": "login.throttled",
+        "actor": None,
+        "ip": HOST,
+        "target": "alice",
+        "changes": None,
+    }
+
+
+def test_failure_counter_logs_a_throttle_from_an_unknown_address(caplog):
+    counter = _counter(max_attempts=1)
+
+    with caplog.at_level(logging.INFO):
+        counter.record_failing("alice", None)
+
+    [record] = audit_records(caplog)
+    assert record.message == "Key 'alice' has been throttled, too many failed login attempts from an unknown address"
+    assert audit_fields(record)["ip"] is None
+
+
+def test_throttle_log_shortens_and_escapes_the_username(throttle, caplog):
+    """The username comes from the client: it may be as long as the request allows, and hold line breaks."""
+    username = "alice\n" + "x" * 5000
+
+    with caplog.at_level(logging.INFO):
+        for _ in range(USER_IP_MAX_ATTEMPTS):
+            throttle.record_failure(username, HOST)
+
+    [record] = audit_records(caplog, "login.throttled")
+    assert "\n" not in record.message
+    assert "alice\\n" in record.message
+    assert len(record.message) < MAX_VALUE_LEN + 100
+    assert audit_fields(record)["target"] == shorten(throttle._user_ip_key(username, HOST))
 
 
 # ================================================================================

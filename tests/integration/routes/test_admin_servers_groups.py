@@ -3,9 +3,14 @@ Integration tests for the /admin/servers/groups/{add,remove} routes - bulk group
 across multiple selected servers.
 """
 
+import logging
 import re
 
 import pytest
+
+from tests.conftest import audit_fields, audit_records
+from tests.integration.conftest import TEST_USERNAME
+from tests.integration.routes.conftest import TESTCLIENT_HOST
 
 pytestmark = pytest.mark.integration
 
@@ -108,3 +113,50 @@ def test_groups_remove_without_selection_reshows_form_with_error(isolated_admin_
     response = isolated_admin_client.post("/admin/servers/groups/remove", data={"uuids": [uuid], "groups": []})
     assert response.status_code == 200
     assert "No group selected" in response.text
+
+
+# ================================================================================
+# Audit log
+# ================================================================================
+
+
+def test_groups_add_is_audited_for_each_server_it_changed(isolated_admin_client, caplog):
+    uuid_a = _create_server(isolated_admin_client, "grp_audit_a")
+    uuid_b = _create_server(isolated_admin_client, "grp_audit_b")
+    isolated_admin_client.post("/admin/servers/groups/add", data={"uuids": [uuid_b], "groups": ["sales"]})
+    caplog.clear()
+
+    with caplog.at_level(logging.INFO):
+        isolated_admin_client.post("/admin/servers/groups/add", data={"uuids": [uuid_a, uuid_b], "groups": ["sales"]})
+
+    [record] = audit_records(caplog)  # grp_audit_b already had the group: unchanged, not logged
+    assert record.message == (
+        f"Server 'grp_audit_a' updated by admin '{TEST_USERNAME}' (groups added) from {TESTCLIENT_HOST}: "
+        'grp_authorized [] -> ["sales"]'
+    )
+    assert audit_fields(record)["event"] == "server.update"
+
+
+def test_groups_remove_is_audited_for_each_server_it_changed(isolated_admin_client, caplog):
+    uuid_a = _create_server(isolated_admin_client, "grp_audit_a")
+    isolated_admin_client.post("/admin/servers/groups/add", data={"uuids": [uuid_a], "groups": ["sales"]})
+    caplog.clear()
+
+    with caplog.at_level(logging.INFO):
+        isolated_admin_client.post("/admin/servers/groups/remove", data={"uuids": [uuid_a], "groups": ["sales"]})
+
+    [record] = audit_records(caplog)
+    assert "(groups removed)" in record.message
+    assert audit_fields(record)["changes"] == {"grp_authorized": [["sales"], []]}
+
+
+def test_groups_audit_leaves_the_authorized_servers_of_the_app_as_they_are(isolated_admin_client):
+    """The snapshots read the servers from the database, they must not replace the app's own list"""
+    uuid_a = _create_server(isolated_admin_client, "grp_audit_a")
+    servers = isolated_admin_client.app.state.server.app_ctx.servers
+    servers_dict = servers.servers_dict
+
+    servers.audit_snapshot()
+
+    assert servers.servers_dict is servers_dict
+    assert uuid_a in servers.audit_snapshot()

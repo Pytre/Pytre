@@ -17,17 +17,22 @@ from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
 
 from Pytre_Core.servers import Server, ServerTarget, ServerType
-from Pytre_Core.utils import log as _log
+from Pytre_Server.audit import AuditedRecords, audit, changes_between, shorten
 from Pytre_Server.routes.admin_auth import is_loopback, require_admin_session
-from Pytre_Server.server_state import ServerState, get_server_state
+from Pytre_Server.server_state import client_host, get_server_state, ServerState
 from Pytre_Server.templating import templates
 
 
+TARGET_FIELDS = ("type", "host", "port", "server", "trust_server_certificate")  # fields of Server.audit_fields()
+SERVERS_AUDIT = AuditedRecords(
+    "server",
+    "Server",
+    "id",
+    Server.AUDIT_SECRETS,
+    warns=lambda before, after: before is not None and any(before[f] != after[f] for f in TARGET_FIELDS),
+)  # a changed target gets the stored SQL credentials
+
 router = APIRouter(prefix="/servers")
-
-
-def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__) -> None:
-    _log(msg, level=level, sublogger=sublogger)
 
 
 class ServerForm(BaseModel):
@@ -175,11 +180,25 @@ async def _save_server(
     An existing server whose target changes needs its password again: never send a stored password to a new target."""
 
     target_changed = bool(server_obj.uuid) and server_form.target != server_obj.target  # before apply_to()
+    before = server_obj.audit_fields() if server_obj.uuid else None
+
     server_form.apply_to(server_obj)
 
     if target_changed and not server_form.password:
-        msg = f"Server '{server_obj.id}' not saved for admin '{admin_username}': target changed without its password"
-        log(msg, logging.WARNING)
+        assert before is not None
+        msg = f"Target change of server {shorten(before['id'])!r} without its password "
+        msg += f"refused for admin {admin_username!r}"
+        changes = changes_between(before, server_obj.audit_fields(), Server.AUDIT_SECRETS)
+        audit(
+            "server.update.failed",
+            client_host(request),
+            msg,
+            actor=admin_username,
+            target=before["id"],
+            changes=changes,
+            level=logging.WARNING,
+        )
+
         context = _form_context(state, server_obj)
         context["error"] = (
             "Changing the host, port, instance or type of a server, or whether its certificate is checked, requires "
@@ -196,7 +215,8 @@ async def _save_server(
         context["error"] = str(e)
         return templates.TemplateResponse(request, "admin/server_form.html", context)
 
-    log(f"Server '{server_obj.id}' saved by admin '{admin_username}'", logging.INFO)
+    SERVERS_AUDIT.log_change(client_host(request), admin_username, before, server_obj.audit_fields())
+
     await state.resources.reset_connections(server_obj.id)
     return RedirectResponse(url="/admin/servers?msg=Server+saved", status_code=status.HTTP_303_SEE_OTHER)
 
@@ -206,24 +226,31 @@ async def _save_server(
 # ------------------------------------------------------------------------------------------
 @router.post("/{uuid}/delete")
 async def server_delete(
-    uuid: str, state: ServerState = Depends(get_server_state), admin_username: str = Depends(require_admin_session)
+    uuid: str,
+    request: Request,
+    state: ServerState = Depends(get_server_state),
+    admin_username: str = Depends(require_admin_session),
 ) -> RedirectResponse:
     server = state.app_ctx.servers.find_server_by_uuid(uuid)
     if server is None:
         return RedirectResponse(url="/admin/servers?error=Server+not+found", status_code=status.HTTP_303_SEE_OTHER)
+
+    before = server.audit_fields()
 
     try:
         await asyncio.to_thread(server.delete)
     except LookupError as e:
         return RedirectResponse(url=f"/admin/servers?error={e}", status_code=status.HTTP_303_SEE_OTHER)
 
-    log(f"Server '{server.id}' deleted by admin '{admin_username}'", logging.WARNING)
+    SERVERS_AUDIT.log_change(client_host(request), admin_username, before, None)
+
     await state.resources.reset_connections(server.id)
     return RedirectResponse(url="/admin/servers?msg=Server+deleted", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @router.post("/delete")
 async def servers_delete_bulk(
+    request: Request,
     uuids: list[str] = Form(default_factory=list),
     state: ServerState = Depends(get_server_state),
     admin_username: str = Depends(require_admin_session),
@@ -236,8 +263,12 @@ async def servers_delete_bulk(
             nb_errors += 1
             continue
         try:
+            before = server.audit_fields()
+
             await asyncio.to_thread(server.delete)
-            log(f"Server '{server.id}' deleted by admin '{admin_username}' (bulk)", logging.WARNING)
+
+            SERVERS_AUDIT.log_change(client_host(request), admin_username, before, None)
+
             await state.resources.reset_connections(server.id)
             nb_ok += 1
         except LookupError:
@@ -266,6 +297,7 @@ def servers_groups_add_form(
 def servers_groups_add_submit(
     request: Request,
     state: ServerState = Depends(get_server_state),
+    admin_username: str = Depends(require_admin_session),
     uuids: list[str] = Form(...),
     groups: list[str] = Form(default_factory=list),
 ) -> HTMLResponse | RedirectResponse:
@@ -278,7 +310,12 @@ def servers_groups_add_submit(
         }
         return templates.TemplateResponse(request, "admin/servers_groups_form.html", context)
 
+    before_all = state.app_ctx.servers.audit_snapshot()
     state.app_ctx.servers.servers_add_groups(uuids, groups)
+    after_all = state.app_ctx.servers.audit_snapshot()
+
+    SERVERS_AUDIT.log_changes(client_host(request), admin_username, before_all, after_all, "groups added")
+
     return RedirectResponse(url="/admin/servers?msg=Groups+assigned", status_code=status.HTTP_303_SEE_OTHER)
 
 
@@ -298,6 +335,7 @@ def servers_groups_remove_form(
 def servers_groups_remove_submit(
     request: Request,
     state: ServerState = Depends(get_server_state),
+    admin_username: str = Depends(require_admin_session),
     uuids: list[str] = Form(...),
     groups: list[str] = Form(default_factory=list),
 ) -> HTMLResponse | RedirectResponse:
@@ -310,7 +348,12 @@ def servers_groups_remove_submit(
         }
         return templates.TemplateResponse(request, "admin/servers_groups_form.html", context)
 
+    before_all = state.app_ctx.servers.audit_snapshot()
     state.app_ctx.servers.servers_remove_groups(uuids, groups)
+    after_all = state.app_ctx.servers.audit_snapshot()
+
+    SERVERS_AUDIT.log_changes(client_host(request), admin_username, before_all, after_all, "groups removed")
+
     return RedirectResponse(url="/admin/servers?msg=Groups+removed", status_code=status.HTTP_303_SEE_OTHER)
 
 
@@ -324,20 +367,33 @@ def servers_import_form(request: Request) -> HTMLResponse:
 
 @router.post("/import", response_class=HTMLResponse, response_model=None)
 async def servers_import_submit(
-    request: Request, state: ServerState = Depends(get_server_state), file: UploadFile = File(...)
+    request: Request,
+    state: ServerState = Depends(get_server_state),
+    admin_username: str = Depends(require_admin_session),
+    file: UploadFile = File(...),
 ) -> HTMLResponse | RedirectResponse:
+
     tmp_path: str | None = None
     try:
         content = await file.read()
         with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp:
             tmp.write(content)
             tmp_path = tmp.name
+        before_all = await asyncio.to_thread(state.app_ctx.servers.audit_snapshot)
         await asyncio.to_thread(state.app_ctx.servers.csv_import, tmp_path)
     except Exception as e:
         return templates.TemplateResponse(request, "admin/servers_import.html", {"error": str(e)})
     finally:
         if tmp_path:
             os.unlink(tmp_path)
+
+    after_all = await asyncio.to_thread(state.app_ctx.servers.audit_snapshot)
+    counts = SERVERS_AUDIT.log_changes(client_host(request), admin_username, before_all, after_all, "CSV import")
+    msg = (
+        f"Servers imported by admin {admin_username!r} "
+        f"({counts['server.create']} created, {counts['server.update']} updated)"
+    )
+    audit("server.import", client_host(request), msg, actor=admin_username)
 
     return RedirectResponse(url="/admin/servers?msg=Servers+imported", status_code=status.HTTP_303_SEE_OTHER)
 
@@ -362,9 +418,11 @@ def servers_export(
         return RedirectResponse(url="/admin/servers?error=Export+failed", status_code=status.HTTP_303_SEE_OTHER)
 
     if include_pwds:
-        log(f"Servers exported with their passwords by admin '{admin_username}'", logging.WARNING)
+        msg, level = f"Servers exported with their passwords by admin {admin_username!r}", logging.WARNING
     else:
-        log(f"Servers exported without their passwords by admin '{admin_username}'", logging.INFO)
+        msg, level = f"Servers exported without their passwords by admin {admin_username!r}", logging.INFO
+
+    audit("server.export", client_host(request), msg, actor=admin_username, level=level)
 
     return FileResponse(
         tmp_path,

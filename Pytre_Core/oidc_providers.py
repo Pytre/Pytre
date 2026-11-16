@@ -1,5 +1,6 @@
 import logging
 from enum import Enum
+from typing import Any, ClassVar
 from urllib.parse import urlparse
 from uuid import UUID
 
@@ -7,7 +8,7 @@ from pykeepass.entry import Entry
 from pykeepass.group import Group
 
 from Pytre_Core.kee import Kee
-from Pytre_Core.utils import log as _log
+from Pytre_Core.utils import log as _log, secret_fingerprint
 
 
 DEFAULT_SCOPES = "openid profile"  # profile carries preferred_username, the default username claim
@@ -86,6 +87,8 @@ class OidcProviders:
 
 
 class OidcProvider:
+    AUDIT_SECRETS: ClassVar[tuple[str, ...]] = ("client_secret",)  # audit fields only telling if a secret changed
+
     def __init__(self, providers: OidcProviders, entry: Entry | None = None) -> None:
         self.providers: OidcProviders = providers
 
@@ -115,6 +118,21 @@ class OidcProvider:
     @label.setter
     def label(self, value) -> None:
         self.raw_label = value
+
+    def audit_fields(self) -> dict[str, Any]:
+        """The fields of the provider the audit log follows. Those in AUDIT_SECRETS hold a fingerprint of a secret,
+        never the secret itself (see secret_fingerprint): only their change is logged. The label is the one
+        entered, without the one deduced from the issuer."""
+        return {
+            "issuer": self.issuer,
+            "label": self.raw_label,
+            "enabled": self.enabled,
+            "client_id": self.client_id,
+            "client_secret": secret_fingerprint(self.client_secret),
+            "scopes": self.scopes,
+            "username_claim": self.username_claim,
+            "public_base_url": self.public_base_url,
+        }
 
     def _load_from_entry(self, entry: Entry):
         self.uuid = str(entry.uuid)

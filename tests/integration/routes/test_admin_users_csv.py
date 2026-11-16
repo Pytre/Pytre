@@ -10,7 +10,9 @@ import pytest
 
 from Pytre_Core.context import AppContext
 from Pytre_Core.users import User, verify_password
+from tests.conftest import audit_fields, audit_records
 from tests.integration.conftest import TEST_DB_PASSWORD, TEST_USER_PASSWORD, TEST_USERNAME
+from tests.integration.routes.conftest import TESTCLIENT_HOST
 
 pytestmark = pytest.mark.integration
 
@@ -72,11 +74,9 @@ def test_remote_export_has_no_password_hash(admin_client, caplog):
         response = admin_client.get("/admin/users/export")
 
     assert "Password Hash" not in _exported_rows(response)[TEST_USERNAME]
-    assert any(
-        r.levelno == logging.INFO
-        and r.message == f"Users exported without their password hashes by admin '{TEST_USERNAME}'"
-        for r in caplog.records
-    )
+    [record] = audit_records(caplog, "user.export")
+    assert record.levelno == logging.INFO
+    assert record.message.startswith(f"Users exported without their password hashes by admin '{TEST_USERNAME}' from ")
 
 
 def test_local_export_includes_password_hashes_and_logs_a_warning(local_admin_client, caplog):
@@ -84,11 +84,10 @@ def test_local_export_includes_password_hashes_and_logs_a_warning(local_admin_cl
         response = local_admin_client.get("/admin/users/export")
 
     assert verify_password(TEST_USER_PASSWORD, _exported_rows(response)[TEST_USERNAME]["Password Hash"])
-    assert any(
-        r.levelno == logging.WARNING
-        and r.message == f"Users exported with their password hashes by admin '{TEST_USERNAME}'"
-        for r in caplog.records
-    )
+    [record] = audit_records(caplog, "user.export")
+    assert record.levelno == logging.WARNING
+    assert record.message == f"Users exported with their password hashes by admin '{TEST_USERNAME}' from 127.0.0.1"
+    assert audit_fields(record)["actor"] == TEST_USERNAME
 
 
 def test_reimporting_a_remote_export_keeps_the_passwords(isolated_admin_client):
@@ -114,3 +113,62 @@ def test_users_list_tells_a_remote_export_has_no_password_hash(admin_client):
 
     assert "Password hashes are only included when exporting from the server itself" in page
     assert "pytreConfirmDownload(this.dataset.confirm, '/admin/users/export')" in page  # asks before exporting
+
+
+# ================================================================================
+# Audit log
+# ================================================================================
+
+
+def test_import_is_audited_for_each_user_it_created_or_updated_then_summed_up(isolated_admin_client, caplog):
+    isolated_admin_client.post(
+        "/admin/users/new", data={"username": "unchanged", "display_name": "Same", "auth_type": "none", "password": ""}
+    )
+    csv_content = (
+        "id;display name;admin;groups\n"
+        "imported_user;Imported User;0;\n"
+        f"{TEST_USERNAME};Renamed;1;\n"
+        "unchanged;Same;0;\n"
+    )
+    caplog.clear()
+
+    with caplog.at_level(logging.INFO):
+        isolated_admin_client.post(
+            "/admin/users/import", files={"file": ("users.csv", csv_content.encode("utf-8-sig"), "text/csv")}
+        )
+
+    events = [(audit_fields(r)["event"], audit_fields(r)["target"]) for r in audit_records(caplog)]
+    assert events == [
+        ("user.update", TEST_USERNAME),
+        ("user.create", "imported_user"),
+        ("user.import", None),
+    ]  # "unchanged" left out
+    [update] = audit_records(caplog, "user.update")
+    assert audit_fields(update)["changes"] == {"display_name": ["Test User", "Renamed"]}
+    assert "(CSV import)" in update.message
+    [summary] = audit_records(caplog, "user.import")
+    assert summary.message == f"Users imported by admin '{TEST_USERNAME}' (1 created, 1 updated) from {TESTCLIENT_HOST}"
+
+
+def test_import_making_a_user_admin_is_audited_as_a_warning(isolated_admin_client, caplog):
+    csv_content = "id;display name;admin;groups\nimported_admin;Imported Admin;1;\n"
+
+    with caplog.at_level(logging.INFO):
+        isolated_admin_client.post(
+            "/admin/users/import", files={"file": ("users.csv", csv_content.encode("utf-8-sig"), "text/csv")}
+        )
+
+    [record] = audit_records(caplog, "user.create")
+    assert record.levelno == logging.WARNING
+    assert audit_fields(record)["changes"]["admin"] == [None, True]
+
+
+def test_failed_import_is_not_audited(isolated_admin_client, caplog):
+    csv_content = "id;description\nincomplete_user;Incomplete\n"
+
+    with caplog.at_level(logging.INFO):
+        isolated_admin_client.post(
+            "/admin/users/import", files={"file": ("users.csv", csv_content.encode("utf-8-sig"), "text/csv")}
+        )
+
+    assert audit_records(caplog) == []

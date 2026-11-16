@@ -10,19 +10,20 @@ never hands the browser a cookie: it bounces the browser back to a loopback redi
 short-lived one-time code, which the client then exchanges via POST /login/sso/token.
 """
 
-from urllib.parse import parse_qs, quote_plus, unquote, urlparse
+import logging
+from urllib.parse import parse_qs, unquote, urlparse
 
 from unittest.mock import AsyncMock
 
 from authlib.oauth2.rfc7636 import create_s256_code_challenge
 
 from Pytre_Core.oidc_client import OidcDiscoveryError
-from Pytre_Core.oidc_providers import OidcProvider
-from Pytre_Core.users import AuthType
 from Pytre_Server.server_state import SsoFlow
-from tests.integration.conftest import TEST_DB_PASSWORD
+from tests.conftest import audit_fields, audit_records
 from tests.integration.routes.conftest import (
     SSO_ISSUER,
+    SSO_USERNAME,
+    TESTCLIENT_HOST,
     TokenExchangeState,
     extract_state_token,
     make_oidc_provider,
@@ -342,6 +343,80 @@ def test_sso_token_rejects_an_unknown_code(isolated_client):
     response = isolated_client.post("/login/sso/token", json={"code": "never-issued", "code_verifier": "a" * 64})
 
     assert response.status_code == 401
+
+
+def test_sso_token_audits_the_sign_in_with_the_client_address(
+    isolated_client, install_idp_transport, fake_token_exchange, caplog
+):
+    """The sign-in is complete once the client holds its tokens: the callback before it logs no success."""
+    app_ctx = isolated_client.app.state.server.app_ctx
+    make_oidc_provider(app_ctx)
+    make_oidc_user(app_ctx, admin=False)
+
+    with caplog.at_level(logging.INFO):
+        code, _state, code_verifier = _run_full_login(isolated_client, fake_token_exchange)
+        assert audit_records(caplog) == []
+
+        isolated_client.post("/login/sso/token", json={"code": code, "code_verifier": code_verifier})
+
+    [record] = audit_records(caplog)
+    assert record.levelno == logging.INFO
+    assert record.message == f"User '{SSO_USERNAME}' logged in through SSO from {TESTCLIENT_HOST}"
+    assert audit_fields(record) == {
+        "event": "client.sso_login",
+        "actor": SSO_USERNAME,
+        "ip": TESTCLIENT_HOST,
+        "target": SSO_USERNAME,
+        "changes": None,
+    }
+
+
+def test_sso_token_rejecting_a_code_is_not_audited(isolated_client, caplog):
+    """The route isn't throttled: an audit event per refused code would let anyone fill the audit log."""
+    with caplog.at_level(logging.INFO):
+        response = isolated_client.post("/login/sso/token", json={"code": "never-issued", "code_verifier": "a" * 64})
+
+    assert response.status_code == 401
+    assert audit_records(caplog) == []
+
+
+def test_sso_callback_audits_a_refusal_by_the_identity_provider(
+    isolated_client, install_idp_transport, fake_token_exchange, caplog
+):
+    app_ctx = isolated_client.app.state.server.app_ctx
+    make_oidc_provider(app_ctx)
+    _code_verifier, code_challenge = _code_verifier_and_challenge()
+    _start, state_token = _start_client_sso(isolated_client, fake_token_exchange, code_challenge)
+
+    with caplog.at_level(logging.INFO):
+        isolated_client.get(
+            f"/login/sso/callback?state={state_token}&error=access_denied&error_description=User+cancelled",
+            follow_redirects=False,
+        )
+
+    [record] = audit_records(caplog)
+    assert record.levelno == logging.INFO
+    assert record.message == (
+        f"Client SSO sign-in refused by the identity provider: 'access_denied': 'User cancelled' from {TESTCLIENT_HOST}"
+    )
+    assert audit_fields(record)["event"] == "client.sso_login.failed"
+
+
+def test_sso_callback_audits_an_unknown_username_claim(
+    isolated_client, install_idp_transport, fake_token_exchange, caplog
+):
+    app_ctx = isolated_client.app.state.server.app_ctx
+    make_oidc_provider(app_ctx)
+    _code_verifier, code_challenge = _code_verifier_and_challenge()
+    _start, state_token = _start_client_sso(isolated_client, fake_token_exchange, code_challenge)
+
+    with caplog.at_level(logging.INFO):
+        isolated_client.get(f"/login/sso/callback?state={state_token}&code=fake-code", follow_redirects=False)
+
+    [record] = audit_records(caplog)
+    assert audit_fields(record)["event"] == "client.sso_login.failed"
+    assert audit_fields(record)["ip"] == TESTCLIENT_HOST
+    assert record.message.startswith("Client SSO sign-in failed (")
 
 
 # ================================================================================

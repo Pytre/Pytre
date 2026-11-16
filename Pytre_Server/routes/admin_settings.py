@@ -14,17 +14,13 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, Form, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from Pytre_Core.utils import log as _log
+from Pytre_Server.audit import audit, changes_between
 from Pytre_Server.routes.admin_auth import is_loopback, require_local_connection
-from Pytre_Server.server_state import ServerState, get_server_state
+from Pytre_Server.server_state import ServerState, client_host, get_server_state
 from Pytre_Server.templating import templates
 
 
 router = APIRouter(prefix="/settings")
-
-
-def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__) -> None:
-    _log(msg, level=level, sublogger=sublogger)
 
 
 @dataclass
@@ -76,6 +72,7 @@ def settings_save(
 
     settings = state.app_ctx.settings
     original = (settings.queries_folder, settings.logs_are_on, settings.logs_folder)
+    before = settings.audit_fields()
 
     settings.queries_folder = Path(queries_folder)
     settings.logs_are_on = logs_are_on is not None
@@ -90,9 +87,10 @@ def settings_save(
         context = _SettingsContext(queries_folder, logs_are_on is not None, logs_folder, True, error=str(e))
         return templates.TemplateResponse(request, "admin/settings.html", context.to_dict())
 
-    log(
-        f"Settings changed by admin '{admin_username}': queries_folder='{settings.queries_folder}', "
-        f"logs_are_on={settings.logs_are_on}, logs_folder='{settings.logs_folder}'",
-        logging.WARNING,
-    )
+    changes = changes_between(before, settings.audit_fields())
+    if changes:
+        host = client_host(request)
+        msg = f"Settings changed by admin {admin_username!r}"
+        audit("settings.update", host, msg, actor=admin_username, changes=changes, level=logging.WARNING)
+
     return RedirectResponse(url="/admin/settings?msg=Settings+saved", status_code=status.HTTP_303_SEE_OTHER)

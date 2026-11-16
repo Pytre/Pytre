@@ -4,12 +4,15 @@ Uses the shared `client` fixture (dedicated test KeePass database) - runs by def
 personal setup or docker container needed.
 """
 
+import logging
 from unittest.mock import Mock
 
 import pytest
 
-from Pytre_Core.users import verify_password
+from Pytre_Core.users import AuthType, verify_password
+from Pytre_Server.audit import shorten
 from Pytre_Server.login_throttle import USER_IP_MAX_ATTEMPTS
+from tests.conftest import audit_fields, audit_records
 from tests.integration.conftest import TEST_USER_PASSWORD, TEST_USERNAME
 from tests.integration.routes.conftest import (
     IP_THRESHOLD,
@@ -18,6 +21,7 @@ from tests.integration.routes.conftest import (
     every_password_slot_taken,
     fail_from_one_address,
     lower_ip_threshold,
+    make_oidc_user,
 )
 
 pytestmark = pytest.mark.integration
@@ -185,3 +189,135 @@ def test_login_failure_does_not_make_its_address_known(client):
 
     known_addresses = client.app.state.server.resources.login_throttle.known_addresses
     assert known_addresses.is_known(TEST_USERNAME.lower(), "10.0.0.7") is False
+
+
+# ================================================================================
+# Audit log
+# ================================================================================
+
+
+def test_login_success_is_audited_with_the_client_address(client, caplog):
+    with caplog.at_level(logging.INFO):
+        client_from(client, "10.0.0.7").post("/login", json=CORRECT_CREDENTIALS)
+
+    [record] = audit_records(caplog)
+    assert record.levelno == logging.INFO
+    assert record.message == f"User '{TEST_USERNAME}' logged in from 10.0.0.7"
+    assert audit_fields(record) == {
+        "event": "client.login",
+        "actor": TEST_USERNAME,
+        "ip": "10.0.0.7",
+        "target": TEST_USERNAME,
+        "changes": None,
+    }
+
+
+def test_login_success_is_audited_with_the_stored_username(client, caplog):
+    """Usernames match whatever their case: the log names the account as it is stored."""
+    with caplog.at_level(logging.INFO):
+        client.post("/login", json={"username": TEST_USERNAME.upper(), "password": TEST_USER_PASSWORD})
+
+    [record] = audit_records(caplog, "client.login")
+    assert audit_fields(record)["actor"] == TEST_USERNAME
+
+
+def test_login_failure_is_audited_with_the_client_address_and_its_reason(client, caplog):
+    with caplog.at_level(logging.INFO):
+        client_from(client, "10.0.0.7").post("/login", json=WRONG_CREDENTIALS)
+
+    [record] = audit_records(caplog)
+    assert record.levelno == logging.INFO
+    assert record.message == f"Failed login attempt for '{TEST_USERNAME}': wrong password from 10.0.0.7"
+    assert audit_fields(record) == {
+        "event": "client.login.failed",
+        "actor": None,
+        "ip": "10.0.0.7",
+        "target": TEST_USERNAME,
+        "changes": None,
+    }
+
+
+def test_login_failure_of_an_unknown_account_is_audited_as_such(client, caplog):
+    with caplog.at_level(logging.INFO):
+        client.post("/login", json={"username": "no-such-user", "password": "anything"})
+
+    [record] = audit_records(caplog, "client.login.failed")
+    assert record.message.startswith("Failed login attempt for 'no-such-user': unknown account from ")
+
+
+@pytest.mark.parametrize(
+    ("auth_type", "reason"),
+    [(AuthType.NONE, "disabled account"), (AuthType.OIDC, "OIDC account, without password")],
+    ids=["disabled", "oidc"],
+)
+def test_login_failure_of_an_account_without_password_is_audited_as_such(isolated_client, caplog, auth_type, reason):
+    make_oidc_user(isolated_client.app.state.server.app_ctx, username="other_user", auth_type=auth_type)
+
+    with caplog.at_level(logging.INFO):
+        isolated_client.post("/login", json={"username": "other_user", "password": "anything"})
+
+    [record] = audit_records(caplog, "client.login.failed")
+    assert record.message.startswith(f"Failed login attempt for 'other_user': {reason} from ")
+
+
+def test_login_failure_log_shortens_a_long_username(client, caplog):
+    username = "x" * 5000
+
+    with caplog.at_level(logging.INFO):
+        client.post("/login", json={"username": username, "password": "anything"})
+
+    [record] = audit_records(caplog, "client.login.failed")
+    assert username not in record.message
+    assert shorten(username) in record.message
+    assert audit_fields(record)["target"] == shorten(username)
+
+
+def test_login_failure_log_escapes_a_line_break_in_the_username(client, caplog):
+    """A line break must not forge a log line, such as a successful login of another account."""
+    username = f"no-such-user\n2026-11-15 INFO User '{TEST_USERNAME}' logged in"
+
+    with caplog.at_level(logging.INFO):
+        client.post("/login", json={"username": username, "password": "anything"})
+
+    [record] = audit_records(caplog, "client.login.failed")
+    assert "\n" not in record.message
+    assert "no-such-user\\n2026-11-15" in record.message
+
+
+def test_login_failure_is_not_audited_as_a_success(client, caplog):
+    with caplog.at_level(logging.INFO):
+        client.post("/login", json=WRONG_CREDENTIALS)
+
+    assert audit_records(caplog, "client.login") == []
+
+
+def test_login_refused_by_the_throttle_is_not_audited(client, caplog):
+    """Once the threshold is logged, an attacker's next attempts must not fill the audit log."""
+    for _ in range(USER_IP_MAX_ATTEMPTS):
+        client.post("/login", json=WRONG_CREDENTIALS)
+    caplog.clear()
+
+    with caplog.at_level(logging.INFO):
+        response = client.post("/login", json=CORRECT_CREDENTIALS)
+
+    assert response.status_code == 429
+    assert audit_records(caplog) == []
+
+
+def test_login_throttle_threshold_is_audited_with_the_client_address(client, caplog):
+    with caplog.at_level(logging.INFO):
+        for _ in range(USER_IP_MAX_ATTEMPTS):
+            client_from(client, "10.0.0.7").post("/login", json=WRONG_CREDENTIALS)
+
+    [record] = audit_records(caplog, "login.throttled")
+    assert audit_fields(record)["ip"] == "10.0.0.7"
+    assert audit_fields(record)["target"] == f"{TEST_USERNAME}@10.0.0.7"
+
+
+def test_login_refused_for_lack_of_a_password_slot_is_not_audited(client, monkeypatch, caplog):
+    """Refused before any check: logging each one would let an attacker fill the audit log."""
+    with every_password_slot_taken(client.app.state.server.resources, monkeypatch), caplog.at_level(logging.INFO):
+        response = client.post("/login", json=CORRECT_CREDENTIALS)
+
+    assert response.status_code == 429
+    assert audit_records(caplog) == []

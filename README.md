@@ -16,7 +16,7 @@ I am not looking for contributions but if you have any questions I would be happ
 - [Queries](#queries): writing them, where they are read from
 - [Download](#download)
 - [Enterprise deployment](#enterprise-deployment): MSI, zip, enterprise policy
-- [Server security](#server-security): reverse proxy, sign-in throttling, how queries are run, web administration
+- [Server security](#server-security): reverse proxy, sign-in throttling, how queries are run, web administration, audit log
 - [Server options](#server-options)
 - [Setup from source](#setup-from-source)
 - [License](#license)
@@ -57,13 +57,15 @@ Before making the server reachable from other computers, read [Server security](
 
 ## Enterprise deployment
 
-All three formats of the client suit a managed deployment. The server is only published as a single executable: to deploy it, see [Server security](#server-security).
+The server is only published as a single executable: to deploy it, see [Server security](#server-security), and set `--audit-file` to have its audit events collected, see [Audit log](#audit-log).
 
-- `Pytre_Client_<version>.msi` (recommended, stable releases only): installs the client folder, which never updates itself
+All three formats of the client suit a managed deployment:
+
+- `Pytre_Client_<version>.msi`: recommended, stable releases only. Installs the client folder with a policy file turning off its updates and plain HTTP to remotes
 - `Pytre_Client_<version>.zip`: the same folder, to extract yourself, also published for pre-releases
 - `Pytre_Client_<version>.exe`: the client as a single executable
 
-The zip and the executable update themselves: deploy them with a `Pytre.policy.json` file to control their updates, see [enterprise policy](#enterprise-policy).
+The zip and the executable come without a policy file and update themselves: deploy them with a `Pytre.policy.json` file to control their updates and plain HTTP to remotes, see [enterprise policy](#enterprise-policy).
 
 Releases are immutable and each one publishes `SHA256SUMS.txt`, so a file can be checked before being deployed, e.g. with `Get-FileHash <file> -Algorithm SHA256` in PowerShell.
 
@@ -172,6 +174,7 @@ Failed sign-ins, to the client API and to the web administration alike, are coun
 - An account targeted from many addresses stays usable from the addresses it signed in from, or refreshed its session from, in the last 30 days.
 - At most 2 passwords are checked at once: beyond, a sign-in waits up to half a second for its turn, then is refused (HTTP 429).
 - Counts are kept in memory only and lost when the server restarts.
+- Every sign-in is logged with its client address, successful or not, a failure with its reason (unknown account, wrong password...), as well as each account or address reaching a threshold. See [Audit log](#audit-log).
 
 ### Running queries
 
@@ -203,6 +206,49 @@ The web administration is served at `/admin`, by the same process and on the sam
 - Queries are files in the server's queries folder: the web administration lists them, reloads them from disk, and can exempt one from the version check for a limited time.
 - An admin can reveal, replace or delete the master password of the settings database stored in the keyring, and re-encrypt the database with a new one, only from the server itself (e.g. `http://127.0.0.1:8000/admin`, or through an SSH tunnel): requests through a reverse proxy are refused. Each of these actions is logged as a warning.
 - The general settings (queries folder, query execution logs and their folder) can also only be changed from the server itself: through a reverse proxy, the page is read-only. Each change is logged as a warning.
+- Every change made in the web administration is written to the audit log, with the admin, their address and what changed, see [Audit log](#audit-log).
+
+### Audit log
+
+Security events are logged with who, from which address, on what, and what changed: sign-ins and changes made in the web administration. They are written to the server logs, shown in the web administration, and with `--audit-file` to a separate file, one JSON object per line, for a log collector or a SIEM agent:
+
+```json
+{"time": "2026-11-19T10:12:03.512+01:00", "level": "WARNING", "event": "user.update", "actor": "alice", "ip": "10.0.0.7", "target": "bob", "changes": {"admin": [false, true]}, "message": "User 'bob' updated by admin 'alice' from 10.0.0.7: admin false -> true"}
+```
+
+| Field | Content |
+|---|---|
+| `time` | Local time with its UTC offset, to the millisecond |
+| `level` | `INFO` or `WARNING` |
+| `event` | What happened, see below |
+| `actor` | Account that did it: the admin, or the user once signed in. `null` for a failed sign-in |
+| `ip` | Client address, as given by the reverse proxy (see `--forwarded-allow-ips`) |
+| `target` | Account, server, SSO provider, query or attribute concerned |
+| `changes` | What changed: `{"field": [before, after]}`, `before` being `null` for a creation. A password or a secret is only given as `"changed"`, never its value |
+| `message` | The same event in words, as in the server logs |
+
+| Events | Level |
+|---|---|
+| `client.login`, `admin.login`, `client.sso_login`, `admin.sso_login`: sign-ins to the client API and to the web administration | `INFO` |
+| The same with `.failed`, with the reason in the message (unknown account, wrong password, not an administrator, refused by the identity provider...) | `INFO`, `WARNING` for a password sign-in to the web administration, an account that isn't an administrator and the unexpected SSO errors |
+| `login.throttled`: an account or an address reaching a threshold, see [Sign-in throttling](#sign-in-throttling) | `INFO` for an account from one address, otherwise `WARNING` |
+| `admin.logout`, `client.password_change` | `INFO` |
+| `admin.bootstrap`: creation of the first admin account | `WARNING` |
+| `user.create`, `user.update`, `user.delete`, `server.*`, `sso_provider.*`: from their form, a CSV import or a change of groups (in the message, e.g. `(CSV import)`). Changing a provider's issuer or deleting it also gives a `user.update` for each account whose link changes | `INFO`. `WARNING` for a deletion, an account becoming admin, a change of the target of a server (type, host, port, instance, certificate check) and any change of an SSO provider |
+| `server.update.failed`: a change of the target of a server refused without its password | `WARNING` |
+| `user.import`, `server.import`: the summary of a CSV import | `INFO` |
+| `user.export`, `server.export` | `WARNING` with the passwords or password hashes, otherwise `INFO` |
+| `user.attribute.add`, `user.attribute.remove` | `INFO`, `WARNING` for a removal: it erases the values of every account |
+| `settings.update`, `master_key.reveal`, `master_key.set`, `master_key.delete`, `master_key.db_password_change` | `WARNING` |
+| `local_action.failed`: an action reserved to the server itself, refused to a remote session | `WARNING` |
+| `query_catalog.reload`: the queries added, changed and removed by a reload | `INFO` |
+| `query.hash_exemption`: an exemption from the version check set or cleared, with its end | `INFO` |
+
+- A save that changes nothing isn't logged. A sign-in refused for throttling or because too many passwords are being checked isn't either, so an attack can't fill the log: only the threshold being reached is.
+- The values sent by the client are cut to 200 characters. A line break can't forge an entry: it is escaped in the audit file, and the lines after the first one are indented in the server logs.
+- The query executions have their own log, with their parameters, set in the general settings. The audit log doesn't repeat them.
+- By default the audit file rotates at 10 MB and keeps 20 previous files: set `--audit-max-mb` and `--audit-backups` for the retention your security policy asks for, or rely on the collector keeping the events.
+- The audit file holds account names and addresses: only the server's service account should be able to write to it, and only the collector or the admins to read it. Being a plain file, it can't prove it wasn't changed: send it to a collector as it is written.
 
 ## Server options
 
@@ -218,7 +264,12 @@ The same options apply to `Pytre_Server.exe` and `python -m Pytre_Server`, `--he
 | `--max-concurrency-per-user` | `4` | Maximum number of requests running at once for each user |
 | `--heartbeat-secs` | `30` | Seconds between keep-alive pings while a query runs, `0` to disable them |
 | `--log-file` | none | File the logs are written to, also used to refill the web administration logs at startup |
+| `--log-max-mb` | `5` | Size of the log file before it rotates, in MB |
+| `--log-backups` | `1` | Number of rotated log files kept |
 | `--log-buffer-mb` | `5` | Size of the logs kept in memory for the web administration, in MB |
+| `--audit-file` | none | File the audit events (sign-ins, administration changes) are written to, one JSON object per line. They are also in the logs |
+| `--audit-max-mb` | `10` | Size of the audit file before it rotates, in MB |
+| `--audit-backups` | `20` | Number of rotated audit files kept |
 
 Maintenance commands, run one at a time without starting the server:
 

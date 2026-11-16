@@ -9,9 +9,10 @@ from pathlib import Path
 from typing import Self
 
 from Pytre_Core.utils import LOGGER_ROOT_NAME, log as _log
-from Pytre_Server.logs import ENCODING, MAX_LOG_SIZE_MB
+from Pytre_Server.logs import CONTINUE_INDENT, ENCODING, LOG_BACKUP_COUNT
 
 
+BUFFER_MAX_SIZE_MB = 5  # MB of logs kept in memory for the web admin logs page
 SEPARATOR_MESSAGE = str("-") * 25 + " Logs below were loaded from files and may be incomplete " + str("-") * 25
 
 
@@ -86,9 +87,9 @@ class LogBufferHandler(logging.Handler):
 
     def __init__(self, max_bytes: int) -> None:
         super().__init__(level=logging.DEBUG)
-        self._max_bytes = max_bytes
+        self._max_bytes: int = max_bytes
         self._buffer: deque[LogEntry] = deque()
-        self._total_bytes = 0
+        self._total_bytes: int = 0
         self._seq = itertools.count(1)
         self.setFormatter(logging.Formatter("%(message)s"))
 
@@ -133,12 +134,14 @@ class LogBufferHandler(logging.Handler):
             older = [e for e in self._buffer if e.seq < before]
         return list(reversed(older[-limit:]))
 
-    def load_from_file(self, log_file: Path) -> None:
-        """Prefills a newly created buffer from the rotated file then the active one, oldest first,
+    def load_from_file(self, log_file: Path, backup_count: int = LOG_BACKUP_COUNT) -> None:
+        """Prefills a newly created buffer from the `backup_count` rotated files then the active one, oldest first,
         followed by a separator entry if anything was loaded. Meant for startup, before other threads
         can log. The byte limit applies. An unreadable file does not raise, it's only logged."""
         errors: list[str] = []
-        for path in (log_file.with_name(f"{log_file.name}.1"), log_file):
+
+        backups = [log_file.with_name(f"{log_file.name}.{i}") for i in range(backup_count, 0, -1)]
+        for path in [*backups, log_file]:
             try:
                 self._load_lines(path)
             except FileNotFoundError:
@@ -173,7 +176,8 @@ class LogBufferHandler(logging.Handler):
                 entry = LogEntry.parse_line(line, next(self._seq))
                 if entry is None:
                     if current is not None:
-                        current = replace(current, message=f"{current.message}\n{line}")
+                        continuation = line.removeprefix(CONTINUE_INDENT)
+                        current = replace(current, message=f"{current.message}\n{continuation}")
                     continue
 
                 if current is not None:
@@ -185,8 +189,10 @@ class LogBufferHandler(logging.Handler):
             self._append(current)
 
 
-def setup_log_buffer(max_mb: int = MAX_LOG_SIZE_MB, log_file: Path | str | None = None) -> LogBufferHandler:
-    """Idempotent: if a LogBufferHandler is already attached returns it unchanged (max_mb is then
+def setup_log_buffer(
+    max_mb: int = BUFFER_MAX_SIZE_MB, backup_count: int = LOG_BACKUP_COUNT, log_file: Path | str | None = None
+) -> LogBufferHandler:
+    """Idempotent: if a LogBufferHandler is already attached returns it unchanged (max_mb and backup_count are then
     ignored - the buffer keeps whatever size it was first created with in this process).
     Otherwise creates, attaches, and returns a new one, prefilled from `log_file` if there is one.
 
@@ -206,6 +212,6 @@ def setup_log_buffer(max_mb: int = MAX_LOG_SIZE_MB, log_file: Path | str | None 
         logger.setLevel(handler.level)
 
     if log_file is not None:
-        handler.load_from_file(Path(log_file))
+        handler.load_from_file(Path(log_file), backup_count=backup_count)
 
     return handler

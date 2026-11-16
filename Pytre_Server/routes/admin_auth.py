@@ -13,6 +13,7 @@ from Pytre_Core.remote_protocol import SsoErrorCode
 from Pytre_Core.users import AuthType, User, hash_password
 from Pytre_Core.utils import log as _log
 
+from Pytre_Server.audit import audit, shorten, sign_in_failure
 from Pytre_Server.auth_token import JWT_ALGORITHM, TokenType, create_token, decode_token
 from Pytre_Server.oidc import OidcLoginError, handle_callback, start_login
 from Pytre_Server.server_state import (
@@ -201,8 +202,10 @@ def require_local_connection(request: Request, admin_username: str = Depends(req
     come straight from the server itself (see is_loopback), so a stolen session can't be used remotely.
     Returns the admin username. Raises HTTPException(403) otherwise."""
     if not is_loopback(request):
-        msg = f"Local-only action refused for admin '{admin_username}' on {request.url.path}: not a local connection"
-        log(msg, logging.WARNING)
+        host = client_host(request)
+        path = shorten(request.url.path)
+        msg = f"Local-only action refused for admin {admin_username!r} on {path!r}: not a local connection"
+        audit("local_action.failed", host, msg, actor=admin_username, target=path, level=logging.WARNING)
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only available from the server itself")
     return admin_username
 
@@ -291,14 +294,18 @@ async def admin_login_submit(
 
     if not is_valid_admin or not password_ok:
         resources.login_throttle.record_failure(username, host)
-        log(f"Failed admin login attempt for '{username}'", logging.WARNING)
+
+        attempted = shorten(username)
+        msg = f"Failed admin login attempt for {attempted!r}: {sign_in_failure(user, admin_only=True)}"
+        audit("admin.login.failed", host, msg, target=attempted, level=logging.WARNING)
+
         context = {"error": "Invalid username or password", "next": next}
         return templates.TemplateResponse(
             request, "admin/login.html", context, status_code=status.HTTP_401_UNAUTHORIZED
         )
 
     resources.login_throttle.record_success(username, host)
-    log(f"Admin '{user.username}' logged in", logging.INFO)
+    audit("admin.login", host, f"Admin {user.username!r} logged in", actor=user.username, target=user.username)
 
     response = RedirectResponse(_safe_next(next), status_code=status.HTTP_303_SEE_OTHER)
     _issue_session_cookie(response, request, state, user.username)
@@ -349,15 +356,32 @@ def admin_bootstrap_submit(
             status_code=status.HTTP_400_BAD_REQUEST,
         )
 
-    log(f"First admin account '{user.username}' created via bootstrap", logging.WARNING)
+    host = client_host(request)
+    msg = f"First admin account {user.username!r} created via bootstrap"
+    audit("admin.bootstrap", host, msg, actor=user.username, target=user.username, level=logging.WARNING)
 
     response = RedirectResponse(_safe_next(next), status_code=status.HTTP_303_SEE_OTHER)
     _issue_session_cookie(response, request, state, user.username)
     return response
 
 
+def _session_username(request: Request, state: ServerState) -> str | None:
+    """Username of the admin session cookie, None without a valid one (absent, expired, forged...)."""
+    token = request.cookies.get(COOKIE_NAME)
+    if not token:
+        return None
+    try:
+        return decode_token(token, state.app_ctx.settings.jwt_secret, TokenType.ADMIN)["sub"]
+    except jwt.InvalidTokenError:
+        return None
+
+
 @router.post("/logout")
-def admin_logout() -> RedirectResponse:
+def admin_logout(request: Request, state: ServerState = Depends(get_server_state)) -> RedirectResponse:
+    username = _session_username(request, state)
+    if username is not None:
+        audit("admin.logout", client_host(request), f"Admin {username!r} logged out", actor=username, target=username)
+
     response = RedirectResponse("/admin/login", status_code=status.HTTP_303_SEE_OTHER)
     response.delete_cookie(COOKIE_NAME, path="/admin")
     return response
@@ -380,7 +404,7 @@ async def admin_login_sso_start(
     try:
         auth_url = await start_login(state.resources, oidc_provider, SsoFlow.ADMIN, _safe_next(next))
     except OidcLoginError as e:
-        log(f"SSO sign-in to the web admin could not start ({e.code}): {e}", logging.WARNING)
+        log(f"SSO sign-in to the web admin could not start ({e.code}): {str(e)!r}", logging.WARNING)
         return _sso_error_redirect(e.code)
 
     return RedirectResponse(auth_url, status_code=status.HTTP_303_SEE_OTHER)
@@ -394,11 +418,14 @@ async def finish_sso_login(
     `state_token`/`code` come from the identity provider's redirect - `error`/`error_description` instead
     if the user denied consent or the provider itself failed."""
 
+    host = client_host(request)
+
     if error:
-        log(
-            f"SSO sign-in to the web admin refused by the identity provider: "
+        msg = (
+            "SSO sign-in to the web admin refused by the identity provider: "
             f"{error[:100]!r}: {error_description[:1000]!r}"
         )
+        audit("admin.sso_login.failed", host, msg)
         return _sso_error_redirect(SsoErrorCode.DENIED)
 
     try:
@@ -411,12 +438,17 @@ async def finish_sso_login(
         )
     except OidcLoginError as e:
         level = logging.INFO if e.code is SsoErrorCode.EXPIRED else logging.WARNING
-        log(f"SSO sign-in to the web admin failed ({e.code}): {e}", level)
+        msg = f"SSO sign-in to the web admin failed ({e.code}): {str(e)!r}"
+        audit("admin.sso_login.failed", host, msg, level=level)
         return _sso_error_redirect(e.code)
 
     if not user.admin:
-        log(f"SSO sign-in to the web admin refused for '{user.username}': not an administrator", logging.WARNING)
+        msg = f"SSO sign-in to the web admin refused for {user.username!r}: not an administrator"
+        audit("admin.sso_login.failed", host, msg, target=user.username, level=logging.WARNING)
         return _sso_error_redirect(SsoErrorCode.NOT_ADMIN)
+
+    msg = f"Admin {user.username!r} logged in through SSO"
+    audit("admin.sso_login", host, msg, actor=user.username, target=user.username)
 
     response = RedirectResponse(_safe_next(next_path), status_code=status.HTTP_303_SEE_OTHER)
     _issue_session_cookie(response, request, state, user.username)

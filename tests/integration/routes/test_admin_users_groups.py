@@ -3,9 +3,14 @@ Integration tests for the /admin/users/groups/{add,remove} routes - bulk group a
 across multiple selected users (mirrors Pytre_Client/app_users.py's GroupsDialog).
 """
 
+import logging
 import re
 
 import pytest
+
+from tests.conftest import audit_fields, audit_records
+from tests.integration.conftest import TEST_USERNAME
+from tests.integration.routes.conftest import TESTCLIENT_HOST
 
 pytestmark = pytest.mark.integration
 
@@ -106,3 +111,42 @@ def test_groups_remove_without_selection_reshows_form_with_error(isolated_admin_
     response = isolated_admin_client.post("/admin/users/groups/remove", data={"uuids": [uuid], "groups": []})
     assert response.status_code == 200
     assert "No group selected" in response.text
+
+
+# ================================================================================
+# Audit log
+# ================================================================================
+
+
+def test_groups_add_is_audited_for_each_user_it_changed(isolated_admin_client, caplog):
+    uuid_a = _create_user(isolated_admin_client, "grp_audit_a")
+    uuid_b = _create_user(isolated_admin_client, "grp_audit_b")
+    isolated_admin_client.post("/admin/users/groups/add", data={"uuids": [uuid_b], "groups": ["sales"]})
+    caplog.clear()
+
+    with caplog.at_level(logging.INFO):
+        isolated_admin_client.post("/admin/users/groups/add", data={"uuids": [uuid_a, uuid_b], "groups": ["sales"]})
+
+    [record] = audit_records(caplog)  # grp_audit_b already had the group: unchanged, not logged
+    assert record.message == (
+        f"User 'grp_audit_a' updated by admin '{TEST_USERNAME}' (groups added) from {TESTCLIENT_HOST}: "
+        'groups [] -> ["sales"]'
+    )
+    assert audit_fields(record)["event"] == "user.update"
+
+
+def test_groups_remove_is_audited_for_each_user_it_changed(isolated_admin_client, caplog):
+    uuid_a = _create_user(isolated_admin_client, "grp_audit_a")
+    uuid_b = _create_user(isolated_admin_client, "grp_audit_b")
+    isolated_admin_client.post(
+        "/admin/users/groups/add", data={"uuids": [uuid_a, uuid_b], "groups": ["sales", "finance"]}
+    )
+    caplog.clear()
+
+    with caplog.at_level(logging.INFO):
+        isolated_admin_client.post("/admin/users/groups/remove", data={"uuids": [uuid_a, uuid_b], "groups": ["sales"]})
+
+    records = audit_records(caplog, "user.update")
+    assert [audit_fields(r)["target"] for r in records] == ["grp_audit_a", "grp_audit_b"]
+    assert all("(groups removed)" in r.message for r in records)
+    assert audit_fields(records[0])["changes"] == {"groups": [["finance", "sales"], ["finance"]]}

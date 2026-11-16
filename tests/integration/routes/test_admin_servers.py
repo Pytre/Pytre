@@ -10,7 +10,9 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from Pytre_Server.server_state import _DriverEntry
+from tests.conftest import audit_fields, audit_records
 from tests.integration.conftest import TEST_USERNAME
+from tests.integration.routes.conftest import TESTCLIENT_HOST
 
 pytestmark = pytest.mark.integration
 
@@ -99,9 +101,11 @@ def test_create_server_is_logged_with_the_admin_username(isolated_admin_client, 
             },
         )
 
-    assert any(
-        f"Server 'logged_server' saved by admin '{TEST_USERNAME}'" in r.message for r in caplog.records
-    )
+    [record] = audit_records(caplog, "server.create")
+    assert record.levelno == logging.INFO
+    assert record.message.startswith(f"Server 'logged_server' created by admin '{TEST_USERNAME}' from {TESTCLIENT_HOST}")
+    assert audit_fields(record)["actor"] == TEST_USERNAME
+    assert audit_fields(record)["target"] == "logged_server"
 
 
 def test_create_server_round_trip_keeps_each_field_distinct(isolated_admin_client):
@@ -405,12 +409,12 @@ def test_bulk_delete_is_logged_per_server_with_the_admin_username(isolated_admin
     with caplog.at_level(logging.INFO):
         isolated_admin_client.post("/admin/servers/delete", data={"uuids": [uuid_a, uuid_b]})
 
-    assert any(
-        f"Server 'bulk_log_a' deleted by admin '{TEST_USERNAME}' (bulk)" in r.message for r in caplog.records
-    )
-    assert any(
-        f"Server 'bulk_log_b' deleted by admin '{TEST_USERNAME}' (bulk)" in r.message for r in caplog.records
-    )
+    records = audit_records(caplog, "server.delete")
+    assert [r.message for r in records] == [
+        f"Server 'bulk_log_a' deleted by admin '{TEST_USERNAME}' from {TESTCLIENT_HOST}",
+        f"Server 'bulk_log_b' deleted by admin '{TEST_USERNAME}' from {TESTCLIENT_HOST}",
+    ]
+    assert all(r.levelno == logging.WARNING for r in records)
 
 
 def test_bulk_delete_reports_partial_failure(isolated_admin_client):
@@ -631,12 +635,13 @@ def test_edit_server_refusal_is_logged_as_a_warning(isolated_admin_client, caplo
             f"/admin/servers/{uuid}/edit", data={**_TARGET_FORM, "password": "", "host": "attacker.example.com"}
         )
 
-    assert any(
-        r.levelno == logging.WARNING
-        and r.message
-        == f"Server 'target_srv' not saved for admin '{TEST_USERNAME}': target changed without its password"
-        for r in caplog.records
+    [record] = audit_records(caplog, "server.update.failed")
+    assert record.levelno == logging.WARNING
+    assert record.message.startswith(
+        f"Target change of server 'target_srv' without its password refused for admin '{TEST_USERNAME}' from "
     )
+    assert audit_fields(record)["changes"]["host"] == ["db.example.com", "attacker.example.com"]
+    assert audit_records(caplog, "server.update") == []
 
 
 def test_edit_server_accepts_a_target_change_with_the_password(isolated_admin_client):
@@ -664,3 +669,75 @@ def test_edit_server_accepts_the_same_target_without_the_password(isolated_admin
 
     assert response.status_code == 303
     assert _stored(uuid).password == "s3cret!"
+
+
+# ================================================================================
+# Audit log
+# ================================================================================
+
+_EDIT_FORM = {**_TARGET_FORM, "password": "", "charset": "UTF-8"}  # the charset the form shows once saved
+
+
+def test_edit_server_is_audited_with_what_changed(isolated_admin_client, caplog):
+    uuid = _create_target_server(isolated_admin_client)
+    caplog.clear()
+
+    with caplog.at_level(logging.INFO):
+        isolated_admin_client.post(f"/admin/servers/{uuid}/edit", data={**_EDIT_FORM, "description": "ERP"})
+
+    [record] = audit_records(caplog)
+    assert record.levelno == logging.INFO
+    assert record.message == (
+        f"Server 'target_srv' updated by admin '{TEST_USERNAME}' from {TESTCLIENT_HOST}: description \"\" -> \"ERP\""
+    )
+    assert audit_fields(record)["event"] == "server.update"
+
+
+def test_edit_server_target_is_audited_as_a_warning_without_the_password(isolated_admin_client, caplog):
+    """The stored SQL credentials go to the target: changing it is worth a warning"""
+    uuid = _create_target_server(isolated_admin_client)
+
+    with caplog.at_level(logging.INFO):
+        isolated_admin_client.post(
+            f"/admin/servers/{uuid}/edit", data={**_EDIT_FORM, "host": "db2.example.com", "password": "n3w-s3cret"}
+        )
+
+    [record] = audit_records(caplog, "server.update")
+    assert record.levelno == logging.WARNING
+    assert audit_fields(record)["changes"] == {"host": ["db.example.com", "db2.example.com"], "password": "changed"}
+    assert "n3w-s3cret" not in record.message
+    assert "s3cret!" not in record.message
+
+
+def test_edit_server_without_change_is_not_audited(isolated_admin_client, caplog):
+    uuid = _create_target_server(isolated_admin_client)
+    caplog.clear()
+
+    with caplog.at_level(logging.INFO):
+        response = isolated_admin_client.post(f"/admin/servers/{uuid}/edit", data=_EDIT_FORM, follow_redirects=False)
+
+    assert response.status_code == 303
+    assert audit_records(caplog) == []
+
+
+def test_create_server_is_audited_without_its_password(isolated_admin_client, caplog):
+    with caplog.at_level(logging.INFO):
+        isolated_admin_client.post("/admin/servers/new", data=_TARGET_FORM)
+
+    [record] = audit_records(caplog, "server.create")
+    assert audit_fields(record)["changes"]["password"] == "changed"
+    assert audit_fields(record)["changes"]["host"] == [None, "db.example.com"]
+    assert "s3cret!" not in record.message
+
+
+def test_delete_server_is_audited_as_a_warning(isolated_admin_client, caplog):
+    uuid = _create_target_server(isolated_admin_client)
+    caplog.clear()
+
+    with caplog.at_level(logging.INFO):
+        isolated_admin_client.post(f"/admin/servers/{uuid}/delete")
+
+    [record] = audit_records(caplog)
+    assert record.levelno == logging.WARNING
+    assert record.message == f"Server 'target_srv' deleted by admin '{TEST_USERNAME}' from {TESTCLIENT_HOST}"
+    assert audit_fields(record)["event"] == "server.delete"

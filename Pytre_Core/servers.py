@@ -2,15 +2,16 @@ import csv
 import io
 import logging
 from dataclasses import dataclass
-from uuid import UUID
-from pathlib import Path
 from enum import Enum
+from pathlib import Path
+from typing import Any, ClassVar
+from uuid import UUID
 
 from pykeepass.entry import Entry
 from pykeepass.group import Group
 
 from Pytre_Core.kee import Kee
-from Pytre_Core.utils import detect_encoding, log as _log
+from Pytre_Core.utils import detect_encoding, log as _log, secret_fingerprint
 
 
 DEFAULT_PORT = "1433"  # port, as a string not an int, of a server that has none
@@ -350,6 +351,12 @@ class Servers:
         entry = self.find_entry_by_uuid(uuid)
         return Server(self, entry=entry) if entry else None
 
+    def audit_snapshot(self) -> dict[str, dict[str, Any]]:
+        """uuid -> Server.audit_fields() of every server, to find the ones a bulk action changed"""
+        if self.kee_grp is None:
+            return {}
+        return {str(entry.uuid): Server(self, entry=entry).audit_fields() for entry in self.kee_grp.entries}
+
 
 class ServerType(Enum):
     mssql = "SQL Server"
@@ -366,6 +373,8 @@ class ServerType(Enum):
 
 
 class Server:
+    AUDIT_SECRETS: ClassVar[tuple[str, ...]] = ("password",)  # audit fields only telling if a secret changed
+
     def __init__(self, servers: Servers, entry: Entry | None = None):
         self.servers: Servers = servers
 
@@ -391,6 +400,26 @@ class Server:
     @property
     def target(self) -> ServerTarget:
         return ServerTarget.of(self.type, self.host, self.port, self.server, self.trust_server_certificate)
+
+    def audit_fields(self) -> dict[str, Any]:
+        """The fields of the server the audit log follows. Those in AUDIT_SECRETS hold a fingerprint of a secret,
+        never the secret itself (see secret_fingerprint): only their change is logged."""
+        return {
+            "id": self.id,
+            "description": self.description,
+            "type": self.type,
+            "host": self.host,
+            "port": self.port,
+            "server": self.server,
+            "trust_server_certificate": self.trust_server_certificate,
+            "database": self.database,
+            "user": self.user,
+            "password": secret_fingerprint(self.password),
+            "charset": self.charset,
+            "login_timeout": self.login_timeout,
+            "timeout": self.timeout,
+            "grp_authorized": set(self.grp_authorized),
+        }
 
     def to_dict(self) -> dict:
         return {

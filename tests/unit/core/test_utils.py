@@ -10,7 +10,7 @@ import os
 from pathlib import Path
 from unittest.mock import patch, mock_open
 
-from Pytre_Core.utils import validate_path, startfile, showfile
+from Pytre_Core.utils import secret_fingerprint, validate_path, startfile, showfile
 
 
 # ================================================================================
@@ -530,3 +530,35 @@ def test_showfile_darwin_uses_reveal_flag(tmp_path):
                 args = mock_popen.call_args[0][0]
                 assert "open" in args
                 assert "-R" in args
+
+
+# ================================================================================
+# secret_fingerprint
+# ================================================================================
+
+
+def test_secret_fingerprint_is_empty_for_an_empty_secret():
+    assert secret_fingerprint("") == ""
+
+
+def test_secret_fingerprint_is_the_same_for_the_same_secret():
+    assert secret_fingerprint("s3cret") == secret_fingerprint("s3cret")
+
+
+def test_secret_fingerprint_tells_two_secrets_apart():
+    assert secret_fingerprint("s3cret") != secret_fingerprint("s3cret!")
+
+
+def test_secret_fingerprint_reveals_nothing_of_the_secret():
+    fingerprint = secret_fingerprint("s3cret")
+
+    assert "s3cret" not in fingerprint
+    assert len(fingerprint) == 64  # an HMAC-SHA256, whatever the length of the secret
+    assert len(secret_fingerprint("x" * 1000)) == 64
+
+
+def test_secret_fingerprint_is_keyed_so_it_cant_be_recomputed_outside_the_process():
+    """A plain hash of a weak password could be found again by trying a list of passwords"""
+    import hashlib
+
+    assert secret_fingerprint("s3cret") != hashlib.sha256(b"s3cret").hexdigest()

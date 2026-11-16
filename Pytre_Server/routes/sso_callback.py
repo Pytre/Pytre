@@ -34,5 +34,5 @@ async def sso_callback(
         return await admin_auth.finish_sso_login(state, state_token, code, error, error_description, request=request)
 
     return await client_sso.finish_sso_login(
-        state, state_token, code, error, error_description, next_path=pending.next_path
+        state, state_token, code, error, error_description, request=request, next_path=pending.next_path
     )

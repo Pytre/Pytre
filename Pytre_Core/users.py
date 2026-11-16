@@ -10,6 +10,7 @@ import secrets
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
+from typing import Any, ClassVar
 from uuid import UUID
 from pathlib import Path
 
@@ -19,7 +20,7 @@ from pykeepass.entry import Entry
 from pykeepass.group import Group
 
 from Pytre_Core.kee import Kee
-from Pytre_Core.utils import detect_encoding, log as _log, setup_standalone_logging
+from Pytre_Core.utils import detect_encoding, log as _log, secret_fingerprint, setup_standalone_logging
 
 
 _HASHER = PasswordHasher()
@@ -645,6 +646,10 @@ class Users:
                     f"'{owner.username}' with this issuer"
                 )
 
+    def audit_snapshot(self) -> dict[str, dict[str, Any]]:
+        """uuid -> User.audit_fields() of every user, to find the ones a bulk action changed"""
+        return {user.uuid: user.audit_fields() for user in self.get_all_users(reload=False)}
+
 
 class AuthType(Enum):
     """Authentication types to identify how to interpret User.password_hash."""
@@ -663,6 +668,8 @@ class AuthType(Enum):
 
 
 class User:
+    AUDIT_SECRETS: ClassVar[tuple[str, ...]] = ("password",)  # audit fields only telling if a secret changed
+
     def __init__(self, users: Users | None, username: str = "", entry: Entry | None = None, detect_user: bool = True):
         """If no `username`, no `entry` and if `detect_user` is False then no loading from keepass db occurs.
         Without `users` (no users database) the user is authorized, without any right, and can't be saved."""
@@ -739,6 +746,24 @@ class User:
             return getattr(self, attr, "")
 
         return self.attribs_cust.get(attr, "")  # or custom info
+
+    def audit_fields(self) -> dict[str, Any]:
+        """The fields of the user the audit log follows. Those in AUDIT_SECRETS hold a fingerprint of a secret,
+        never the secret itself (see secret_fingerprint): only their change is logged. A custom attribute is left
+        out while empty."""
+        fields = {
+            "username": self.username,
+            "display_name": self.display_name,
+            "admin": self.admin,
+            "auth_type": str(self.auth_type),
+            "password": secret_fingerprint(self.password_hash),
+            "groups": set(self.groups) - {"all"},  # membership of "all" is no_all_group's
+            "no_all_group": self.no_all_group,
+            "sso_login": self.sso_login,
+            "oidc_link": self.oidc_link.to_dict(for_export=True) if self.oidc_link else None,
+        }
+        fields.update({f"attribute.{name}": value for name, value in sorted(self.attribs_cust.items()) if value})
+        return fields
 
     def to_dict(self) -> dict:
         attribs = {

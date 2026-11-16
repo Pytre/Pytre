@@ -17,7 +17,9 @@ from Pytre_Core.settings import Settings
 from Pytre_Core.sql_query.file_parser import FileParser
 from Pytre_Server.app import create_app
 from Pytre_Server.query_catalog import QueryCatalog
+from tests.conftest import audit_fields, audit_records
 from tests.integration.conftest import TEST_DB_PASSWORD, TEST_DB_PATH, TEST_USERNAME
+from tests.integration.routes.conftest import TESTCLIENT_HOST
 from tests.resources.build_test_keepass import TEST_USER_PASSWORD
 
 pytestmark = pytest.mark.integration
@@ -132,6 +134,54 @@ def test_reload_keeps_the_queries_when_the_folder_is_missing(admin_client, tmp_p
 
     assert "Reload failed" in response.text
     assert TEST_QUERY_ID in response.text
+
+
+def _query_file(folder, file_id: str, comment: str = "") -> None:
+    """Writes a valid query `file_id` into `folder` - `comment` changes its content without breaking it"""
+    content = (TEST_DB_PATH.parent / "queries" / f"{TEST_QUERY_ID}.sql").read_text(encoding="utf-8")
+    content = content.replace(f"Code : {TEST_QUERY_ID}", f"Code : {file_id}") + f"\n-- {comment}\n"
+    (folder / f"{file_id}.sql").write_text(content, encoding="utf-8")
+
+
+def test_reload_queries_is_audited_with_the_queries_added_changed_and_removed(admin_client, tmp_path, caplog):
+    for file_id in ("KEPT", "CHANGED", "REMOVED"):
+        _query_file(tmp_path, file_id)
+    admin_client.app.state.server.app_ctx.settings.queries_folder = tmp_path
+    admin_client.post("/admin/queries/reload")
+    _query_file(tmp_path, "CHANGED", comment="new version")
+    (tmp_path / "REMOVED.sql").unlink()
+    _query_file(tmp_path, "ADDED")
+    caplog.clear()
+
+    with caplog.at_level(logging.INFO):
+        admin_client.post("/admin/queries/reload")
+
+    [record] = audit_records(caplog)
+    assert record.levelno == logging.INFO
+    assert record.message == (
+        f"Query catalog reloaded by admin '{TEST_USERNAME}' (added 1: ADDED; changed 1: CHANGED; removed 1: REMOVED) "
+        f"from {TESTCLIENT_HOST}"
+    )
+    assert audit_fields(record)["event"] == "query_catalog.reload"
+    assert audit_fields(record)["actor"] == TEST_USERNAME
+
+
+def test_reload_queries_without_change_is_audited_too(admin_client, caplog):
+    """Who put the catalog in service, and when, matters even when nothing changed"""
+    with caplog.at_level(logging.INFO):
+        admin_client.post("/admin/queries/reload")
+
+    [record] = audit_records(caplog, "query_catalog.reload")
+    assert "(added 0; changed 0; removed 0)" in record.message
+
+
+def test_failed_reload_of_queries_is_not_audited(admin_client, tmp_path, caplog):
+    admin_client.app.state.server.app_ctx.settings.queries_folder = tmp_path / "missing"
+
+    with caplog.at_level(logging.INFO):
+        admin_client.post("/admin/queries/reload")
+
+    assert audit_records(caplog) == []
 
 
 # ------------------------------------------------------------------------------------------
@@ -272,10 +322,14 @@ def test_ignore_hash_set_is_logged_with_the_admin_username(admin_client, caplog)
     with caplog.at_level(logging.INFO):
         admin_client.post(f"/admin/queries/{TEST_QUERY_ID}/ignore-hash", data={"until_ts": str(until_ts)})
 
-    assert any(
-        f"Hash-check exemption for '{TEST_QUERY_ID}' set" in r.message and f"by admin '{TEST_USERNAME}'" in r.message
-        for r in caplog.records
+    [record] = audit_records(caplog, "query.hash_exemption")
+    assert record.levelno == logging.INFO
+    assert record.message.startswith(
+        f"Hash-check exemption for '{TEST_QUERY_ID}' set by admin '{TEST_USERNAME}' from {TESTCLIENT_HOST}: "
     )
+    until = datetime.fromtimestamp(until_ts, tz=timezone.utc).isoformat()
+    assert audit_fields(record)["changes"] == {"ignore_hash_until": [None, until]}
+    assert audit_fields(record)["target"] == TEST_QUERY_ID
 
 
 def test_ignore_hash_set_same_timestamp_is_reported_unchanged(admin_client):
@@ -304,14 +358,17 @@ def test_ignore_hash_set_empty_clears_the_exemption(admin_client):
 
 def test_ignore_hash_clear_is_logged_with_the_admin_username(admin_client, caplog):
     admin_client.post(f"/admin/queries/{TEST_QUERY_ID}/ignore-hash", data={"until_ts": str(_future_ts())})
+    caplog.clear()
 
     with caplog.at_level(logging.INFO):
         admin_client.post(f"/admin/queries/{TEST_QUERY_ID}/ignore-hash", data={"until_ts": ""})
 
-    assert any(
-        f"Hash-check exemption for '{TEST_QUERY_ID}' cleared by admin '{TEST_USERNAME}'" in r.message
-        for r in caplog.records
+    [record] = audit_records(caplog, "query.hash_exemption")
+    assert record.levelno == logging.INFO
+    assert record.message.startswith(
+        f"Hash-check exemption for '{TEST_QUERY_ID}' cleared by admin '{TEST_USERNAME}' from {TESTCLIENT_HOST}: "
     )
+    assert audit_fields(record)["changes"]["ignore_hash_until"][1] is None
 
 
 def test_ignore_hash_set_past_timestamp_clears_the_exemption(admin_client):

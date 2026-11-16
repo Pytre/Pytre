@@ -21,13 +21,18 @@ from Pytre_Core.oidc_client import OidcDiscoveryError
 from Pytre_Core.remote_protocol import SsoErrorCode
 from Pytre_Core.users import AuthType, Users, User, hash_password
 from Pytre_Server.app import create_app
+from Pytre_Server.audit import shorten
 from Pytre_Server.auth_token import JWT_ALGORITHM, TokenType, create_token, decode_token
 from Pytre_Server.routes.admin_auth import SSO_ERROR_MESSAGES
+from tests.conftest import audit_fields, audit_records
 from tests.integration.conftest import TEST_DB_PASSWORD, TEST_USER_PASSWORD, TEST_USERNAME
 from tests.integration.routes.conftest import (
     IP_THRESHOLD,
     SSO_ISSUER,
+    SSO_USERNAME,
+    TESTCLIENT_HOST,
     TokenExchangeState,
+    client_from,
     every_password_slot_taken,
     extract_state_token,
     fail_from_one_address,
@@ -131,18 +136,80 @@ def test_login_throttles_an_address_failing_with_many_usernames(client):
     assert "admin_session" not in response.headers.get("set-cookie", "")
 
 
-def test_login_failure_is_logged(client, caplog):
+def test_login_failure_is_audited_as_a_warning_with_the_client_address_and_its_reason(client, caplog):
     with caplog.at_level(logging.INFO):
+        client_from(client, "10.0.0.7").post(
+            "/admin/login", data={"username": TEST_USERNAME, "password": "wrong-password"}
+        )
+
+    [record] = audit_records(caplog)
+    assert record.levelno == logging.WARNING
+    assert record.message == f"Failed admin login attempt for '{TEST_USERNAME}': wrong password from 10.0.0.7"
+    assert audit_fields(record) == {
+        "event": "admin.login.failed",
+        "actor": None,
+        "ip": "10.0.0.7",
+        "target": TEST_USERNAME,
+        "changes": None,
+    }
+
+
+def test_login_failure_of_a_non_admin_account_is_audited_as_such(isolated_admin_client, caplog):
+    isolated_admin_client.post(
+        "/admin/users/new",
+        data={"username": "regular_user", "auth_type": "basic", "password": "RegularPass123!"},
+    )
+
+    with caplog.at_level(logging.INFO):
+        TestClient(create_app(master_key=TEST_DB_PASSWORD)).post(
+            "/admin/login", data={"username": "regular_user", "password": "RegularPass123!"}
+        )
+
+    [record] = audit_records(caplog, "admin.login.failed")
+    assert record.message.startswith("Failed admin login attempt for 'regular_user': not an administrator from ")
+
+
+def test_login_failure_log_shortens_and_escapes_the_username(client, caplog):
+    username = "no-such-user\n" + "x" * 5000
+
+    with caplog.at_level(logging.INFO):
+        client.post("/admin/login", data={"username": username, "password": "anything"})
+
+    [record] = audit_records(caplog, "admin.login.failed")
+    assert "\n" not in record.message
+    assert "no-such-user\\n" in record.message
+    assert username not in record.message
+    assert audit_fields(record)["target"] == shorten(username)
+
+
+def test_login_success_is_audited_with_the_client_address(client, caplog):
+    with caplog.at_level(logging.INFO):
+        client_from(client, "10.0.0.7").post(
+            "/admin/login", data={"username": TEST_USERNAME, "password": TEST_USER_PASSWORD}
+        )
+
+    [record] = audit_records(caplog)
+    assert record.levelno == logging.INFO
+    assert record.message == f"Admin '{TEST_USERNAME}' logged in from 10.0.0.7"
+    assert audit_fields(record) == {
+        "event": "admin.login",
+        "actor": TEST_USERNAME,
+        "ip": "10.0.0.7",
+        "target": TEST_USERNAME,
+        "changes": None,
+    }
+
+
+def test_login_refused_by_the_throttle_is_not_audited(client, caplog):
+    for _ in range(5):
         client.post("/admin/login", data={"username": TEST_USERNAME, "password": "wrong-password"})
+    caplog.clear()
 
-    assert any(f"Failed admin login attempt for '{TEST_USERNAME}'" in r.message for r in caplog.records)
-
-
-def test_login_success_is_logged(client, caplog):
     with caplog.at_level(logging.INFO):
-        client.post("/admin/login", data={"username": TEST_USERNAME, "password": TEST_USER_PASSWORD})
+        response = client.post("/admin/login", data={"username": TEST_USERNAME, "password": TEST_USER_PASSWORD})
 
-    assert any(f"Admin '{TEST_USERNAME}' logged in" in r.message for r in caplog.records)
+    assert response.status_code == 429
+    assert audit_records(caplog) == []
 
 
 def test_login_success_sets_cookie_and_redirects_to_admin_by_default(client):
@@ -380,6 +447,39 @@ def test_logout_clears_cookie_and_subsequent_access_is_redirected(client):
     response = client.get("/admin/users", follow_redirects=False)
     assert response.status_code == 303
     assert response.headers["location"].startswith("/admin/login")
+
+
+def test_logout_is_audited_with_the_client_address(client, caplog):
+    remote_client = client_from(client, "10.0.0.7")
+    remote_client.post("/admin/login", data={"username": TEST_USERNAME, "password": TEST_USER_PASSWORD})
+
+    with caplog.at_level(logging.INFO):
+        remote_client.post("/admin/logout", follow_redirects=False)
+
+    [record] = audit_records(caplog, "admin.logout")
+    assert record.levelno == logging.INFO
+    assert record.message == f"Admin '{TEST_USERNAME}' logged out from 10.0.0.7"
+    assert audit_fields(record)["actor"] == TEST_USERNAME
+
+
+def test_logout_without_a_session_is_not_audited(client, caplog):
+    with caplog.at_level(logging.INFO):
+        response = client.post("/admin/logout", follow_redirects=False)
+
+    assert response.status_code == 303
+    assert audit_records(caplog) == []
+
+
+def test_logout_with_a_tampered_cookie_is_not_audited(client, caplog):
+    """Anyone may post to /admin/logout: only a session signed by the server names an admin in the log."""
+    forged = create_token("someone_else", "x" * 32, TokenType.ADMIN)  # another key than the server's
+    client.cookies.set("admin_session", forged, path="/admin")
+
+    with caplog.at_level(logging.INFO):
+        response = client.post("/admin/logout", follow_redirects=False)
+
+    assert response.status_code == 303
+    assert audit_records(caplog) == []
 
 
 def test_already_logged_in_get_login_redirects_away(client):
@@ -654,6 +754,82 @@ def test_sso_callback_rejects_an_unknown_username_claim(isolated_client, install
     assert "admin_session" not in response.headers.get("set-cookie", "")
 
 
+def test_sso_login_success_is_audited(isolated_client, install_idp_transport, fake_token_exchange, caplog):
+    app_ctx = isolated_client.app.state.server.app_ctx
+    provider = make_oidc_provider(app_ctx)
+    make_oidc_user(app_ctx)
+    state_token = _start_sso(isolated_client, fake_token_exchange, provider.uuid)
+
+    with caplog.at_level(logging.INFO):
+        isolated_client.get(f"/login/sso/callback?state={state_token}&code=fake-code", follow_redirects=False)
+
+    [record] = audit_records(caplog)
+    assert record.levelno == logging.INFO
+    assert record.message == f"Admin '{SSO_USERNAME}' logged in through SSO from {TESTCLIENT_HOST}"
+    assert audit_fields(record) == {
+        "event": "admin.sso_login",
+        "actor": SSO_USERNAME,
+        "ip": TESTCLIENT_HOST,
+        "target": SSO_USERNAME,
+        "changes": None,
+    }
+
+
+def test_sso_login_of_a_non_admin_user_is_audited_as_a_warning(
+    isolated_client, install_idp_transport, fake_token_exchange, caplog
+):
+    app_ctx = isolated_client.app.state.server.app_ctx
+    provider = make_oidc_provider(app_ctx)
+    make_oidc_user(app_ctx, admin=False)
+    state_token = _start_sso(isolated_client, fake_token_exchange, provider.uuid)
+
+    with caplog.at_level(logging.INFO):
+        isolated_client.get(f"/login/sso/callback?state={state_token}&code=fake-code", follow_redirects=False)
+
+    [record] = audit_records(caplog)
+    assert record.levelno == logging.WARNING
+    assert audit_fields(record)["event"] == "admin.sso_login.failed"
+    assert audit_fields(record)["actor"] is None
+    assert audit_fields(record)["target"] == SSO_USERNAME
+    assert "not an administrator" in record.message
+
+
+def test_sso_login_of_an_unknown_username_claim_is_audited(
+    isolated_client, install_idp_transport, fake_token_exchange, caplog
+):
+    app_ctx = isolated_client.app.state.server.app_ctx
+    provider = make_oidc_provider(app_ctx)
+    state_token = _start_sso(isolated_client, fake_token_exchange, provider.uuid)
+
+    with caplog.at_level(logging.INFO):
+        isolated_client.get(f"/login/sso/callback?state={state_token}&code=fake-code", follow_redirects=False)
+
+    [record] = audit_records(caplog)
+    assert audit_fields(record)["event"] == "admin.sso_login.failed"
+    assert audit_fields(record)["actor"] is None
+    assert record.message.startswith("SSO sign-in to the web admin failed (")
+
+
+def test_sso_login_refused_by_the_identity_provider_is_audited(
+    isolated_client, install_idp_transport, fake_token_exchange, caplog
+):
+    app_ctx = isolated_client.app.state.server.app_ctx
+    provider = make_oidc_provider(app_ctx)
+    state_token = _start_sso(isolated_client, fake_token_exchange, provider.uuid)
+
+    with caplog.at_level(logging.INFO):
+        isolated_client.get(
+            f"/login/sso/callback?state={state_token}&error=access_denied&error_description=User+cancelled",
+            follow_redirects=False,
+        )
+
+    [record] = audit_records(caplog)
+    assert record.levelno == logging.INFO
+    assert audit_fields(record)["event"] == "admin.sso_login.failed"
+    assert audit_fields(record)["ip"] == TESTCLIENT_HOST
+    assert audit_fields(record)["target"] is None
+
+
 # ================================================================================
 # Bootstrap - creating the first admin account (loopback-only, closes once an admin exists)
 # ================================================================================
@@ -749,7 +925,7 @@ def test_bootstrap_creates_admin_and_auto_logs_in(monkeypatch, isolated_client):
     assert "admin_session=" in response.headers["set-cookie"]
 
 
-def test_bootstrap_is_logged(monkeypatch, isolated_client, caplog):
+def test_bootstrap_is_audited_as_a_warning(monkeypatch, isolated_client, caplog):
     monkeypatch.setattr(Users, "users_admin_exists", lambda self, reload=False: False)
     bootstrap_client = _loopback_client()
 
@@ -759,7 +935,11 @@ def test_bootstrap_is_logged(monkeypatch, isolated_client, caplog):
             data={"username": "newadmin", "password": "Secret123!", "confirm_password": "Secret123!"},
         )
 
-    assert any("First admin account 'newadmin' created via bootstrap" in r.message for r in caplog.records)
+    [record] = audit_records(caplog, "admin.bootstrap")
+    assert record.levelno == logging.WARNING
+    assert record.message == "First admin account 'newadmin' created via bootstrap from 127.0.0.1"
+    assert audit_fields(record)["actor"] == "newadmin"
+    assert audit_fields(record)["target"] == "newadmin"
 
 
 def test_bootstrap_created_account_can_log_in_normally_afterwards(monkeypatch, isolated_client):

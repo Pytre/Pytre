@@ -3,7 +3,6 @@ Admin webui routes for managing OIDC providers - list, create, edit, delete.
 Gated by require_admin_session (see admin_router.py)
 """
 
-import logging
 from typing import Annotated
 from urllib.parse import quote_plus
 
@@ -13,19 +12,24 @@ from pydantic import BaseModel
 
 from Pytre_Core.oidc_providers import DEFAULT_SCOPES, OidcProvider
 from Pytre_Core.users import Users
-from Pytre_Core.utils import log as _log
 
+from Pytre_Server.audit import AuditedRecords
 from Pytre_Server.oidc import CALLBACK_PATH
 from Pytre_Server.routes.admin_auth import require_admin_session
-from Pytre_Server.server_state import ServerState, get_server_state
+from Pytre_Server.routes.admin_users import USERS_AUDIT
+from Pytre_Server.server_state import ServerState, client_host, get_server_state
 from Pytre_Server.templating import templates
 
 
+SSO_PROVIDERS_AUDIT = AuditedRecords(
+    "sso_provider",
+    "SSO provider",
+    "issuer",
+    OidcProvider.AUDIT_SECRETS,
+    warns=lambda before, after: True,  # always warn as it decides who may sign in
+)
+
 router = APIRouter(prefix="/sso")
-
-
-def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__) -> None:
-    _log(msg, level=level, sublogger=sublogger)
 
 
 class OidcProviderForm(BaseModel):
@@ -145,6 +149,8 @@ def _save_provider(
 ) -> HTMLResponse | RedirectResponse:
     saved_issuer = provider.issuer  # empty for a new provider
     saved_uuid = provider.uuid
+    before = provider.audit_fields() if saved_uuid else None
+
     provider_form.apply_to(provider)
     issuer_changed = bool(saved_issuer) and saved_issuer != provider.issuer
 
@@ -158,12 +164,13 @@ def _save_provider(
         context["error"] = str(e)
         return templates.TemplateResponse(request, "admin/oidc_provider_form.html", context)
 
-    msg = f"OIDC provider '{provider.issuer}' saved by admin '{admin_username}' (enabled={provider.enabled})"
+    host = client_host(request)
+    SSO_PROVIDERS_AUDIT.log_change(host, admin_username, before, provider.audit_fields())
     if issuer_changed:
-        nb_moved = users.replace_oidc_issuer(saved_issuer, provider.issuer)
-        msg += f", {nb_moved} user link(s) moved from '{saved_issuer}'"
-
-    log(msg, logging.WARNING)
+        users_before = users.audit_snapshot()
+        users.replace_oidc_issuer(saved_issuer, provider.issuer)
+        how = "SSO provider issuer changed"
+        USERS_AUDIT.log_changes(host, admin_username, users_before, users.audit_snapshot(), how)
 
     return RedirectResponse(url="/admin/sso?msg=Provider+saved", status_code=status.HTTP_303_SEE_OTHER)
 
@@ -173,49 +180,65 @@ def _save_provider(
 # ------------------------------------------------------------------------------------------
 @router.post("/{uuid}/delete")
 def sso_delete(
-    uuid: str, state: ServerState = Depends(get_server_state), admin_username: str = Depends(require_admin_session)
+    uuid: str,
+    request: Request,
+    state: ServerState = Depends(get_server_state),
+    admin_username: str = Depends(require_admin_session),
 ) -> RedirectResponse:
+
     provider = state.app_ctx.oidc_providers.find_provider_by_uuid(uuid)
     if provider is None:
         return RedirectResponse(url="/admin/sso?error=Provider+not+found", status_code=status.HTTP_303_SEE_OTHER)
 
+    host = client_host(request)
+    users = state.app_ctx.users
+    before, users_before = provider.audit_fields(), users.audit_snapshot()
+
     try:
-        nb_unlinked = state.app_ctx.users.replace_oidc_issuer(provider.issuer, None)
+        users.replace_oidc_issuer(provider.issuer, None)
         provider.delete()
     except LookupError as e:
         return RedirectResponse(url=f"/admin/sso?error={e}", status_code=status.HTTP_303_SEE_OTHER)
+    finally:
+        USERS_AUDIT.log_changes(host, admin_username, users_before, users.audit_snapshot(), "SSO provider deleted")
 
-    msg = f"OIDC provider '{provider.issuer}' deleted by admin '{admin_username}', {nb_unlinked} user link(s) removed"
-    log(msg, logging.WARNING)
+    SSO_PROVIDERS_AUDIT.log_change(host, admin_username, before, None)
+
     return RedirectResponse(url="/admin/sso?msg=Provider+deleted", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @router.post("/delete")
 def sso_delete_bulk(
+    request: Request,
     uuids: list[str] = Form(default_factory=list),
     state: ServerState = Depends(get_server_state),
     admin_username: str = Depends(require_admin_session),
 ) -> RedirectResponse:
-    nb_ok = 0
-    nb_errors = 0
-    nb_unlinked = 0
+
+    host = client_host(request)
+    users = state.app_ctx.users
+
+    nb_ok, nb_errors, nb_unlinked = 0, 0, 0
     for uuid in uuids:
         provider = state.app_ctx.oidc_providers.find_provider_by_uuid(uuid)
         if provider is None:
             nb_errors += 1
             continue
+
+        before, users_before = provider.audit_fields(), users.audit_snapshot()
+
         try:
-            nb_links = state.app_ctx.users.replace_oidc_issuer(provider.issuer, None)
+            nb_links = users.replace_oidc_issuer(provider.issuer, None)
             provider.delete()
 
-            msg = f"OIDC provider '{provider.issuer}' deleted by admin '{admin_username}' (bulk), "
-            msg += f"{nb_links} user link(s) removed"
-            log(msg, logging.WARNING)
+            SSO_PROVIDERS_AUDIT.log_change(host, admin_username, before, None)
 
             nb_unlinked += nb_links
             nb_ok += 1
         except LookupError:
             nb_errors += 1
+        finally:
+            USERS_AUDIT.log_changes(host, admin_username, users_before, users.audit_snapshot(), "SSO provider deleted")
 
     msg = f"{nb_ok}+provider(s)+deleted" + (f",+{nb_errors}+error(s)" if nb_errors else "")
     msg += f",+{nb_unlinked}+user+link(s)+removed" if nb_unlinked else ""

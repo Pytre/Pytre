@@ -9,7 +9,9 @@ import re
 import pytest
 
 from Pytre_Core.users import verify_password
+from tests.conftest import audit_fields, audit_records
 from tests.integration.conftest import TEST_USERNAME
+from tests.integration.routes.conftest import TESTCLIENT_HOST
 
 pytestmark = pytest.mark.integration
 
@@ -88,7 +90,11 @@ def test_create_user_is_logged_with_the_admin_username(isolated_admin_client, ca
             data={"username": "logged_user", "display_name": "", "auth_type": "none", "password": ""},
         )
 
-    assert any(f"User 'logged_user' saved by admin '{TEST_USERNAME}'" in r.message for r in caplog.records)
+    [record] = audit_records(caplog, "user.create")
+    assert record.levelno == logging.INFO
+    assert record.message.startswith(f"User 'logged_user' created by admin '{TEST_USERNAME}' from {TESTCLIENT_HOST}")
+    assert audit_fields(record)["actor"] == TEST_USERNAME
+    assert audit_fields(record)["target"] == "logged_user"
 
 
 def test_create_user_blank_username_reports_error(isolated_admin_client):
@@ -336,8 +342,12 @@ def test_bulk_delete_is_logged_per_user_with_the_admin_username(isolated_admin_c
     with caplog.at_level(logging.INFO):
         isolated_admin_client.post("/admin/users/delete", data={"uuids": [uuid_a, uuid_b]})
 
-    assert any(f"User 'bulk_log_a' deleted by admin '{TEST_USERNAME}' (bulk)" in r.message for r in caplog.records)
-    assert any(f"User 'bulk_log_b' deleted by admin '{TEST_USERNAME}' (bulk)" in r.message for r in caplog.records)
+    records = audit_records(caplog, "user.delete")
+    assert [r.message for r in records] == [
+        f"User 'bulk_log_a' deleted by admin '{TEST_USERNAME}' from {TESTCLIENT_HOST}",
+        f"User 'bulk_log_b' deleted by admin '{TEST_USERNAME}' from {TESTCLIENT_HOST}",
+    ]
+    assert all(r.levelno == logging.WARNING for r in records)
 
 
 def test_bulk_delete_reports_partial_failure(isolated_admin_client):
@@ -802,3 +812,98 @@ def test_users_list_shows_the_auth_type_and_the_oidc_provider(isolated_admin_cli
     assert _list_row_cells(list_page, "auth_any_user")[4] == "OIDC: Any"
     assert _list_row_cells(list_page, "auth_provider_user")[4] == "OIDC: Auth IdP"
     assert _list_row_cells(list_page, "auth_orphan_user")[4] == "OIDC: unknown"
+
+
+# ================================================================================
+# Audit log
+# ================================================================================
+
+
+def test_create_user_is_audited_with_the_fields_it_sets_and_never_the_password_hash(isolated_admin_client, caplog):
+    with caplog.at_level(logging.INFO):
+        isolated_admin_client.post(
+            "/admin/users/new",
+            data={"username": "audited", "display_name": "Audited", "auth_type": "basic", "password": "Pass123456!"},
+        )
+
+    [record] = audit_records(caplog, "user.create")
+    assert record.levelno == logging.INFO
+    assert audit_fields(record)["changes"] == {
+        "username": [None, "audited"],
+        "display_name": [None, "Audited"],
+        "auth_type": [None, "Basic"],
+        "password": "changed",
+    }
+    password_hash = _reloaded_user(_find_uuid(isolated_admin_client.get("/admin/users").text, "audited")).password_hash
+    assert password_hash not in record.message
+    assert "Pass123456!" not in record.message
+
+
+def test_create_admin_user_is_audited_as_a_warning(isolated_admin_client, caplog):
+    with caplog.at_level(logging.INFO):
+        isolated_admin_client.post("/admin/users/new", data=_edit_user_data("new_admin", admin="true"))
+
+    [record] = audit_records(caplog, "user.create")
+    assert record.levelno == logging.WARNING
+    assert audit_fields(record)["changes"]["admin"] == [None, True]
+
+
+def test_edit_user_becoming_admin_is_audited_as_a_warning(isolated_admin_client, caplog):
+    uuid = _create_user(isolated_admin_client, "promoted")
+
+    with caplog.at_level(logging.INFO):
+        isolated_admin_client.post(f"/admin/users/{uuid}/edit", data=_edit_user_data("promoted", admin="true"))
+
+    [record] = audit_records(caplog, "user.update")
+    assert record.levelno == logging.WARNING
+    assert record.message == (
+        f"User 'promoted' updated by admin '{TEST_USERNAME}' from {TESTCLIENT_HOST}: admin false -> true"
+    )
+    assert audit_fields(record)["changes"] == {"admin": [False, True]}
+
+
+def test_edit_user_password_is_audited_without_its_value(isolated_admin_client, caplog):
+    uuid = _create_user(isolated_admin_client, "secretive", auth_type="basic", password="Pass123456!")
+
+    with caplog.at_level(logging.INFO):
+        isolated_admin_client.post(
+            f"/admin/users/{uuid}/edit", data=_edit_user_data("secretive", auth_type="basic", password="New123456!")
+        )
+
+    [record] = audit_records(caplog, "user.update")
+    assert record.levelno == logging.INFO
+    assert audit_fields(record)["changes"] == {"password": "changed"}
+    assert "New123456!" not in record.message
+    assert _reloaded_user(uuid).password_hash not in record.message
+
+
+def test_edit_user_without_change_is_not_audited(isolated_admin_client, caplog):
+    uuid = _create_user(isolated_admin_client, "untouched")
+    caplog.clear()
+
+    with caplog.at_level(logging.INFO):
+        response = isolated_admin_client.post(
+            f"/admin/users/{uuid}/edit", data=_edit_user_data("untouched"), follow_redirects=False
+        )
+
+    assert response.status_code == 303
+    assert audit_records(caplog) == []
+
+
+def test_delete_user_is_audited_as_a_warning(isolated_admin_client, caplog):
+    uuid = _create_user(isolated_admin_client, "doomed")
+    caplog.clear()
+
+    with caplog.at_level(logging.INFO):
+        isolated_admin_client.post(f"/admin/users/{uuid}/delete")
+
+    [record] = audit_records(caplog)
+    assert record.levelno == logging.WARNING
+    assert record.message == f"User 'doomed' deleted by admin '{TEST_USERNAME}' from {TESTCLIENT_HOST}"
+    assert audit_fields(record) == {
+        "event": "user.delete",
+        "actor": TEST_USERNAME,
+        "ip": TESTCLIENT_HOST,
+        "target": "doomed",
+        "changes": None,
+    }

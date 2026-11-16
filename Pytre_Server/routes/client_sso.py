@@ -13,15 +13,17 @@ import logging
 from urllib.parse import quote_plus
 
 from authlib.oauth2.rfc7636 import create_s256_code_challenge
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
 
 from Pytre_Core.remote_protocol import SsoErrorCode
 from Pytre_Core.utils import log as _log
+
+from Pytre_Server.audit import audit
 from Pytre_Server.auth_token import TokenType, create_token
 from Pytre_Server.oidc import OidcLoginError, handle_callback, start_login
-from Pytre_Server.server_state import ServerState, SsoFlow, get_server_state
+from Pytre_Server.server_state import ServerState, SsoFlow, client_host, get_server_state
 
 
 router = APIRouter(prefix="/login/sso")
@@ -107,7 +109,14 @@ async def sso_start(
 
 
 async def finish_sso_login(
-    state: ServerState, state_token: str, code: str, error: str, error_description: str, *, next_path: str
+    state: ServerState,
+    state_token: str,
+    code: str,
+    error: str,
+    error_description: str,
+    *,
+    request: Request,
+    next_path: str,
 ) -> RedirectResponse | HTMLResponse:
     """Completes an SSO login started by sso_start(), called by the shared SSO callback route, then bridges
     back to the client's loopback listener with a short-lived, single-use code (never the IdP's own tokens)
@@ -117,8 +126,11 @@ async def finish_sso_login(
     if bridge is None:
         return HTMLResponse(LOGIN_FAILED_HTML)  # no redirect_uri to safely bounce back to
 
+    host = client_host(request)
+
     if error:
-        log(f"Client SSO sign-in refused by the identity provider: {error[:100]!r}: {error_description[:1000]!r}")
+        msg = f"Client SSO sign-in refused by the identity provider: {error[:100]!r}: {error_description[:1000]!r}"
+        audit("client.sso_login.failed", host, msg)
         return _error_redirect(bridge["redirect_uri"], bridge["state"], SsoErrorCode.DENIED)
 
     try:
@@ -127,7 +139,7 @@ async def finish_sso_login(
         )
     except OidcLoginError as e:
         level = logging.INFO if e.code is SsoErrorCode.EXPIRED else logging.WARNING
-        log(f"Client SSO sign-in failed ({e.code}): {str(e)!r}", level)
+        audit("client.sso_login.failed", host, f"Client SSO sign-in failed ({e.code}): {str(e)!r}", level=level)
         return _error_redirect(bridge["redirect_uri"], bridge["state"], e.code)
 
     # unlike the admin webui, no admin-only check here - any AuthType.OIDC user link_user() accepts can sign in
@@ -137,12 +149,18 @@ async def finish_sso_login(
 
 
 @router.post("/token")
-async def sso_token(request: SsoTokenRequest, state: ServerState = Depends(get_server_state)) -> SsoTokenResponse:
+async def sso_token(
+    request: SsoTokenRequest, http_request: Request, state: ServerState = Depends(get_server_state)
+) -> SsoTokenResponse:
     """The client's last step: exchanges the one-time code from the loopback redirect, plus its
     own PKCE verifier, for a normal server token pair - from here on, /refresh works unchanged."""
+
     pending = state.resources.client_code_pop_pending(request.code)
     if pending is None or create_s256_code_challenge(request.code_verifier) != pending.code_challenge:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired code")
+
+    msg = f"User {pending.username!r} logged in through SSO"
+    audit("client.sso_login", client_host(http_request), msg, actor=pending.username, target=pending.username)
 
     jwt_secret = state.app_ctx.settings.jwt_secret
     return SsoTokenResponse(

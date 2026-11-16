@@ -10,6 +10,7 @@ import re
 import pytest
 
 from Pytre_Core.context import AppContext
+from tests.conftest import audit_fields, audit_records
 from tests.integration.conftest import TEST_USERNAME
 
 pytestmark = pytest.mark.integration
@@ -74,12 +75,10 @@ def test_settings_save_refusal_is_logged_as_a_warning(isolated_admin_client, tmp
     with caplog.at_level(logging.INFO):
         isolated_admin_client.post("/admin/settings", data={"queries_folder": str(tmp_path), "logs_folder": ""})
 
-    assert any(
-        r.levelno == logging.WARNING
-        and f"Local-only action refused for admin '{TEST_USERNAME}' on /admin/settings" in r.message
-        for r in caplog.records
-    )
-    assert not any("Settings changed by admin" in r.message for r in caplog.records)
+    [record] = audit_records(caplog, "local_action.failed")
+    assert record.levelno == logging.WARNING
+    assert f"Local-only action refused for admin '{TEST_USERNAME}' on '/admin/settings'" in record.message
+    assert audit_records(caplog, "settings.update") == []
 
 
 def test_remote_connection_cannot_turn_the_execution_logs_off(isolated_admin_client):
@@ -132,10 +131,11 @@ def test_settings_save_is_logged_as_a_warning_with_the_admin_username(isolated_l
             "/admin/settings", data={"queries_folder": str(tmp_path), "logs_folder": ""}
         )
 
-    assert any(
-        r.levelno == logging.WARNING and f"Settings changed by admin '{TEST_USERNAME}'" in r.message
-        for r in caplog.records
-    )
+    [record] = audit_records(caplog, "settings.update")
+    assert record.levelno == logging.WARNING
+    assert record.message.startswith(f"Settings changed by admin '{TEST_USERNAME}' from 127.0.0.1: ")
+    assert audit_fields(record)["changes"]["queries_folder"][1] == str(tmp_path)
+    assert audit_fields(record)["target"] is None
 
 
 def test_settings_save_failure_is_not_logged(isolated_local_admin_client, caplog):
@@ -145,7 +145,7 @@ def test_settings_save_failure_is_not_logged(isolated_local_admin_client, caplog
             "/admin/settings", data={"queries_folder": "/does/not/exist", "logs_folder": ""}
         )
 
-    assert not any("Settings changed by admin" in r.message for r in caplog.records)
+    assert audit_records(caplog) == []
 
 
 def test_settings_save_invalid_queries_folder_shows_error_without_corrupting_settings(isolated_local_admin_client):
@@ -207,3 +207,15 @@ def test_settings_save_invalid_logs_folder_ok_when_logs_disabled(isolated_local_
 
     assert response.status_code == 303
     assert response.headers["location"] == "/admin/settings?msg=Settings+saved"
+
+
+def test_settings_save_without_change_is_not_audited(isolated_local_admin_client, tmp_path, caplog):
+    data = {"queries_folder": str(tmp_path), "logs_folder": str(tmp_path)}
+    isolated_local_admin_client.post("/admin/settings", data=data)
+    caplog.clear()
+
+    with caplog.at_level(logging.INFO):
+        response = isolated_local_admin_client.post("/admin/settings", data=data, follow_redirects=False)
+
+    assert response.status_code == 303
+    assert audit_records(caplog) == []

@@ -3,6 +3,7 @@ import logging
 import secrets
 from enum import Enum
 from pathlib import Path, PureWindowsPath
+from typing import Any
 
 from pykeepass.entry import Entry
 from pykeepass.group import Group
@@ -57,6 +58,14 @@ class Settings:
             raise ValueError(f"Folder doesn't exist: '{folder}'")
 
         return True
+
+    def audit_fields(self) -> dict[str, Any]:
+        """The settings the web administration can change, as the audit log follows them"""
+        return {
+            "queries_folder": str(self.queries_folder),
+            "logs_are_on": self.logs_are_on,
+            "logs_folder": str(self.logs_folder),
+        }
 
     def load(self, reload: bool = False) -> None:
         if not self.open_db(reload=reload):

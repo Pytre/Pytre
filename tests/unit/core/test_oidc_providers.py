@@ -18,6 +18,7 @@ import Pytre_Core.kee as kee_module
 from Pytre_Core.kee import Kee
 from Pytre_Core.oidc_providers import DEFAULT_SCOPES, OidcProvider, OidcProviders
 from Pytre_Core.users import AuthType, OidcLink, User, Users
+from Pytre_Core.utils import secret_fingerprint
 
 TEST_DB_PATH = Path(__file__).parent.parent.parent / "resources" / "Pytre_test.db"
 TEST_DB_PASSWORD = "password"
@@ -394,3 +395,41 @@ def test_oidc_link_is_not_mistaken_for_a_custom_attribute(kee):
 
     assert "oidc_link" not in loaded.attribs_cust
     assert "oidc_link" not in users.get_cust_attribs_list()
+
+
+# ================================================================================
+# Audit fields
+# ================================================================================
+
+
+def test_provider_audit_fields_give_every_followed_field(oidcs):
+    oidc = _new_oidc(oidcs, raw_label="Corp", public_base_url="https://pytre.example.com")
+
+    assert oidc.audit_fields() == {
+        "issuer": ISSUER,
+        "label": "Corp",
+        "enabled": True,
+        "client_id": "pytre-client",
+        "client_secret": secret_fingerprint("s3cret"),
+        "scopes": DEFAULT_SCOPES,
+        "username_claim": "preferred_username",
+        "public_base_url": "https://pytre.example.com",
+    }
+
+
+def test_provider_audit_fields_give_the_label_entered_not_the_one_deduced_from_the_issuer(oidcs):
+    oidc = _new_oidc(oidcs)
+
+    assert oidc.label == "idp.example.com"
+    assert oidc.audit_fields()["label"] == ""
+
+
+def test_provider_audit_secrets_are_audit_fields(oidcs):
+    """A secret renamed in audit_fields() but not in AUDIT_SECRETS would be logged in clear"""
+    assert set(OidcProvider.AUDIT_SECRETS) <= _new_oidc(oidcs).audit_fields().keys()
+
+
+def test_provider_audit_fields_never_hold_the_client_secret(oidcs):
+    oidc = _new_oidc(oidcs, client_secret="Cl1ent-s3cret")
+
+    assert "Cl1ent-s3cret" not in str(oidc.audit_fields())

@@ -14,6 +14,7 @@ from Pytre_Server.__main__ import (
     create_parser,
     hash_password_interactive,
     main,
+    pos_int,
     process_master_key_args,
     start_server,
 )
@@ -26,6 +27,7 @@ def mock_logging_setup(monkeypatch):
     handler), so calling them for real here would leak state across the test session."""
     monkeypatch.setattr("Pytre_Server.__main__.setup_terminal_logging", Mock())
     monkeypatch.setattr("Pytre_Server.__main__.setup_file_logging", Mock())
+    monkeypatch.setattr("Pytre_Server.__main__.setup_audit_file_logging", Mock())
 
 
 # ================================================================================
@@ -80,6 +82,76 @@ def test_hash_password_flag_defaults_to_false():
     args = parser.parse_args([])
 
     assert args.hash_password is False
+
+
+@pytest.mark.unit
+def test_log_and_audit_options_defaults():
+    args = create_parser().parse_args([])
+
+    assert (args.log_file, args.log_max_mb, args.log_backups, args.log_buffer_mb) == (None, 5, 1, 5)
+    assert (args.audit_file, args.audit_max_mb, args.audit_backups) == (None, 10, 20)
+
+
+@pytest.mark.unit
+def test_log_and_audit_options_are_parsed():
+    args = create_parser().parse_args(
+        [
+            "--log-file", "server.log", "--log-max-mb", "20", "--log-backups", "5",
+            "--audit-file", "audit.log", "--audit-max-mb", "50", "--audit-backups", "100",
+        ]
+    )  # fmt: skip
+
+    assert (args.log_file, args.log_max_mb, args.log_backups) == (Path("server.log"), 20, 5)
+    assert (args.audit_file, args.audit_max_mb, args.audit_backups) == (Path("audit.log"), 50, 100)
+
+
+# ================================================================================
+# pos_int
+# ================================================================================
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(("value", "number"), [("1", 1), ("42", 42), (" 7 ", 7)])
+def test_pos_int_accepts_a_whole_number_of_at_least_1(value, number):
+    assert pos_int(value) == number
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("value", "error"),
+    [("0", "must be at least 1: 0"), ("-3", "must be at least 1: -3"), ("abc", "not a whole number"), ("1.5", "not a whole number")],
+)  # fmt: skip
+def test_pos_int_refuses_anything_else(value, error):
+    with pytest.raises(argparse.ArgumentTypeError, match=error):
+        pos_int(value)
+
+
+POSITIVE_OPTIONS = [
+    "--port",
+    "--chunk-size",
+    "--db-pool-size",
+    "--max-concurrency-per-user",
+    "--log-max-mb",
+    "--log-backups",
+    "--log-buffer-mb",
+    "--audit-max-mb",
+    "--audit-backups",
+]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("option", POSITIVE_OPTIONS)
+@pytest.mark.parametrize("value", ["0", "-1"])
+def test_options_refuse_zero_or_a_negative_value(option, value, capsys):
+    with pytest.raises(SystemExit):
+        create_parser().parse_args([option, value])
+
+    assert f"argument {option}: must be at least 1" in capsys.readouterr().err
+
+
+@pytest.mark.unit
+def test_heartbeat_secs_accepts_zero_to_disable_the_pings():
+    assert create_parser().parse_args(["--heartbeat-secs", "0"]).heartbeat_secs == 0
 
 
 # ================================================================================
@@ -195,6 +267,7 @@ def test_start_server_runs_uvicorn_with_resolved_master_key(monkeypatch):
         max_concurrency_per_user=4,
         heartbeat_secs=30,
         log_buffer_mb=5,
+        log_backups=1,
         log_file=None,
     )
     run.assert_called_once_with("app", host="0.0.0.0", port=9000, forwarded_allow_ips=None)
@@ -211,6 +284,20 @@ def test_start_server_forwards_log_file_to_create_app(monkeypatch):
     start_server(args)
 
     assert str(create_app_mock.call_args.kwargs["log_file"]) == "server.log"
+
+
+@pytest.mark.unit
+def test_start_server_forwards_log_backups_to_create_app(monkeypatch):
+    """The logs page is refilled from as many rotated files as the log file keeps."""
+    monkeypatch.setattr("Pytre_Server.__main__.get_master_key_interactive", Mock(return_value="s3cret"))
+    create_app_mock = Mock(return_value="app")
+    monkeypatch.setattr("Pytre_Server.__main__.create_app", create_app_mock)
+    monkeypatch.setattr("Pytre_Server.__main__.uvicorn.run", Mock())
+    args = create_parser().parse_args(["--log-file", "server.log", "--log-backups", "4"])
+
+    start_server(args)
+
+    assert create_app_mock.call_args.kwargs["log_backups"] == 4
 
 
 @pytest.mark.unit
@@ -319,6 +406,69 @@ def test_main_dispatches_to_hash_password_flag_and_skips_server_start(monkeypatc
     main()
 
     assert not start.called
+
+
+@pytest.mark.unit
+def test_main_sets_up_the_log_file_with_its_size_and_number_of_rotated_files(monkeypatch):
+    monkeypatch.setattr("sys.argv", ["prog", "--log-file", "server.log", "--log-max-mb", "20", "--log-backups", "5"])
+    monkeypatch.setattr("Pytre_Server.__main__.start_server", Mock())
+    setup_file_logging = Mock()
+    monkeypatch.setattr("Pytre_Server.__main__.setup_file_logging", setup_file_logging)
+
+    main()
+
+    setup_file_logging.assert_called_once_with(Path("server.log"), logging.INFO, 20, 5)
+
+
+@pytest.mark.unit
+def test_main_sets_up_the_audit_file_with_its_size_and_number_of_rotated_files(monkeypatch):
+    argv = ["prog", "--audit-file", "audit.log", "--audit-max-mb", "50", "--audit-backups", "100"]
+    monkeypatch.setattr("sys.argv", argv)
+    monkeypatch.setattr("Pytre_Server.__main__.start_server", Mock())
+    setup_audit = Mock()
+    monkeypatch.setattr("Pytre_Server.__main__.setup_audit_file_logging", setup_audit)
+
+    main()
+
+    setup_audit.assert_called_once_with(Path("audit.log"), 50, 100)
+
+
+@pytest.mark.unit
+def test_main_sets_up_no_audit_file_by_default(monkeypatch):
+    monkeypatch.setattr("sys.argv", ["prog"])
+    monkeypatch.setattr("Pytre_Server.__main__.start_server", Mock())
+    setup_audit = Mock()
+    monkeypatch.setattr("Pytre_Server.__main__.setup_audit_file_logging", setup_audit)
+
+    main()
+
+    assert not setup_audit.called
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("audit_file", ["server.log", "logs/../server.log", "./server.log"])
+def test_main_refuses_the_same_file_for_the_logs_and_the_audit_events(monkeypatch, capsys, audit_file):
+    """Two handlers rotating one file would rename it under each other."""
+    monkeypatch.setattr("sys.argv", ["prog", "--log-file", "server.log", "--audit-file", audit_file])
+    start = Mock()
+    monkeypatch.setattr("Pytre_Server.__main__.start_server", start)
+
+    with pytest.raises(SystemExit):
+        main()
+
+    assert "--audit-file must be another file than --log-file" in capsys.readouterr().err
+    assert not start.called
+
+
+@pytest.mark.unit
+def test_main_accepts_another_file_for_the_audit_events(monkeypatch):
+    monkeypatch.setattr("sys.argv", ["prog", "--log-file", "server.log", "--audit-file", "audit.log"])
+    start = Mock()
+    monkeypatch.setattr("Pytre_Server.__main__.start_server", start)
+
+    main()
+
+    start.assert_called_once()
 
 
 # ================================================================================

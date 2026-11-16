@@ -3,8 +3,7 @@ import logging
 import keyring
 import keyring.errors
 import pytest
-from pathlib import Path
-from unittest.mock import Mock, MagicMock
+from unittest.mock import Mock
 from cryptography.fernet import Fernet
 
 from Pytre_Core.utils import LOGGER_ROOT_NAME
@@ -64,7 +63,29 @@ def pristine_pytre_logger():
     same pytest-xdist worker may already have changed it - every create_app() call attaches a LogBufferHandler
     and lowers the level to DEBUG for the whole process. Which tests share a worker depends on the number of
     workers, so a test relying on the logger's initial state would pass or fail from one machine to another."""
-    logger = logging.getLogger(LOGGER_ROOT_NAME)
+    yield from _pristine_logger(LOGGER_ROOT_NAME)
+
+
+@pytest.fixture
+def pristine_audit_logger():
+    """Same as pristine_pytre_logger, for the "Pytre.audit" logger: setup_audit_file_logging() attaches its
+    handler and sets its level there, not on "Pytre"."""
+    yield from _pristine_logger(f"{LOGGER_ROOT_NAME}.audit")
+
+
+def audit_records(caplog, event: str | None = None) -> list[logging.LogRecord]:
+    """The records logged by audit() that caplog captured, only those of `event` if given"""
+    records = [r for r in caplog.records if r.name == f"{LOGGER_ROOT_NAME}.audit"]
+    return [r for r in records if event is None or audit_fields(r)["event"] == event]
+
+
+def audit_fields(record: logging.LogRecord) -> dict:
+    """The fields audit() passed apart, through `extra`"""
+    return getattr(record, "audit")
+
+
+def _pristine_logger(name: str):
+    logger = logging.getLogger(name)
     original_handlers = list(logger.handlers)
     original_level = logger.level
 

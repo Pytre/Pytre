@@ -9,7 +9,7 @@ import pytest
 
 from Pytre_Core.utils import LOGGER_ROOT_NAME
 from Pytre_Server.log_buffer import SEPARATOR_MESSAGE, LogBufferHandler, LogEntry, setup_log_buffer
-from Pytre_Server.logs import setup_file_logging
+from Pytre_Server.logs import CONTINUE_INDENT, setup_file_logging
 
 
 pytestmark = pytest.mark.usefixtures("pristine_pytre_logger")  # see tests/conftest.py
@@ -22,7 +22,7 @@ def _make_record(msg: str = "hello", level: int = logging.INFO, logger_name: str
 
 
 def _line(msg: str, level: str = "INFO") -> str:
-    return f"2026-10-31 10:13:20+0100 - {level} - Pytre.test - {msg}\n"
+    return f"2026-10-31T10:13:20.739+01:00 - {level} - Pytre.test - {msg}\n"
 
 
 # ================================================================================
@@ -156,16 +156,26 @@ def test_entries_before_is_empty_once_history_exhausted():
 
 @pytest.mark.unit
 def test_parse_line_reads_every_field_and_respects_the_utc_offset():
-    entry = LogEntry.parse_line("2026-10-31 10:13:20+0100 - WARNING - Pytre.foo - hello", seq=7)
+    entry = LogEntry.parse_line("2026-10-31T10:13:20.739+01:00 - WARNING - Pytre.foo - hello", seq=7)
 
     assert entry is not None
     assert entry.seq == 7
-    assert entry.timestamp == datetime(2026, 10, 31, 9, 13, 20, tzinfo=timezone.utc).timestamp()
+    assert entry.timestamp == datetime(2026, 10, 31, 9, 13, 20, 739000, tzinfo=timezone.utc).timestamp()
     assert entry.level == logging.WARNING
     assert entry.level_name == "WARNING"
     assert entry.logger_name == "Pytre.foo"
     assert entry.message == "hello"
     assert entry.is_separator is False
+
+
+@pytest.mark.unit
+def test_parse_line_reads_a_date_with_a_space_and_an_offset_without_colon():
+    """Lines written before the log files used the ISO 8601 dates of the audit file."""
+    entry = LogEntry.parse_line("2026-10-31 10:13:20+0100 - WARNING - Pytre.foo - hello", seq=1)
+
+    assert entry is not None
+    assert entry.timestamp == datetime(2026, 10, 31, 9, 13, 20, tzinfo=timezone.utc).timestamp()
+    assert entry.message == "hello"
 
 
 @pytest.mark.unit
@@ -179,7 +189,7 @@ def test_parse_line_reads_a_date_without_offset_as_local_time():
 
 @pytest.mark.unit
 def test_parse_line_keeps_separators_inside_the_message():
-    entry = LogEntry.parse_line("2026-10-31 10:13:20+0100 - INFO - Pytre.foo - a - b - c", seq=1)
+    entry = LogEntry.parse_line("2026-10-31T10:13:20.739+01:00 - INFO - Pytre.foo - a - b - c", seq=1)
 
     assert entry is not None
     assert entry.message == "a - b - c"
@@ -192,7 +202,7 @@ def test_parse_line_keeps_separators_inside_the_message():
         "",
         "Traceback (most recent call last):",
         "  some - traceback - line - here",
-        "2026-10-31 10:13:20+0100 - NOTALEVEL - Pytre.foo - hello",
+        "2026-10-31T10:13:20.739+01:00 - NOTALEVEL - Pytre.foo - hello",
         "not-a-date - INFO - Pytre.foo - hello",
     ],
 )
@@ -222,6 +232,69 @@ def test_load_from_file_reads_rotated_file_first_then_adds_a_separator(tmp_path)
 
 
 @pytest.mark.unit
+def test_load_from_file_reads_every_rotated_file_oldest_first(tmp_path):
+    log_file = tmp_path / "server.log"
+    for i in (3, 2, 1):
+        log_file.with_name(f"server.log.{i}").write_text(_line(f"backup {i}"), encoding="utf-8")
+    log_file.write_text(_line("active"), encoding="utf-8")
+    handler = LogBufferHandler(max_bytes=10_000)
+
+    handler.load_from_file(log_file, backup_count=3)
+
+    messages = [e.message for e in handler.entries_since(0)]
+    assert messages == ["backup 3", "backup 2", "backup 1", "active", SEPARATOR_MESSAGE]
+
+
+@pytest.mark.unit
+def test_load_from_file_reads_only_the_given_number_of_rotated_files(tmp_path):
+    log_file = tmp_path / "server.log"
+    for i in (2, 1):
+        log_file.with_name(f"server.log.{i}").write_text(_line(f"backup {i}"), encoding="utf-8")
+    log_file.write_text(_line("active"), encoding="utf-8")
+    handler = LogBufferHandler(max_bytes=10_000)
+
+    handler.load_from_file(log_file)  # LOG_BACKUP_COUNT, i.e. 1
+
+    assert [e.message for e in handler.entries_since(0)] == ["backup 1", "active", SEPARATOR_MESSAGE]
+
+
+@pytest.mark.unit
+def test_load_from_file_skips_a_missing_rotated_file(tmp_path):
+    log_file = tmp_path / "server.log"
+    log_file.with_name("server.log.3").write_text(_line("backup 3"), encoding="utf-8")
+    log_file.write_text(_line("active"), encoding="utf-8")
+    handler = LogBufferHandler(max_bytes=10_000)
+
+    handler.load_from_file(log_file, backup_count=3)
+
+    assert [e.message for e in handler.entries_since(0)] == ["backup 3", "active", SEPARATOR_MESSAGE]
+
+
+@pytest.mark.unit
+def test_setup_log_buffer_reads_the_given_number_of_rotated_files(tmp_path):
+    log_file = tmp_path / "server.log"
+    log_file.with_name("server.log.2").write_text(_line("backup 2"), encoding="utf-8")
+    log_file.write_text(_line("active"), encoding="utf-8")
+
+    handler = setup_log_buffer(backup_count=2, log_file=log_file)
+
+    assert [e.message for e in handler.entries_since(0)] == ["backup 2", "active", SEPARATOR_MESSAGE]
+
+
+@pytest.mark.unit
+def test_load_from_file_reads_a_rotated_file_written_with_the_former_date_format(tmp_path):
+    """After an update, the rotated file still holds lines dated as before: "2026-10-31 10:13:20+0100"."""
+    log_file = tmp_path / "server.log"
+    log_file.with_name("server.log.1").write_text("2026-10-31 10:13:20+0100 - INFO - Pytre.test - before\n", encoding="utf-8")
+    log_file.write_text(_line("after"), encoding="utf-8")
+    handler = LogBufferHandler(max_bytes=10_000)
+
+    handler.load_from_file(log_file)
+
+    assert [e.message for e in handler.entries_since(0)] == ["before", "after", SEPARATOR_MESSAGE]
+
+
+@pytest.mark.unit
 def test_load_from_file_works_with_only_the_active_file(tmp_path):
     log_file = tmp_path / "server.log"
     log_file.write_text(_line("only"), encoding="utf-8")
@@ -243,6 +316,36 @@ def test_load_from_file_attaches_continuation_lines_to_their_entry(tmp_path):
 
     messages = [e.message for e in handler.entries_since(0)]
     assert messages == ["failed\nTraceback (most recent call last):\n  File x", "next", SEPARATOR_MESSAGE]
+
+
+@pytest.mark.unit
+def test_load_from_file_removes_the_indent_of_continuation_lines(tmp_path):
+    """Only the indent added by the file formatter: a traceback's own spaces are kept."""
+    log_file = tmp_path / "server.log"
+    content = _line("failed", level="ERROR") + f"{CONTINUE_INDENT}Traceback (most recent call last):\n"
+    content += f"{CONTINUE_INDENT}  File x\n"
+    log_file.write_text(content, encoding="utf-8")
+    handler = LogBufferHandler(max_bytes=10_000)
+
+    handler.load_from_file(log_file)
+
+    assert handler.entries_since(0)[0].message == "failed\nTraceback (most recent call last):\n  File x"
+
+
+@pytest.mark.unit
+def test_load_from_file_does_not_take_an_indented_line_for_a_record(tmp_path):
+    """An indented line is a continuation, even when it looks like a record: it was slipped into a logged value."""
+    log_file = tmp_path / "server.log"
+    forged = _line("Admin 'mallory' logged in", level="WARNING")
+    log_file.write_text(_line("Failed login for 'alice") + f"{CONTINUE_INDENT}{forged}", encoding="utf-8")
+    handler = LogBufferHandler(max_bytes=10_000)
+
+    handler.load_from_file(log_file)
+
+    entry, separator = handler.entries_since(0)
+    assert entry.level_name == "INFO"
+    assert entry.message == f"Failed login for 'alice\n{forged.rstrip()}"
+    assert separator.is_separator is True
 
 
 @pytest.mark.unit
@@ -324,6 +427,22 @@ def test_load_from_file_reads_back_what_the_file_handler_wrote(tmp_path):
     assert failed.level_name == "ERROR"
     assert failed.message.startswith("it failed\nTraceback (most recent call last):")
     assert failed.message.endswith("ValueError: boom")
+    assert separator.is_separator is True
+
+
+@pytest.mark.unit
+def test_load_from_file_reads_back_a_multi_line_message_as_it_was_logged(tmp_path):
+    """The indent written by the file formatter is removed on reading, a forged record stays in its message."""
+    log_file = tmp_path / "server.log"
+    setup_file_logging(log_file)
+    message = "Failed login for 'alice\n2026-11-16 10:00:00+0100 - WARNING - Pytre - Admin 'mallory' logged in'"
+    logging.getLogger("Pytre.test_round_trip").info(message)
+    handler = LogBufferHandler(max_bytes=10_000)
+
+    handler.load_from_file(log_file)
+
+    entry, separator = handler.entries_since(0)
+    assert (entry.level_name, entry.message) == ("INFO", message)
     assert separator.is_separator is True
 
 

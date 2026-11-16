@@ -18,6 +18,7 @@ import keyring.errors
 import pytest
 
 from Pytre_Core.kee import Kee
+from tests.conftest import audit_fields, audit_records
 from tests.integration.conftest import TEST_USERNAME
 
 pytestmark = pytest.mark.integration
@@ -133,7 +134,10 @@ def test_set_is_logged_with_the_admin_username(local_admin_client, fake_keyring,
     with caplog.at_level(logging.INFO):
         local_admin_client.post("/admin/master-key/set", data={"password": "s3cret!", "confirm_password": "s3cret!"})
 
-    assert any(f"Master key set/changed in keyring by admin '{TEST_USERNAME}'" in r.message for r in caplog.records)
+    [record] = audit_records(caplog, "master_key.set")
+    assert record.levelno == logging.WARNING
+    assert record.message == f"Master key set/changed in keyring by admin '{TEST_USERNAME}' from 127.0.0.1"
+    assert "s3cret!" not in record.message
 
 
 def test_page_reflects_key_exists_after_set(local_admin_client, fake_keyring):
@@ -164,7 +168,10 @@ def test_reveal_is_logged_with_the_admin_username(local_admin_client, fake_keyri
     with caplog.at_level(logging.INFO):
         local_admin_client.post("/admin/master-key/reveal")
 
-    assert any(f"Master key revealed by admin '{TEST_USERNAME}'" in r.message for r in caplog.records)
+    [record] = audit_records(caplog, "master_key.reveal")
+    assert record.levelno == logging.WARNING
+    assert record.message == f"Master key revealed by admin '{TEST_USERNAME}' from 127.0.0.1"
+    assert "s3cret!" not in record.message
 
 
 def test_reveal_returns_null_if_nothing_stored(local_admin_client, fake_keyring):
@@ -204,7 +211,10 @@ def test_delete_is_logged_with_the_admin_username(local_admin_client, fake_keyri
     with caplog.at_level(logging.INFO):
         local_admin_client.post("/admin/master-key/delete")
 
-    assert any(f"Master key deleted from keyring by admin '{TEST_USERNAME}'" in r.message for r in caplog.records)
+    [record] = audit_records(caplog, "master_key.delete")
+    assert record.levelno == logging.WARNING
+    assert record.message == f"Master key deleted from keyring by admin '{TEST_USERNAME}' from 127.0.0.1"
+    assert "s3cret!" not in record.message
 
 
 def test_delete_is_a_noop_if_nothing_stored(local_admin_client, fake_keyring):
@@ -258,8 +268,11 @@ def test_master_key_actions_are_refused_to_a_remote_admin(
     assert "stored" not in response.text
     assert fake_keyring == {("Pytre_Server", "master_key"): "stored"}
     assert pwd_changes == []
-    expected_log = f"Local-only action refused for admin '{TEST_USERNAME}' on {path}: not a local connection"
-    assert any(expected_log in record.message for record in caplog.records)
+    [record] = audit_records(caplog, "local_action.failed")
+    assert record.message.startswith(
+        f"Local-only action refused for admin '{TEST_USERNAME}' on '{path}': not a local connection from "
+    )
+    assert audit_fields(record)["target"] == path
 
 
 @pytest.mark.parametrize("header", ["X-Forwarded-For", "X-Real-IP", "Forwarded"])

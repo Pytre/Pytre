@@ -19,10 +19,20 @@ from starlette.datastructures import FormData
 
 from Pytre_Core.users import AuthType, OidcLink, User, UserField, hash_password
 from Pytre_Core.utils import log as _log
+from Pytre_Server.audit import AuditedRecords, audit, shorten
 from Pytre_Server.query_logs_reader import QueryLogsUnavailable, last_run_by_user, start_to_timestamp
 from Pytre_Server.routes.admin_auth import is_loopback, require_admin_session
-from Pytre_Server.server_state import ServerState, get_server_state
+from Pytre_Server.server_state import ServerState, client_host, get_server_state
 from Pytre_Server.templating import templates
+
+
+USERS_AUDIT = AuditedRecords(
+    "user",
+    "User",
+    "username",
+    User.AUDIT_SECRETS,
+    warns=lambda before, after: after["admin"] and not (before or {}).get("admin"),  # an account becoming admin
+)
 
 
 router = APIRouter(prefix="/users")
@@ -106,6 +116,8 @@ async def _save_user(
         name: str(form_data.get(f"attrib__{name}", "")).strip() for name in state.app_ctx.users.get_cust_attribs_list()
     }
 
+    before = user.audit_fields() if user.exists else None
+
     # update user with form submitted values
     await user_form.apply_to(user, attribs_cust)
 
@@ -119,7 +131,8 @@ async def _save_user(
         context["error"] = str(e)
         return templates.TemplateResponse(request, "admin/user_form.html", context)
 
-    log(f"User '{user.username}' saved by admin '{admin_username}'", logging.INFO)
+    USERS_AUDIT.log_change(client_host(request), admin_username, before, user.audit_fields())
+
     return RedirectResponse(url="/admin/users?msg=User+saved", status_code=status.HTTP_303_SEE_OTHER)
 
 
@@ -226,23 +239,30 @@ async def user_edit_submit(
 # ------------------------------------------------------------------------------------------
 @router.post("/{uuid}/delete")
 def user_delete(
-    uuid: str, state: ServerState = Depends(get_server_state), admin_username: str = Depends(require_admin_session)
+    uuid: str,
+    request: Request,
+    state: ServerState = Depends(get_server_state),
+    admin_username: str = Depends(require_admin_session),
 ) -> RedirectResponse:
     user = state.app_ctx.users.find_user_by_uuid(uuid)
     if user is None:
         return RedirectResponse(url="/admin/users?error=User+not+found", status_code=status.HTTP_303_SEE_OTHER)
+
+    before = user.audit_fields()
 
     try:
         user.delete()
     except LookupError as e:
         return RedirectResponse(url=f"/admin/users?error={e}", status_code=status.HTTP_303_SEE_OTHER)
 
-    log(f"User '{user.username}' deleted by admin '{admin_username}'", logging.WARNING)
+    USERS_AUDIT.log_change(client_host(request), admin_username, before, None)
+
     return RedirectResponse(url="/admin/users?msg=User+deleted", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @router.post("/delete")
 def users_delete_bulk(
+    request: Request,
     uuids: list[str] = Form(default_factory=list),
     state: ServerState = Depends(get_server_state),
     admin_username: str = Depends(require_admin_session),
@@ -255,8 +275,9 @@ def users_delete_bulk(
             nb_errors += 1
             continue
         try:
+            before = user.audit_fields()
             user.delete()
-            log(f"User '{user.username}' deleted by admin '{admin_username}' (bulk)", logging.WARNING)
+            USERS_AUDIT.log_change(client_host(request), admin_username, before, None)
             nb_ok += 1
         except LookupError:
             nb_errors += 1
@@ -284,6 +305,7 @@ def users_groups_add_form(
 def users_groups_add_submit(
     request: Request,
     state: ServerState = Depends(get_server_state),
+    admin_username: str = Depends(require_admin_session),
     uuids: list[str] = Form(...),
     groups: list[str] = Form(default_factory=list),
 ) -> HTMLResponse | RedirectResponse:
@@ -296,7 +318,13 @@ def users_groups_add_submit(
         }
         return templates.TemplateResponse(request, "admin/users_groups_form.html", context)
 
+    before_all = state.app_ctx.users.audit_snapshot()
+
     state.app_ctx.users.users_add_groups(uuids, groups)
+
+    after_all = state.app_ctx.users.audit_snapshot()
+    USERS_AUDIT.log_changes(client_host(request), admin_username, before_all, after_all, "groups added")
+
     return RedirectResponse(url="/admin/users?msg=Groups+assigned", status_code=status.HTTP_303_SEE_OTHER)
 
 
@@ -316,6 +344,7 @@ def users_groups_remove_form(
 def users_groups_remove_submit(
     request: Request,
     state: ServerState = Depends(get_server_state),
+    admin_username: str = Depends(require_admin_session),
     uuids: list[str] = Form(...),
     groups: list[str] = Form(default_factory=list),
 ) -> HTMLResponse | RedirectResponse:
@@ -328,7 +357,13 @@ def users_groups_remove_submit(
         }
         return templates.TemplateResponse(request, "admin/users_groups_form.html", context)
 
+    before_all = state.app_ctx.users.audit_snapshot()
+
     state.app_ctx.users.users_remove_groups(uuids, groups)
+
+    after_all = state.app_ctx.users.audit_snapshot()
+    USERS_AUDIT.log_changes(client_host(request), admin_username, before_all, after_all, "groups removed")
+
     return RedirectResponse(url="/admin/users?msg=Groups+removed", status_code=status.HTTP_303_SEE_OTHER)
 
 
@@ -345,6 +380,7 @@ def users_attributes_page(request: Request, state: ServerState = Depends(get_ser
 def users_attributes_add(
     request: Request,
     state: ServerState = Depends(get_server_state),
+    admin_username: str = Depends(require_admin_session),
     name: str = Form(...),
 ) -> HTMLResponse | RedirectResponse:
     name = name.strip()
@@ -362,6 +398,9 @@ def users_attributes_add(
         return templates.TemplateResponse(request, "admin/users_attributes.html", {"attribs": attribs, "error": error})
 
     state.app_ctx.users.modify_custom_attribs([name])
+    msg = f"User attribute {shorten(name)!r} added by admin {admin_username!r}"
+    audit("user.attribute.add", client_host(request), msg, actor=admin_username, target=name)
+
     return RedirectResponse(url="/admin/users?msg=Attribute+added", status_code=status.HTTP_303_SEE_OTHER)
 
 
@@ -369,6 +408,7 @@ def users_attributes_add(
 def users_attributes_remove(
     request: Request,
     state: ServerState = Depends(get_server_state),
+    admin_username: str = Depends(require_admin_session),
     names: list[str] = Form(default_factory=list),
 ) -> HTMLResponse | RedirectResponse:
     if not names:
@@ -377,6 +417,17 @@ def users_attributes_remove(
         return templates.TemplateResponse(request, "admin/users_attributes.html", context)
 
     state.app_ctx.users.remove_custom_attribs(names)
+    for name in names:
+        msg = f"User attribute {shorten(name)!r} removed from every user by admin {admin_username!r}"
+        audit(
+            "user.attribute.remove",
+            client_host(request),
+            msg,
+            actor=admin_username,
+            target=name,
+            level=logging.WARNING,
+        )
+
     return RedirectResponse(url="/admin/users?msg=Attribute(s)+removed", status_code=status.HTTP_303_SEE_OTHER)
 
 
@@ -392,6 +443,7 @@ def users_import_form(request: Request) -> HTMLResponse:
 async def users_import_submit(
     request: Request,
     state: ServerState = Depends(get_server_state),
+    admin_username: str = Depends(require_admin_session),
     file: UploadFile = File(...),
 ) -> HTMLResponse | RedirectResponse:
     tmp_path: str | None = None
@@ -400,12 +452,19 @@ async def users_import_submit(
         with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp:
             tmp.write(content)
             tmp_path = tmp.name
+        before_all = await asyncio.to_thread(state.app_ctx.users.audit_snapshot)
         await asyncio.to_thread(state.app_ctx.users.csv_import, tmp_path)
     except Exception as e:
         return templates.TemplateResponse(request, "admin/users_import.html", {"error": str(e)})
     finally:
         if tmp_path:
             os.unlink(tmp_path)
+
+    after_all = await asyncio.to_thread(state.app_ctx.users.audit_snapshot)
+    counts = USERS_AUDIT.log_changes(client_host(request), admin_username, before_all, after_all, "CSV import")
+    msg = f"Users imported by admin {admin_username!r} ({counts['user.create']} created, "
+    msg += f"{counts['user.update']} updated)"
+    audit("user.import", client_host(request), msg, actor=admin_username)
 
     return RedirectResponse(url="/admin/users?msg=Users+imported", status_code=status.HTTP_303_SEE_OTHER)
 
@@ -429,9 +488,11 @@ def users_export(
         return RedirectResponse(url="/admin/users?error=Export+failed", status_code=status.HTTP_303_SEE_OTHER)
 
     if include_hashes:
-        log(f"Users exported with their password hashes by admin '{admin_username}'", logging.WARNING)
+        msg, level = f"Users exported with their password hashes by admin {admin_username!r}", logging.WARNING
     else:
-        log(f"Users exported without their password hashes by admin '{admin_username}'", logging.INFO)
+        msg, level = f"Users exported without their password hashes by admin {admin_username!r}", logging.INFO
+
+    audit("user.export", client_host(request), msg, actor=admin_username, level=level)
 
     return FileResponse(
         tmp_path,

@@ -6,6 +6,7 @@ Tests that never reach a successful password change (missing/invalid token) use 
 instead, since that writes to the KeePass database - see conftest.py.
 """
 
+import logging
 import time
 
 import pytest
@@ -13,8 +14,9 @@ import pytest
 from Pytre_Core.context import AppContext
 from Pytre_Core.users import User, hash_password
 from Pytre_Server.auth_token import TokenType, create_token
+from tests.conftest import audit_fields, audit_records
 from tests.integration.conftest import TEST_DB_PASSWORD, TEST_USER_PASSWORD, TEST_USERNAME
-from tests.integration.routes.conftest import event_loop_is_running
+from tests.integration.routes.conftest import client_from, event_loop_is_running
 
 pytestmark = pytest.mark.integration
 
@@ -128,3 +130,30 @@ def test_change_password_hashes_and_saves_outside_the_event_loop(isolated_client
 
     assert response.status_code == 200
     assert loop_running == {"hash": False, "save": False}
+
+
+def test_change_password_is_audited_with_the_client_address_but_never_the_password(isolated_client, caplog):
+    remote_client = client_from(isolated_client, "10.0.0.7")
+    headers = {"Authorization": f"Bearer {_login(remote_client)}"}
+
+    with caplog.at_level(logging.INFO):
+        remote_client.post("/change-password", json={"new_password": "a-new-password"}, headers=headers)
+
+    [record] = audit_records(caplog, "client.password_change")
+    assert record.levelno == logging.INFO
+    assert record.message == f"User '{TEST_USERNAME}' changed their password from 10.0.0.7"
+    assert audit_fields(record) == {
+        "event": "client.password_change",
+        "actor": TEST_USERNAME,
+        "ip": "10.0.0.7",
+        "target": TEST_USERNAME,
+        "changes": None,
+    }
+    assert not any("a-new-password" in r.getMessage() for r in caplog.records)
+
+
+def test_change_password_refused_is_not_audited(client, caplog):
+    with caplog.at_level(logging.INFO):
+        client.post("/change-password", json={"new_password": "a-new-password"})
+
+    assert audit_records(caplog) == []

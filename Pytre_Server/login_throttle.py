@@ -11,7 +11,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
-from Pytre_Core.utils import log as _log
+from Pytre_Server.audit import audit, shorten
 from Pytre_Server.auth_token import TokenType
 
 
@@ -29,10 +29,6 @@ IP_MAX_TRACKED = 10_000  # bounds memory during a flood, the stalest one is forg
 KNOWN_ADDRESS_LIFETIME = TokenType.REFRESH.value  # as long as the refresh token the address obtained
 KNOWN_ADDRESSES_PER_USER = 10  # the most recent ones
 KNOWN_ADDRESSES_MAX_USERS = 10_000  # bounds memory, the username with the stalest proof is forgotten first
-
-
-def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__) -> None:
-    _log(msg, level=level, sublogger=sublogger)
 
 
 class LoginThrottle:
@@ -72,9 +68,9 @@ class LoginThrottle:
         ip_key = self._ip_key(host)
         user_ip_key = self._user_ip_key(username, host)
 
-        self.user_ip.record_failing(user_ip_key)
-        self.user.record_failing(user_key)
-        self.ip.record_failing(ip_key)
+        self.user_ip.record_failing(user_ip_key, host)
+        self.user.record_failing(user_key, host)
+        self.ip.record_failing(ip_key, host)
 
     def record_success(self, username: str, host: str | None) -> None:
         """Records a successful login of `username` from the address `host`: forgets the failures of `username` from
@@ -147,9 +143,9 @@ class _FailureCounter:
         """True if `key` has hit `max_attempts` failures within the rolling window"""
         return len(self._recent_failed(key)) >= self.max_attempts
 
-    def record_failing(self, key: str) -> None:
+    def record_failing(self, key: str, host: str | None) -> None:
         """Records a failed login from `key`. Beyond `max_tracked` keys, the one whose latest failure is the oldest
-        is forgotten."""
+        is forgotten. A count it throttles is logged to the audit log, once."""
         attempts = self._recent_failed(key)
         attempts.append(datetime.now(timezone.utc))
 
@@ -160,7 +156,8 @@ class _FailureCounter:
             del self.failed_login[next(iter(self.failed_login))]
 
         if len(attempts) == self.max_attempts:
-            log(f"{self.label} '{key}' has been throttled, too many failed login attempts", self.log_level)
+            msg = f"{self.label} {shorten(key)!r} has been throttled, too many failed login attempts"
+            audit("login.throttled", host, msg, target=key, level=self.log_level)
 
     def _recent_failed(self, key: str) -> list[datetime]:
         """Failed attempts for `key` still inside the rolling window. Also prunes the stored list as a side effect,

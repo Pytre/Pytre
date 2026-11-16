@@ -15,10 +15,12 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from Pytre_Core.context import UserContext
 from Pytre_Core.sql_query.file_parser import FileParser
 from Pytre_Core.utils import log as _log
+
+from Pytre_Server.audit import audit, shorten
 from Pytre_Server.query_catalog import QueryCatalog
 from Pytre_Server.query_logs_reader import QueryLogsUnavailable, start_to_timestamp, usage_by_query
 from Pytre_Server.routes.admin_auth import require_admin_session
-from Pytre_Server.server_state import ServerState, get_server_state
+from Pytre_Server.server_state import client_host, get_server_state, ServerState
 from Pytre_Server.templating import templates
 
 
@@ -72,9 +74,37 @@ def _usage(db_uri: str) -> dict[str, tuple[int, int | None]] | None:
     return {query_id: (nb, start_to_timestamp(last_run)) for query_id, (nb, last_run) in usage.items()}
 
 
-def _clear_hash_exemption(state: ServerState, file_id: str, admin_username: str) -> RedirectResponse:
-    if state.resources.ignore_hash_until.pop(file_id, None) is not None:
-        log(f"Hash-check exemption for '{file_id}' cleared by admin '{admin_username}'", logging.WARNING)
+def _catalog_changes(old: QueryCatalog, new: QueryCatalog) -> str:
+    """What a reload changed in the catalog, by query file: added, changed (any change of the file, header included)
+    and removed"""
+    old_files = {file_id: parser.content for file_id, parser in old.by_file_id.items()}
+    new_files = {file_id: parser.content for file_id, parser in new.by_file_id.items()}
+
+    groups = {
+        "added": sorted(new_files.keys() - old_files.keys()),
+        "changed": sorted(f for f in new_files.keys() & old_files.keys() if new_files[f] != old_files[f]),
+        "removed": sorted(old_files.keys() - new_files.keys()),
+    }
+    return "; ".join(
+        f"{kind} {len(ids)}" + (f": {shorten(', '.join(ids))}" if ids else "") for kind, ids in groups.items()
+    )
+
+
+def _audit_hash_exemption(
+    request: Request, file_id: str, admin_username: str, before: datetime | None, after: datetime | None
+) -> None:
+    """Logs a hash-check exemption set, changed or cleared: it lets clients run the server query even though it
+    has been changed since they loaded it"""
+
+    msg = f"Hash-check exemption for {file_id!r} {'cleared' if after is None else 'set'} by admin {admin_username!r}"
+    changes = {"ignore_hash_until": [before.isoformat() if before else None, after.isoformat() if after else None]}
+    audit("query.hash_exemption", client_host(request), msg, actor=admin_username, target=file_id, changes=changes)
+
+
+def _clear_hash_exemption(request: Request, state: ServerState, file_id: str, admin_username: str) -> RedirectResponse:
+    cleared = state.resources.ignore_hash_until.pop(file_id, None)
+    if cleared is not None:
+        _audit_hash_exemption(request, file_id, admin_username, cleared, None)
 
     msg = quote_plus(f"Hash exemption for {file_id} cleared")
     return RedirectResponse(url=f"/admin/queries?msg={msg}", status_code=status.HTTP_303_SEE_OTHER)
@@ -139,6 +169,12 @@ def queries_reload(
     )
 
     total_errors = new_catalog.load_errors + new_catalog.build_errors
+
+    summary = _catalog_changes(state.query_catalog, new_catalog)
+    summary += f"; {len(total_errors)} error(s)" if total_errors else ""
+    msg = f"Query catalog reloaded by admin {admin_username!r} ({summary})"
+    audit("query_catalog.reload", client_host(request), msg, actor=admin_username)
+
     msg = f"Queries reloaded ({len(new_catalog.parsers)} loaded"
     msg += f", {len(total_errors)} error(s)" if total_errors else ""
     msg += ")"
@@ -168,6 +204,7 @@ def query_edit_form(
 @router.post("/{file_id}/ignore-hash")
 def query_ignore_hash_set(
     file_id: str,
+    request: Request,
     state: ServerState = Depends(get_server_state),
     until_ts: str = Form(""),
     admin_username: str = Depends(require_admin_session),
@@ -180,14 +217,14 @@ def query_ignore_hash_set(
         return RedirectResponse(url="/admin/queries?error=Query+not+found", status_code=status.HTTP_303_SEE_OTHER)
 
     if not until_ts:
-        return _clear_hash_exemption(state, file_id, admin_username)
+        return _clear_hash_exemption(request, state, file_id, admin_username)
 
     # Convert until_ts to UTC datetime and remove exemption if it's in the past
     try:
         new_datetime = datetime.fromtimestamp(int(until_ts), tz=timezone.utc)
         now = datetime.now(timezone.utc)
         if new_datetime <= now:
-            return _clear_hash_exemption(state, file_id, admin_username)
+            return _clear_hash_exemption(request, state, file_id, admin_username)
     except (ValueError, OverflowError, OSError):
         return RedirectResponse(url="/admin/queries?error=Invalid+date", status_code=status.HTTP_303_SEE_OTHER)
 
@@ -196,10 +233,7 @@ def query_ignore_hash_set(
     if current_datetime is None or int(new_datetime.timestamp()) != int(current_datetime.timestamp()):
         msg = f"Hash check for {file_id} updated"
         state.resources.ignore_hash_until[file_id] = new_datetime
-        log(
-            f"Hash-check exemption for '{file_id}' set until {new_datetime.isoformat()} by admin '{admin_username}'",
-            logging.WARNING,
-        )
+        _audit_hash_exemption(request, file_id, admin_username, current_datetime, new_datetime)
     else:
         msg = f"Hash exemption for {file_id} unchanged"
 

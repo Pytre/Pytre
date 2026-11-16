@@ -21,6 +21,7 @@ from pykeepass.entry import Entry
 import Pytre_Core.kee as kee_module
 from Pytre_Core.kee import Kee
 
+from Pytre_Core.utils import secret_fingerprint
 from Pytre_Core.users import (
     AuthType,
     OidcLink,
@@ -2973,3 +2974,73 @@ def test_csv_export_exports_the_sso_login(real_users, tmp_path):
 
     rows = list(csv.DictReader(output_file.read_text(encoding="utf-8-sig").splitlines(), delimiter=";"))
     assert next(row for row in rows if row["Id"] == "jdupont")["Sso Login"] == "jean.dupont@example.com"
+
+
+# ================================================================================
+# Audit fields
+# ================================================================================
+
+
+def test_user_audit_fields_give_every_followed_field():
+    user = User(None, detect_user=False)
+    user.username = "bob"
+    user.display_name = "Bob"
+    user.admin = True
+    user.auth_type = AuthType.OIDC
+    user.password_hash = "hash"
+    user.groups = ["sales", "all"]
+    user.sso_login = "bob@example.com"
+    user.oidc_link = OidcLink(issuer="https://idp.example.com", sub="sub-1", refresh_token="rt-secret")
+    user.attribs_cust = {"site": "Paris"}
+
+    assert user.audit_fields() == {
+        "username": "bob",
+        "display_name": "Bob",
+        "admin": True,
+        "auth_type": "OIDC",
+        "password": secret_fingerprint("hash"),
+        "groups": {"sales"},
+        "no_all_group": False,
+        "sso_login": "bob@example.com",
+        "oidc_link": {"issuer": "https://idp.example.com", "sub": "sub-1"},  # never its refresh token
+        "attribute.site": "Paris",
+    }
+
+
+def test_user_audit_fields_leave_the_all_group_to_no_all_group():
+    """The "all" group is added on loading unless no_all_group, and never saved: following it would show a change
+    at every save of a form that doesn't send it."""
+    user = User(None, detect_user=False)
+    user.groups = ["all"]
+
+    assert user.audit_fields()["groups"] == set()
+
+
+def test_user_audit_fields_leave_out_an_empty_custom_attribute():
+    user = User(None, detect_user=False)
+    user.attribs_cust = {"site": "", "region": "North"}
+
+    fields = user.audit_fields()
+
+    assert "attribute.site" not in fields
+    assert fields["attribute.region"] == "North"
+
+
+def test_user_audit_secrets_are_audit_fields():
+    """A secret renamed in audit_fields() but not in AUDIT_SECRETS would be logged in clear"""
+    assert set(User.AUDIT_SECRETS) <= User(None, detect_user=False).audit_fields().keys()
+
+
+def test_users_audit_snapshot_gives_the_audit_fields_of_every_user_by_uuid(real_users):
+    snapshot = real_users.audit_snapshot()
+
+    users = real_users.get_all_users(reload=False)
+    assert snapshot == {user.uuid: user.audit_fields() for user in users}
+    assert len(snapshot) == len(users) > 0
+
+
+def test_user_audit_fields_never_hold_the_password_hash():
+    user = User(None, detect_user=False)
+    user.password_hash = "$argon2id$v=19$m=65536,t=3,p=4$c2FsdA$aGFzaA"
+
+    assert user.password_hash not in str(user.audit_fields())

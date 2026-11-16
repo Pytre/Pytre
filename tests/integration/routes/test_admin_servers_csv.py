@@ -9,7 +9,9 @@ import logging
 import pytest
 
 from Pytre_Core.context import AppContext
+from tests.conftest import audit_fields, audit_records
 from tests.integration.conftest import TEST_DB_PASSWORD, TEST_USERNAME
+from tests.integration.routes.conftest import TESTCLIENT_HOST
 from tests.resources.build_test_keepass import TEST_SQL_SERVER
 
 pytestmark = pytest.mark.integration
@@ -87,11 +89,9 @@ def test_remote_export_leaves_passwords_blank(admin_client, caplog):
 
     assert response.status_code == 200
     assert _exported_rows(response)[TEST_SQL_SERVER["id"]]["Password"] == ""
-    assert any(
-        r.levelno == logging.INFO
-        and r.message == f"Servers exported without their passwords by admin '{TEST_USERNAME}'"
-        for r in caplog.records
-    )
+    [record] = audit_records(caplog, "server.export")
+    assert record.levelno == logging.INFO
+    assert record.message.startswith(f"Servers exported without their passwords by admin '{TEST_USERNAME}' from ")
 
 
 def test_local_export_includes_passwords_and_logs_a_warning(local_admin_client, caplog):
@@ -99,11 +99,10 @@ def test_local_export_includes_passwords_and_logs_a_warning(local_admin_client, 
         response = local_admin_client.get("/admin/servers/export")
 
     assert _exported_rows(response)[TEST_SQL_SERVER["id"]]["Password"] == TEST_SQL_SERVER["password"]
-    assert any(
-        r.levelno == logging.WARNING
-        and r.message == f"Servers exported with their passwords by admin '{TEST_USERNAME}'"
-        for r in caplog.records
-    )
+    [record] = audit_records(caplog, "server.export")
+    assert record.levelno == logging.WARNING
+    assert record.message == f"Servers exported with their passwords by admin '{TEST_USERNAME}' from 127.0.0.1"
+    assert audit_fields(record)["actor"] == TEST_USERNAME
 
 
 def test_reimporting_a_remote_export_keeps_the_passwords(isolated_admin_client):
@@ -178,3 +177,42 @@ def test_servers_list_tells_a_remote_export_has_no_password(admin_client):
 
     assert "Passwords are only included when exporting from the server itself" in page
     assert "pytreConfirmDownload(this.dataset.confirm, '/admin/servers/export')" in page  # asks before exporting
+
+
+# ================================================================================
+# Audit log
+# ================================================================================
+
+
+def test_import_is_audited_for_each_server_it_created_or_updated_then_summed_up(isolated_admin_client, caplog):
+    content = _export_with(isolated_admin_client, TEST_SQL_SERVER["id"], Description="Renamed")
+    content += "imported_server;Imported;mssql;sa;pwd;UTF-8;master;127.0.0.1;1433;;60;300;false;\n".encode()
+    caplog.clear()
+
+    with caplog.at_level(logging.INFO):
+        isolated_admin_client.post("/admin/servers/import", files={"file": ("servers.csv", content, "text/csv")})
+
+    events = [(audit_fields(r)["event"], audit_fields(r)["target"]) for r in audit_records(caplog)]
+    assert events == [
+        ("server.update", TEST_SQL_SERVER["id"]),
+        ("server.create", "imported_server"),
+        ("server.import", None),
+    ]  # the other server of the export is unchanged: left out
+    [update] = audit_records(caplog, "server.update")
+    assert audit_fields(update)["changes"] == {"description": [TEST_SQL_SERVER["description"], "Renamed"]}
+    assert "(CSV import)" in update.message
+    [create] = audit_records(caplog, "server.create")
+    assert audit_fields(create)["changes"]["password"] == "changed"
+    assert "pwd" not in create.message
+    [summary] = audit_records(caplog, "server.import")
+    assert summary.message == f"Servers imported by admin '{TEST_USERNAME}' (1 created, 1 updated) from {TESTCLIENT_HOST}"
+
+
+def test_refused_import_is_not_audited(isolated_admin_client, caplog):
+    content = _export_with(isolated_admin_client, TEST_SQL_SERVER["id"], Host="attacker.example.com")
+    caplog.clear()
+
+    with caplog.at_level(logging.INFO):
+        isolated_admin_client.post("/admin/servers/import", files={"file": ("servers.csv", content, "text/csv")})
+
+    assert audit_records(caplog) == []

@@ -482,3 +482,17 @@ def test_default_folders_are_next_to_the_application():
     """Shared settings: a default in each user's home would give each workstation its own queries and logs"""
     assert DEFAULT_QUERIES_FOLDER.parent == get_install_folder()
     assert DEFAULT_LOGS_FOLDER.parent == get_install_folder()
+
+
+def test_audit_fields_give_the_settings_the_web_administration_changes(mock_kee):
+    settings = Settings(mock_kee)
+    settings.queries_folder = Path("/srv/pytre/queries")
+    settings.logs_are_on = True
+    settings.logs_folder = Path("/srv/pytre/logs")
+    settings.jwt_secret = "never-followed"
+
+    assert settings.audit_fields() == {
+        "queries_folder": str(Path("/srv/pytre/queries")),
+        "logs_are_on": True,
+        "logs_folder": str(Path("/srv/pytre/logs")),
+    }

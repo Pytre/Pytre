@@ -12,6 +12,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
 
 from Pytre_Core.servers import DEFAULT_PORT, Server, Servers, ServerTarget, filter_servers
+from Pytre_Core.utils import secret_fingerprint
 
 
 # ================================================================================
@@ -1669,3 +1670,62 @@ def test_csv_import_is_all_or_nothing(mock_kee, tmp_path):
     valid.set_custom_property.assert_not_called()
     assert valid.notes == ""
     mock_kee.db.add_entry.assert_not_called()
+
+
+# ================================================================================
+# Audit fields
+# ================================================================================
+
+
+def test_server_audit_fields_give_every_followed_field(mock_kee):
+    server = Server(Servers(mock_kee))
+    server.id = "x3"
+    server.description = "ERP"
+    server.type = "postgre"
+    server.host = "db.example.com"
+    server.port = "5432"
+    server.server = "inst"
+    server.trust_server_certificate = True
+    server.database = "erp"
+    server.user = "reader"
+    server.password = "s3cret"
+    server.charset = "UTF8"
+    server.login_timeout = 30
+    server.timeout = 600
+    server.grp_authorized = ["sales", "finance"]
+
+    assert server.audit_fields() == {
+        "id": "x3",
+        "description": "ERP",
+        "type": "postgre",
+        "host": "db.example.com",
+        "port": "5432",
+        "server": "inst",
+        "trust_server_certificate": True,
+        "database": "erp",
+        "user": "reader",
+        "password": secret_fingerprint("s3cret"),
+        "charset": "UTF8",
+        "login_timeout": 30,
+        "timeout": 600,
+        "grp_authorized": {"sales", "finance"},
+    }
+
+
+def test_server_audit_secrets_are_audit_fields(mock_kee):
+    """A secret renamed in audit_fields() but not in AUDIT_SECRETS would be logged in clear"""
+    assert set(Server.AUDIT_SECRETS) <= Server(Servers(mock_kee)).audit_fields().keys()
+
+
+def test_servers_audit_snapshot_is_empty_without_servers_group(mock_kee):
+    servers = Servers(mock_kee)
+    servers.kee_grp = None
+
+    assert servers.audit_snapshot() == {}
+
+
+def test_server_audit_fields_never_hold_the_password(mock_kee):
+    server = Server(Servers(mock_kee))
+    server.password = "Sql-P4ssword"
+
+    assert "Sql-P4ssword" not in str(server.audit_fields())

@@ -21,6 +21,7 @@ from Pytre_Core.sql_query.loader import build_queries_from_parsers, filter_queri
 from Pytre_Core.sql_query.query import Query
 from Pytre_Core.sql_query.query_drivers_server import AsyncSqlConnectionError, AsyncSqlExecutionError
 
+from Pytre_Server.audit import audit, shorten, sign_in_failure
 from Pytre_Server.auth_token import create_token, decode_token, TokenType
 from Pytre_Server.oidc import OidcReverifyError, verify_still_active
 from Pytre_Server.result_streaming import ClientDisconnected, DisconnectAware, pings, stream_result_ndjson
@@ -189,10 +190,16 @@ async def login(
 
     if not is_basic_existing_user or not password_ok:
         resources.login_throttle.record_failure(request.username, host)
+
+        attempted = shorten(request.username)
+        reason = sign_in_failure(user)
+        audit("client.login.failed", host, f"Failed login attempt for {attempted!r}: {reason}", target=attempted)
+
         http_error = status.HTTP_401_UNAUTHORIZED
         raise HTTPException(status_code=http_error, detail="Invalid username or password")
 
     resources.login_throttle.record_success(request.username, host)
+    audit("client.login", host, f"User {user.username!r} logged in", actor=user.username, target=user.username)
     return LoginResponse(
         refresh_token=create_token(user.username, state.app_ctx.settings.jwt_secret, TokenType.REFRESH),
         access_token=create_token(user.username, state.app_ctx.settings.jwt_secret, TokenType.ACCESS),
@@ -237,6 +244,7 @@ async def refresh(
 @router.post("/change-password")
 async def change_password(
     request: ChangePasswordRequest,
+    http_request: Request,
     username: str = Depends(require_access_token),
     state: ServerState = Depends(get_server_state),
 ) -> ChangePasswordResponse:
@@ -246,6 +254,14 @@ async def change_password(
     user = UserContext(state.app_ctx.users, username=username).user
     user.password_hash = await asyncio.to_thread(hash_password, request.new_password)
     await asyncio.to_thread(user.save)
+
+    audit(
+        "client.password_change",
+        client_host(http_request),
+        f"User {username!r} changed their password",
+        actor=username,
+        target=username,
+    )
 
     return ChangePasswordResponse(
         refresh_token=create_token(username, state.app_ctx.settings.jwt_secret, TokenType.REFRESH),

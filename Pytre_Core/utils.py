@@ -1,12 +1,17 @@
 import codecs
+import hmac
 import logging
 import os
-import subprocess
 import platform
+import secrets
+import subprocess
+
 
 from pathlib import Path
 
 LOGGER_ROOT_NAME = "Pytre"
+
+_FINGERPRINT_KEY = secrets.token_bytes(32)  # drawn at startup: a fingerprint can't be checked outside this process
 
 
 def log(msg: str | object, level: int = logging.INFO, sublogger: str = "") -> None:
@@ -34,6 +39,15 @@ def setup_standalone_logging() -> None:
         format="%(asctime)s - %(levelname)s - %(message)s",
         datefmt="%H:%M:%S",
     )
+
+
+def secret_fingerprint(secret: str) -> str:
+    """Stands for `secret` where only whether it changed matters, such as the audit snapshots: equal for equal
+    secrets within this process, but keyed by a random key of the process, so it reveals nothing about the secret,
+    not even a weak one. Empty for an empty secret."""
+    if not secret:
+        return ""
+    return hmac.new(_FINGERPRINT_KEY, secret.encode("utf-8"), "sha256").hexdigest()
 
 
 def get_system() -> str:

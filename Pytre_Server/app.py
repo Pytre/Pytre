@@ -12,8 +12,8 @@ from Pytre_Core.context import AppContext, AppMode
 from Pytre_Core.logs_central import ServerDriven
 from Pytre_Core.utils import log as _log
 
-from Pytre_Server.log_buffer import setup_log_buffer
-from Pytre_Server.logs import MAX_LOG_SIZE_MB
+from Pytre_Server.log_buffer import BUFFER_MAX_SIZE_MB, setup_log_buffer
+from Pytre_Server.logs import LOG_BACKUP_COUNT
 from Pytre_Server.query_catalog import QueryCatalog
 from Pytre_Server.routes.admin_auth import AdminAuthRequired, admin_auth_required_handler, admin_session_middleware
 from Pytre_Server.routes.admin_router import router as admin_router
@@ -61,13 +61,14 @@ def create_app(
     db_pool_size: int = 30,
     max_concurrency_per_user: int = 4,
     heartbeat_secs: int = 30,
-    log_buffer_mb: int = MAX_LOG_SIZE_MB,
+    log_buffer_mb: int = BUFFER_MAX_SIZE_MB,
+    log_backups: int = LOG_BACKUP_COUNT,
     log_file: Path | str | None = None,
 ) -> FastAPI:
     """Build and configure the FastAPI app"""
 
     # setup log_buffer
-    log_buffer = setup_log_buffer(max_mb=log_buffer_mb, log_file=log_file)
+    log_buffer = setup_log_buffer(max_mb=log_buffer_mb, backup_count=log_backups, log_file=log_file)
 
     # create app
     app = FastAPI(title="Pytre Server", lifespan=_lifespan)

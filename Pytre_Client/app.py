@@ -1156,7 +1156,7 @@ class App(tk.Toplevel):
             self.output_textbox["state"] = "normal"
 
             if not tag:
-                self.output_textbox.replace(start_pos, end_pos, str(txt_message))
+                self.output_textbox.replace(start_pos, end_pos, txt_message)
             else:
                 self.output_textbox.insert(start_pos, txt_message, tag)
 
@@ -1241,7 +1241,7 @@ class App(tk.Toplevel):
                 msg = f"Vous utilisez déjà la dernière version disponible ({full_version()})."
                 messagebox.showinfo("Mise à jour", msg, parent=self)
 
-        result_queue = ThreadQueue()
+        result_queue: ThreadQueue[tuple[Release | None, UpdateError | None]] = ThreadQueue()
         Thread(target=worker, daemon=True).start()
         tk_call_when_ready(self, result_queue, check_end)
 
@@ -1329,7 +1329,7 @@ class App(tk.Toplevel):
                 self.restart_after_update = True
                 self.app_exit()
 
-        result_queue = ThreadQueue()
+        result_queue: ThreadQueue[tuple[Path | None, UpdateError | None]] = ThreadQueue()
         Thread(target=worker, daemon=True).start()
         tk_call_when_ready(self, result_queue, download_end)
         show_progress()

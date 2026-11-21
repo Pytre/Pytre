@@ -138,7 +138,7 @@ class Query:
 
         user_infos = remote_server.remote.user_infos if remote_server else None
         query_user_ctx = user_ctx.with_remote_user_infos(user_infos)  # return as is if no user_infos
-        query: Query = cls(app_ctx, query_user_ctx)
+        query: Self = cls(app_ctx, query_user_ctx)
 
         query.remote_server = remote_server
         query.filename = Path(data["filename"])

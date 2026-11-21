@@ -125,8 +125,7 @@ if __name__ == "__main__":
     setup_terminal_logging(logging.DEBUG)
 
     log_file = "./Pytre_Server.log"  # specify a file to allow file logging
-    if log_file is not None:
-        setup_file_logging(log_file)
+    setup_file_logging(log_file)
 
     master_key = get_master_key_interactive()
     if master_key is None:

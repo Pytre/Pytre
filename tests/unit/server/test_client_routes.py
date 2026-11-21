@@ -1,5 +1,6 @@
 """
-Tests for Pytre_Server/routes/client.py's execute_query() helpers - the parts of /execute
+Tests for the preparation of an execution (Pytre_Server/routes/client_execution.py) and /execute's _run_query()
+(Pytre_Server/routes/client_execution_stream.py) - the parts of /execute
 testable without a full FastAPI TestClient round trip.
 """
 
@@ -13,7 +14,8 @@ from fastapi import HTTPException
 
 from Pytre_Core.sql_query.query_drivers_server import AsyncSqlConnectionError, AsyncSqlExecutionError
 from Pytre_Core.user_prefs import DisplayFormat
-from Pytre_Server.routes.client import ExecuteRequest, _apply_parameters, _run_query
+from Pytre_Server.routes.client_execution import ExecuteRequest, _apply_parameters
+from Pytre_Server.routes.client_execution_stream import _run_query
 
 
 def _make_param(is_hidden: bool, display_value: str = "") -> Mock:
@@ -206,11 +208,11 @@ class _FakeDisconnectRequest:
         return self.calls > self._disconnect_after
 
 
-def _make_state(heartbeat_secs: float, chunk_size: int = 10) -> Mock:
+def _make_state(heartbeat_secs: float, batch_size: int = 10) -> Mock:
     state = Mock()
     state.app_ctx.servers.servers_dict = {"s": Mock()}  # "s" matches _make_request()'s server_id
     state.heartbeat_secs = heartbeat_secs
-    state.chunk_size = chunk_size
+    state.batch_size = batch_size
     return state
 
 

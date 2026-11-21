@@ -29,7 +29,7 @@ def anyio_backend():
 
 @pytest.fixture
 def server_state() -> ServerState:
-    return ServerState(app_ctx=Mock(), query_catalog=Mock(), chunk_size=2000, max_concurrency_per_user=4)
+    return ServerState(app_ctx=Mock(), query_catalog=Mock(), batch_size=2000, max_concurrency_per_user=4)
 
 
 @pytest.mark.unit

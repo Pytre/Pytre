@@ -1,6 +1,6 @@
 """
 Integration tests for the desktop client's mediated-mode SSO login (Pytre_Server/routes/client_sso.py)
-and GET /auth-methods (Pytre_Server/routes/client.py) - end to end through GET /login/sso/start,
+and GET /auth-methods (Pytre_Server/routes/client_auth.py) - end to end through GET /login/sso/start,
 GET /login/sso/callback and POST /login/sso/token, with the identity provider itself faked (see
 tests/integration/routes/conftest.py, shared with test_admin_auth.py's own SSO tests).
 

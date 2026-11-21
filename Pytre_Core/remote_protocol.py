@@ -1,10 +1,21 @@
 """Format of the data exchanged between Client and Server"""
 
 import json
+from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import datetime, date
 from decimal import Decimal
 from enum import StrEnum
 from typing import Any
+
+
+JOB_WAIT_SECS = 20  # longest wait of a /jobs response before the server answers "not yet"
+JOB_ABANDON_SECS = 120  # a job nothing was asked for since so long is cancelled by the server
+
+
+def error_payload(error: BaseException, prefix: str = "") -> dict[str, str]:
+    """How `error` is reported to the client, its message preceded by `prefix`"""
+    return {"type": type(error).__name__, "message": f"{prefix}{error}"}
 
 
 # ------------------------------------------------------------------------------------------
@@ -26,7 +37,7 @@ def stream_line(key: StreamKey, payload: Any) -> str:
 
 def stream_error(error: BaseException, prefix: str = "") -> str:
     """NDJSON line reporting `error` to the client, its message preceded by `prefix`."""
-    return stream_line(StreamKey.ERROR, {"type": type(error).__name__, "message": f"{prefix}{error}"})
+    return stream_line(StreamKey.ERROR, error_payload(error, prefix))
 
 
 # ------------------------------------------------------------------------------------------
@@ -58,6 +69,68 @@ def decode_row_value(value: Any) -> Any:
         return Decimal(value["$decimal"])
 
     return value
+
+
+# ------------------------------------------------------------------------------------------
+# JSON responses of /jobs: an execution started by a call, its result read by numbered batches
+# ------------------------------------------------------------------------------------------
+class JobStatus(StrEnum):
+    """`status` of each JSON response of /jobs"""
+
+    RUNNING = "running"  # the execution isn't over yet
+    READY = "ready"  # the execution is over, its batches can be read
+    PENDING = "pending"  # the batch asked for isn't ready yet
+    OK = "ok"  # the batch asked for is in the response
+    ERROR = "error"  # the execution or the reading failed, see JobKey.ERROR
+    CANCELLED = "cancelled"  # stopped before its end
+
+
+class JobKey(StrEnum):
+    """Keys of the JSON responses of /jobs"""
+
+    JOB_ID = "job_id"
+    STATUS = "status"  # a JobStatus, in every response
+    ERROR = "error"  # with JobStatus.ERROR: {"type", "message"}, see error_payload()
+    BATCH = "batch"  # number of the batch, from 1
+    COLUMNS = "columns"  # names of the columns, in the first batch only
+    ROWS = "rows"
+    LAST = "last"  # whether no batch follows
+
+
+@dataclass(frozen=True)
+class Batch:
+    """Batch `n` of a result, numbered from 1, as sent by /jobs/{id}/batches/{n}. Its rows hold the SQL values, the
+    columns come with the first batch only"""
+
+    n: int
+    rows: Sequence[Sequence[Any]]
+    last: bool  # whether no batch follows
+    columns: Sequence[str] | None = None
+
+    def encode(self) -> bytes:
+        """JSON response carrying this batch, encoded once to be sent again as is if asked again.
+        Raises TypeError for a value JSON can't encode."""
+        body: dict[str, Any] = {
+            JobKey.STATUS: JobStatus.OK,
+            JobKey.BATCH: self.n,
+            JobKey.ROWS: [[encode_row_value(value) for value in row] for row in self.rows],
+            JobKey.LAST: self.last,
+        }
+        if self.columns is not None:
+            body[JobKey.COLUMNS] = list(self.columns)
+
+        return json.dumps(body, separators=(",", ":")).encode()
+
+    @classmethod
+    def decode(cls, body: dict[str, Any]) -> Batch:
+        """Reverses encode(), from the decoded JSON of a JobStatus.OK response.
+        Raises KeyError or TypeError for a malformed one."""
+        return cls(
+            n=int(body[JobKey.BATCH]),
+            rows=[tuple(decode_row_value(value) for value in row) for row in body[JobKey.ROWS]],
+            last=bool(body[JobKey.LAST]),
+            columns=body.get(JobKey.COLUMNS),
+        )
 
 
 # ------------------------------------------------------------------------------------------

@@ -12,7 +12,13 @@ from unittest.mock import Mock, patch, MagicMock
 import pymssql
 
 from Pytre_Core.context import AppContext, AppMode
-from Pytre_Core.remotes import RemoteCursor, RemoteExecutionError, RemoteHTTPStatusError, RemoteRequestError
+from Pytre_Core.remotes import (
+    RemoteCursor,
+    RemoteExecutionError,
+    RemoteHTTPStatusError,
+    RemoteRequestError,
+    RemoteStopped,
+)
 from Pytre_Core.sql_query.query_drivers_client import ServerConnectionError
 from Pytre_Core.sql_query.query_execute import QueryExecute
 from Pytre_Core.sql_query.execute_config import LocalExecuteCfg, RemoteExecuteCfg
@@ -108,9 +114,11 @@ class _FakeRemote:
         self._columns = columns
         self._rows = rows
         self._error = error
+        self.should_stop = None
 
     @contextmanager
-    def execute(self, query_id, template_hash, display_format, display_parameters):
+    def execute(self, query_id, template_hash, display_format, display_parameters, should_stop=lambda: False):
+        self.should_stop = should_stop
         if self._error is not None:
             raise self._error
         # a real RemoteCursor, not a hand-rolled stand-in - production code does a genuine
@@ -601,7 +609,7 @@ def test_execute_remote_sends_remote_query_id_not_query_id(qe, mock_query, remot
     captured = {}
 
     @contextmanager
-    def spy_execute(query_id, template_hash, display_format, display_parameters):
+    def spy_execute(query_id, template_hash, display_format, display_parameters, should_stop=lambda: False):
         captured["query_id"] = query_id
         yield RemoteCursor(("col1", "col2"), (row for row in [("a", "1")]))
 
@@ -620,7 +628,7 @@ def test_execute_remote_sends_display_format_with_display_parameters(qe, mock_qu
     captured = {}
 
     @contextmanager
-    def spy_execute(query_id, template_hash, display_format, display_parameters):
+    def spy_execute(query_id, template_hash, display_format, display_parameters, should_stop=lambda: False):
         captured["display_format"] = display_format
         captured["display_parameters"] = display_parameters
         yield RemoteCursor(("col1",), (row for row in [("a",)]))
@@ -728,3 +736,117 @@ def test_execute_remote_row_conversion_error_bubbles_up(qe, mock_query, remote_c
     result = qe.execute()
 
     assert result == (-1, None)
+
+
+# ================================================================================
+# QueryExecute.execute - remote, stopped or failing while reading
+# ================================================================================
+
+
+class _RowsRemote:
+    """Stand-in for RemoteServer whose cursor gives `rows`, then raises `error` if any"""
+
+    id = "REMOTE1"
+
+    def __init__(self, rows: list[tuple], error: Exception | None = None, on_row=None):
+        self._rows = rows
+        self._error = error
+        self._on_row = on_row or (lambda: None)
+
+    def _iter_rows(self):
+        for row in self._rows:
+            self._on_row()
+            yield row
+        if self._error is not None:
+            raise self._error
+
+    @contextmanager
+    def execute(self, *args, **kwargs):
+        yield RemoteCursor(("col1",), self._iter_rows())
+
+
+def _messages(qe: QueryExecute) -> list[str]:
+    messages = []
+    while not qe.queue.empty():
+        messages.append(qe.queue.get()[1])
+    return [m for m in messages if isinstance(m, str)]
+
+
+@pytest.fixture
+def qe_with_queue(qe):
+    import queue as queue_module
+
+    qe.queue = queue_module.Queue()  # avoid multiprocessing.Queue's async pickling for this in-process check
+    return qe
+
+
+@pytest.mark.unit
+def test_execute_remote_lets_the_remote_look_for_a_stop(qe, mock_query, remote_config, fake_remote):
+    mock_query.get_exec_config.return_value = remote_config
+
+    qe.execute()
+
+    assert fake_remote.should_stop() is False
+    qe.stop_requested.set()
+    assert fake_remote.should_stop() is True
+
+
+@pytest.mark.unit
+def test_execute_remote_never_needs_to_kill_the_execution(qe, mock_query, remote_config):
+    """The remote stops cooperatively: cannot_stop is never set, the execution process is never terminated"""
+    mock_query.get_exec_config.return_value = remote_config
+    cannot_stop = Mock()
+    qe.cannot_stop = cannot_stop
+
+    qe.execute()
+
+    cannot_stop.set.assert_not_called()
+
+
+@pytest.mark.unit
+def test_execute_remote_stopped_while_executing_is_reported(qe_with_queue, mock_query, remote_config):
+    mock_query.get_exec_config.return_value = replace(
+        remote_config, remote_server=_FakeRemote(columns=(), rows=[], error=RemoteStopped("stopped"))
+    )
+
+    assert qe_with_queue.execute() == (-1, None)
+    assert any(m.endswith(" - Exécution interrompue") for m in _messages(qe_with_queue))
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "error, message",
+    [
+        (RemoteStopped("stopped"), "Extraction interrompue"),
+        (RemoteExecutionError("Execution lost by the remote"), "Erreur de la remote : Execution lost by the remote"),
+        (RemoteRequestError("Connection lost"), "Erreur de la remote : Connection lost"),
+    ],
+    ids=["stopped", "lost", "network"],
+)
+def test_execute_remote_failing_while_reading_removes_the_partial_file(
+    qe_with_queue, mock_query, remote_config, tmp_path, error, message
+):
+    extract_file = tmp_path / "out.csv"
+    mock_query.get_exec_config.return_value = replace(
+        remote_config, extract_file=extract_file, remote_server=_RowsRemote([("a",), ("b",)], error=error)
+    )
+
+    assert qe_with_queue.execute() == (-1, None)
+    assert not extract_file.exists()
+    assert any(m.endswith(message) for m in _messages(qe_with_queue))
+    qe_with_queue.user_ctx.user_logs.insert_exec.assert_not_called()
+
+
+@pytest.mark.unit
+def test_execute_stopped_between_two_rows_removes_the_partial_file_and_logs_nothing(
+    qe_with_queue, mock_query, remote_config, tmp_path
+):
+    """A stop seen by the extraction loop itself, between two rows, is an interruption: not a result of 0 rows"""
+    extract_file = tmp_path / "out.csv"
+    remote = _RowsRemote([("a",), ("b",), ("c",)], on_row=qe_with_queue.stop_requested.set)
+    mock_query.get_exec_config.return_value = replace(remote_config, extract_file=extract_file, remote_server=remote)
+
+    assert qe_with_queue.execute() == (-1, None)
+    assert not extract_file.exists()
+    assert any(m.endswith(" - Extraction interrompue") for m in _messages(qe_with_queue))
+    qe_with_queue.user_ctx.user_logs.insert_exec.assert_not_called()

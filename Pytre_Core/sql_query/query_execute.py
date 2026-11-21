@@ -7,7 +7,7 @@ from typing import Any
 
 from Pytre_Core import users, logs_user
 from Pytre_Core.context import AppContext, UserContext
-from Pytre_Core.remotes import RemoteCursor, RemoteError, RemoteRequestError, RemoteServer
+from Pytre_Core.remotes import RemoteCursor, RemoteError, RemoteRequestError, RemoteServer, RemoteStopped
 from Pytre_Core.servers import Server
 from Pytre_Core.sql_query.execute_config import LocalExecuteCfg, RemoteExecuteCfg
 from Pytre_Core.sql_query.execution_msg import ExecResultMsg
@@ -196,18 +196,23 @@ class QueryExecute:
         cfg: RemoteExecuteCfg = self.config
 
         self._broadcast(start_date.strftime(self.print_date_format) + " - Connexion à la remote...")
-        self.cannot_stop.set()
         self._broadcast(self._time_log() + " - Requête en cours d'execution...")
         self.queue.put((ExecResultMsg.START_TIMER, ""))
         try:
-            # execute query
+            # execute query, a stop is looked for while waiting for execution on the remote
             with self.remote.execute(
-                cfg.remote_query_id, cfg.template_hash, cfg.display_format, cfg.display_parameters
+                cfg.remote_query_id,
+                cfg.template_hash,
+                cfg.display_format,
+                cfg.display_parameters,
+                should_stop=self.stop_requested.is_set,
             ) as cursor:
-                self.cannot_stop.clear()
                 self.queue.put((ExecResultMsg.STOP_TIMER, ""))
                 # extract records
                 return self._extract_records(cursor, start_date)
+        except RemoteStopped:
+            self._broadcast(self._time_log() + " - Exécution interrompue")
+            return (-1, None)
         except RemoteRequestError as e:
             self._broadcast(self._time_log() + f" - Remote injoignable : {e}")
             return (-1, None)
@@ -275,13 +280,15 @@ class QueryExecute:
         try:
             self._broadcast(self._time_log() + " - Début récupération des lignes...")
             rows_count, execute_output = self._extract_to_file(cursor)
-            if execute_output == "" and self.stop_requested.is_set():
+            if execute_output is None:
                 raise InterruptedError()
             ending_date = datetime.now()
             self._execute_log_results(start_date, ending_date, rows_count)
             return rows_count, execute_output
-        except InterruptedError:
+        except (InterruptedError, RemoteStopped):
             self._broadcast(self._time_log() + " - Extraction interrompue")
+        except RemoteError as e:
+            self._broadcast(self._time_log() + f" - Erreur de la remote : {e}")
         except PermissionError:
             self._broadcast(self._time_log() + f" - Ecriture refusée pour : {self.config.extract_file}")
         except (FileNotFoundError, OSError) as e:

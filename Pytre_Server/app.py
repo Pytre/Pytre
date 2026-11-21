@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import traceback
 from contextlib import asynccontextmanager
@@ -17,7 +18,7 @@ from Pytre_Server.logs import LOG_BACKUP_COUNT
 from Pytre_Server.query_catalog import QueryCatalog
 from Pytre_Server.routes.admin_auth import AdminAuthRequired, admin_auth_required_handler, admin_session_middleware
 from Pytre_Server.routes.admin_router import router as admin_router
-from Pytre_Server.routes.client import router as client_router
+from Pytre_Server.routes.client_router import router as client_router
 from Pytre_Server.routes.sso_callback import router as sso_callback_router
 from Pytre_Server.server_state import ServerResources, ServerState
 
@@ -44,10 +45,16 @@ def os_error_handler(request: Request, exc: Exception) -> Response:
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
-    """Context function to manage server shutdown tasks"""
+    """Context function to manage server startup and shutdown tasks"""
+    state: ServerState = app.state.server
+
+    cleanup_task = asyncio.create_task(state.resources.jobs.periodic_cleanup())
+
     yield
 
-    state: ServerState = app.state.server
+    cleanup_task.cancel()
+    await asyncio.gather(cleanup_task, return_exceptions=True)
+    await state.resources.jobs.close_all()
 
     await state.resources.shutdown_drivers()
 
@@ -57,7 +64,7 @@ async def _lifespan(app: FastAPI):
 
 def create_app(
     master_key: str,
-    chunk_size: int = 2000,
+    batch_size: int = 5000,
     db_pool_size: int = 30,
     max_concurrency_per_user: int = 4,
     heartbeat_secs: int = 30,
@@ -88,7 +95,7 @@ def create_app(
     app.state.server = ServerState(
         app_ctx=_app_ctx,
         query_catalog=query_catalog,
-        chunk_size=chunk_size,
+        batch_size=batch_size,
         max_concurrency_per_user=max_concurrency_per_user,
         heartbeat_secs=heartbeat_secs,
         resources=ServerResources(execution_logs=execution_logs, log_buffer=log_buffer, db_pool_size=db_pool_size),

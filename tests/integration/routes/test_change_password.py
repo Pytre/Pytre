@@ -123,7 +123,7 @@ def test_change_password_hashes_and_saves_outside_the_event_loop(isolated_client
         loop_running["save"] = event_loop_is_running()
         real_save(self, save_db)
 
-    monkeypatch.setattr("Pytre_Server.routes.client.hash_password", spy_hash)
+    monkeypatch.setattr("Pytre_Server.routes.client_auth.hash_password", spy_hash)
     monkeypatch.setattr(User, "save", spy_save)
 
     response = isolated_client.post("/change-password", json={"new_password": "a-new-password"}, headers=headers)

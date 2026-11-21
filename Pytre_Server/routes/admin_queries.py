@@ -162,7 +162,7 @@ def queries_reload(
     request.app.state.server = ServerState(
         app_ctx=state.app_ctx,
         query_catalog=new_catalog,
-        chunk_size=state.chunk_size,
+        batch_size=state.batch_size,
         max_concurrency_per_user=state.max_concurrency_per_user,
         heartbeat_secs=state.heartbeat_secs,
         resources=state.resources,

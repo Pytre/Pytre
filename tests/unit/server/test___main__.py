@@ -128,7 +128,7 @@ def test_pos_int_refuses_anything_else(value, error):
 
 POSITIVE_OPTIONS = [
     "--port",
-    "--chunk-size",
+    "--batch-size",
     "--db-pool-size",
     "--max-concurrency-per-user",
     "--log-max-mb",
@@ -262,7 +262,7 @@ def test_start_server_runs_uvicorn_with_resolved_master_key(monkeypatch):
 
     create_app_mock.assert_called_once_with(
         master_key="s3cret",
-        chunk_size=2000,
+        batch_size=5000,
         db_pool_size=30,
         max_concurrency_per_user=4,
         heartbeat_secs=30,

@@ -293,7 +293,7 @@ async def test_fastmssql_result_close_can_be_called_several_times():
 
 @pytest.mark.anyio
 async def test_connect_translates_sql_connection_error():
-    """routes/client.py must never need to import fastmssql directly - every driver
+    """The routes executing queries must never need to import fastmssql directly - every driver
     translates its own library's exceptions into the shared AsyncSql*Error types."""
     fake_connection = Mock()
     original = fastmssql.SqlConnectionError("connection refused")

@@ -4,6 +4,8 @@ Tests for Pytre_Core/remotes.py
 
 import json
 import logging
+import threading
+import time
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
@@ -15,6 +17,7 @@ import pytest
 from Pytre_Core import remotes as remotes_module
 from Pytre_Core.app_folders import get_config_folder
 from Pytre_Core.policy import PlainHttpRemotesPolicy
+from Pytre_Core.remote_protocol import JOB_ABANDON_SECS, JOB_WAIT_SECS, Batch
 from Pytre_Core.remotes import (
     MANAGED_REMOTES_FILENAME,
     REMOTES_CIPHER,
@@ -26,9 +29,11 @@ from Pytre_Core.remotes import (
     RemoteExecutionError,
     RemoteHTTPStatusError,
     RemoteInsecureChannelError,
+    RemoteJob,
     RemoteRequestError,
     RemoteServer,
     RemoteSsoRequiredError,
+    RemoteStopped,
     Remotes,
     detail_from_response,
 )
@@ -2119,360 +2124,358 @@ def test_remote_server_deserialize_without_user_infos_defaults_to_none(address):
 
 
 # ================================================================================
-# RemoteServer.execute
+# RemoteServer.execute - executions by jobs (/jobs)
 # ================================================================================
 
 
-class _FakeStreamResponse:
-    """Minimal stand-in for the Response yielded by httpx2.stream() - only what
-    RemoteServer.execute() actually uses."""
+class _FakeJobsServer:
+    """Answers the requests of a RemoteJob through httpx2.MockTransport, from scripted answers per method and path:
+    each answer is used once, the last one again for every following request. An answer is (status, body) - body a
+    dict sent as JSON, bytes sent as is, or None - or an exception raised instead of answering."""
 
-    def __init__(self, lines: list[str], status_code: int = 200, status_error: Exception | None = None):
-        self._lines = lines
-        self.status_code = status_code
-        self._status_error = status_error
+    def __init__(self) -> None:
+        self.requests: list[httpx2.Request] = []
+        self.answers: dict[tuple[str, str], list] = {
+            ("POST", "/jobs"): [(201, {"job_id": "j1", "status": "running"})],
+            ("GET", "/jobs/j1"): [(200, {"status": "ready"})],
+            ("GET", "/jobs/j1/batches/1"): [(200, Batch(1, [], last=True, columns=[]).encode())],
+            ("DELETE", "/jobs/j1"): [(204, None)],
+        }
 
-    def raise_for_status(self) -> None:
-        if self._status_error is not None:
-            raise self._status_error
+    def script(self, method: str, path: str, *answers) -> None:
+        self.answers[(method, path)] = list(answers)
 
-    def read(self) -> None:
-        """No-op: execute() calls this to buffer the body before re-raising on a status
-        error, so a later e.response.json()/.text access doesn't hit ResponseNotRead."""
-        pass
+    def handle(self, request: httpx2.Request) -> httpx2.Response:
+        self.requests.append(request)
+        answers = self.answers.get((request.method, request.url.path))
+        if not answers:
+            return httpx2.Response(404, json={"detail": "Unknown job"})
 
-    def iter_lines(self):
-        return iter(self._lines)
+        answer = answers.pop(0) if len(answers) > 1 else answers[0]
+        if callable(answer):
+            answer = answer(request)
+        if isinstance(answer, BaseException):
+            raise answer
+
+        status, body = answer
+        if isinstance(body, bytes):
+            return httpx2.Response(status, content=body, headers={"content-type": "application/json"})
+        return httpx2.Response(status) if body is None else httpx2.Response(status, json=body)
+
+    @property
+    def calls(self) -> list[tuple[str, str]]:
+        return [(request.method, request.url.path) for request in self.requests]
 
 
-class _FakeStreamContext:
-    """Minimal stand-in for the context manager httpx2.stream() returns."""
+@pytest.fixture
+def jobs_server(monkeypatch) -> _FakeJobsServer:
+    """Every httpx2.Client created by RemoteJob talks to a _FakeJobsServer. /health answers ok."""
+    server = _FakeJobsServer()
+    real_client = httpx2.Client
+    monkeypatch.setattr(
+        httpx2, "Client", lambda **kwargs: real_client(transport=httpx2.MockTransport(server.handle), **kwargs)
+    )
+    _mock_health_check_ok(monkeypatch)
+    return server
 
-    def __init__(self, response: _FakeStreamResponse):
-        self._response = response
 
-    def __enter__(self) -> _FakeStreamResponse:
-        return self._response
-
-    def __exit__(self, *exc_info) -> bool:
-        return False
-
-
-def _ndjson_lines(*payloads: dict) -> list[str]:
-    return [json.dumps(p) for p in payloads]
+@pytest.fixture
+def no_retry_wait(monkeypatch) -> list[float]:
+    """RemoteJob doesn't wait between two tries: the delays it would have waited are recorded instead"""
+    delays: list[float] = []
+    monkeypatch.setattr(RemoteJob, "_wait_unless_stopped", lambda self, secs: delays.append(secs))
+    return delays
 
 
 def _mock_health_check_ok(monkeypatch) -> None:
-    """Mocks the GET /health pre-flight check that execute() makes before streaming -
-    without this, httpx2.get() would attempt a real network call in every test below."""
+    """Mocks the GET /health pre-flight check that execute() makes before creating the job"""
     monkeypatch.setattr(httpx2, "get", lambda **kwargs: _FakeResponse({"status": "ok"}))
 
 
+def _batch(n: int, rows: list, last: bool, columns: list[str] | None = None) -> tuple[int, bytes]:
+    return 200, Batch(n, rows, last, columns).encode()
+
+
+def _run(remote_server: RemoteServer, should_stop=lambda: False) -> tuple[tuple, list[tuple]]:
+    """Columns and rows of an execution"""
+    with remote_server.execute("Q1", "hash1", DisplayFormat(), {"@p": "1"}, should_stop=should_stop) as cursor:
+        return tuple(col[0] for col in cursor.description), list(cursor)
+
+
 @pytest.mark.unit
-def test_execute_yields_columns_and_rows(remote_server, monkeypatch):
-    _mock_health_check_ok(monkeypatch)
-    lines = _ndjson_lines({"__columns__": ["id", "name"]}, {"__row__": ["1", "a"]}, {"__row__": ["2", "b"]})
-    monkeypatch.setattr(httpx2, "stream", lambda *a, **k: _FakeStreamContext(_FakeStreamResponse(lines)))
-
-    with remote_server.execute("Q1", "hash1", DisplayFormat(), {}) as rows:
-        assert [col[0] for col in rows.description] == ["id", "name"]
-        assert list(rows) == [("1", "a"), ("2", "b")]
-
-
-@pytest.mark.unit
-def test_execute_skips_pings_before_columns_and_between_rows(remote_server, monkeypatch):
-    """The server sends pings while the query executes, and while it waits for the next rows."""
-    _mock_health_check_ok(monkeypatch)
-    ping = {"__ping__": True}
-    lines = _ndjson_lines(
-        ping, ping, {"__columns__": ["id"]}, ping, {"__row__": ["1"]}, ping, ping, {"__row__": ["2"]}, ping
+def test_execute_creates_a_job_waits_for_it_then_reads_its_batches(remote_server, jobs_server):
+    jobs_server.script("GET", "/jobs/j1", (200, {"status": "running"}), (200, {"status": "ready"}))
+    jobs_server.script(
+        "GET", "/jobs/j1/batches/1", _batch(1, [[1, "a"], [2, "b"]], last=False, columns=["id", "name"])
     )
-    monkeypatch.setattr(httpx2, "stream", lambda *a, **k: _FakeStreamContext(_FakeStreamResponse(lines)))
+    jobs_server.script("GET", "/jobs/j1/batches/2", _batch(2, [[3, "c"]], last=True))
 
-    with remote_server.execute("Q1", "hash1", DisplayFormat(), {}) as rows:
-        assert [col[0] for col in rows.description] == ["id"]
-        assert list(rows) == [("1",), ("2",)]
+    columns, rows = _run(remote_server)
 
-
-@pytest.mark.unit
-def test_execute_decodes_wrapped_datetime_date_and_decimal(remote_server, monkeypatch):
-    """Mirrors Pytre_Server's row encoding - the client must reconstruct real Python types
-    so its own SqlTypeConverter settings apply."""
-    _mock_health_check_ok(monkeypatch)
-    lines = _ndjson_lines(
-        {"__columns__": ["created", "day", "amount", "label"]},
-        {
-            "__row__": [
-                {"$datetime": "2026-01-01T10:30:00"},
-                {"$date": "2026-01-01"},
-                {"$decimal": "12.50"},
-                "unwrapped",
-            ]
-        },
-    )
-    monkeypatch.setattr(httpx2, "stream", lambda *a, **k: _FakeStreamContext(_FakeStreamResponse(lines)))
-
-    with remote_server.execute("Q1", "hash1", DisplayFormat(), {}) as rows:
-        result = list(rows)
-
-    assert result == [(datetime(2026, 1, 1, 10, 30), date(2026, 1, 1), Decimal("12.50"), "unwrapped")]
+    assert columns == ("id", "name")
+    assert rows == [(1, "a"), (2, "b"), (3, "c")]
+    assert jobs_server.calls == [
+        ("POST", "/jobs"),
+        ("GET", "/jobs/j1"),
+        ("GET", "/jobs/j1"),
+        ("GET", "/jobs/j1/batches/1"),
+        ("GET", "/jobs/j1/batches/2"),
+        ("DELETE", "/jobs/j1"),  # acknowledges the last batch
+    ]
 
 
 @pytest.mark.unit
-def test_execute_sends_correct_request(remote_server, monkeypatch):
-    _mock_health_check_ok(monkeypatch)
-    captured = {}
-    lines = _ndjson_lines({"__columns__": []})
+def test_execute_sends_the_query_and_its_parameters_to_create_the_job(remote_server, jobs_server):
+    _run(remote_server)
 
-    def fake_stream(method, url, json=None, headers=None, timeout=None):
-        captured["method"] = method
-        captured["url"] = url
-        captured["json"] = json
-        captured["headers"] = headers
-        return _FakeStreamContext(_FakeStreamResponse(lines))
-
-    monkeypatch.setattr(httpx2, "stream", fake_stream)
-
-    with remote_server.execute("Q1", "hash1", DisplayFormat(), {"p": "v"}) as rows:
-        list(rows)
-
-    assert captured["method"] == "POST"
-    assert captured["url"] == "http://127.0.0.1:8000/execute"
-    assert captured["json"] == {
+    creation = jobs_server.requests[0]
+    assert str(creation.url) == "http://127.0.0.1:8000/jobs"
+    assert json.loads(creation.content) == {
         "server_id": "SRV1",
         "query_id": "Q1",
         "template_hash": "hash1",
-        "display_format": {"date_format": "%d/%m/%Y", "decimal_separator": ","},
-        "display_parameters": {"p": "v"},
+        "display_format": DisplayFormat().to_dict(),
+        "display_parameters": {"@p": "1"},
     }
-    assert captured["headers"] == {}  # no token yet - no Authorization header, no username either
 
 
 @pytest.mark.unit
-def test_execute_empty_result_has_no_columns_or_rows(remote_server, monkeypatch):
-    _mock_health_check_ok(monkeypatch)
-    lines = _ndjson_lines({"__columns__": []})
-    monkeypatch.setattr(httpx2, "stream", lambda *a, **k: _FakeStreamContext(_FakeStreamResponse(lines)))
+def test_execute_decodes_wrapped_datetime_date_and_decimal(remote_server, jobs_server):
+    values = [datetime(2026, 1, 2, 3, 4, 5), date(2026, 1, 2), Decimal("12.50")]
+    jobs_server.script("GET", "/jobs/j1/batches/1", _batch(1, [values], last=True, columns=["dt", "d", "dec"]))
 
-    with remote_server.execute("Q1", "hash1", DisplayFormat(), {}) as rows:
-        assert rows.description == ()
-        assert list(rows) == []
+    _columns, rows = _run(remote_server)
+
+    assert rows == [tuple(values)]
 
 
 @pytest.mark.unit
-def test_execute_raises_remote_execution_error_on_error_line(remote_server, monkeypatch):
-    _mock_health_check_ok(monkeypatch)
-    lines = _ndjson_lines(
-        {"__columns__": ["id"]},
-        {"__row__": ["1"]},
-        {"__error__": {"type": "ValueError", "message": "boom"}},
+def test_execute_asks_again_for_a_batch_not_ready_yet(remote_server, jobs_server):
+    jobs_server.script(
+        "GET", "/jobs/j1/batches/1", (200, {"status": "pending"}), _batch(1, [[1]], last=True, columns=["id"])
     )
-    monkeypatch.setattr(httpx2, "stream", lambda *a, **k: _FakeStreamContext(_FakeStreamResponse(lines)))
 
-    collected = []
-    with remote_server.execute("Q1", "hash1", DisplayFormat(), {}) as rows:
-        with pytest.raises(RemoteExecutionError, match="ValueError: boom"):
-            for row in rows:
-                collected.append(row)
+    _columns, rows = _run(remote_server)
 
-    assert collected == [("1",)]  # the row read before the error line is not lost
+    assert rows == [(1,)]
+    assert jobs_server.calls.count(("GET", "/jobs/j1/batches/1")) == 2
 
 
 @pytest.mark.unit
-def test_execute_wraps_http_status_error_as_remote_http_status_error(remote_server, monkeypatch):
-    _mock_health_check_ok(monkeypatch)
-    error = httpx2.HTTPStatusError("404", request=None, response=None)  # type: ignore
-    monkeypatch.setattr(
-        httpx2, "stream", lambda *a, **k: _FakeStreamContext(_FakeStreamResponse([], status_error=error))
+def test_execute_of_an_empty_result_has_its_columns_and_no_rows(remote_server, jobs_server):
+    jobs_server.script("GET", "/jobs/j1/batches/1", _batch(1, [], last=True, columns=["id"]))
+
+    assert _run(remote_server) == (("id",), [])
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("path", ["/jobs/j1", "/jobs/j1/batches/1"], ids=["execution", "batch"])
+def test_execute_raises_remote_execution_error_on_an_error_status(remote_server, jobs_server, path):
+    error = {"type": "AsyncSqlExecutionError", "message": "SQL error: Invalid object name"}
+    jobs_server.script("GET", path, (200, {"status": "error", "error": error}))
+
+    with pytest.raises(RemoteExecutionError, match="AsyncSqlExecutionError: SQL error: Invalid object name"):
+        _run(remote_server)
+
+    assert jobs_server.calls[-1] == ("DELETE", "/jobs/j1")
+
+
+@pytest.mark.unit
+def test_execute_raises_remote_execution_error_for_a_job_lost_by_the_server(remote_server, jobs_server):
+    jobs_server.script("GET", "/jobs/j1", (404, {"detail": "Unknown job"}))
+
+    with pytest.raises(RemoteExecutionError, match="Execution lost"):
+        _run(remote_server)
+
+
+@pytest.mark.unit
+def test_execute_raises_remote_execution_error_for_a_response_that_isnt_a_job_one(remote_server, jobs_server):
+    jobs_server.script("GET", "/jobs/j1", (200, b"<html>proxy page</html>"))
+
+    with pytest.raises(RemoteExecutionError, match="Unexpected response"):
+        _run(remote_server)
+
+
+@pytest.mark.unit
+def test_execute_raises_remote_http_status_error_when_the_creation_is_refused(remote_server, jobs_server):
+    jobs_server.script("POST", "/jobs", (409, {"detail": "Query is not up to date, refresh your query list"}))
+
+    with pytest.raises(RemoteHTTPStatusError, match="Query is not up to date"):
+        _run(remote_server)
+
+    assert jobs_server.calls == [("POST", "/jobs")]  # no job to delete
+
+
+@pytest.mark.unit
+def test_execute_never_retries_the_creation_after_a_network_error(remote_server, jobs_server, no_retry_wait):
+    """The job may have been created and only its response lost: a retry would execute the query twice"""
+    jobs_server.script("POST", "/jobs", httpx2.ConnectError("boom"))
+
+    with pytest.raises(RemoteRequestError):
+        _run(remote_server)
+
+    assert jobs_server.calls == [("POST", "/jobs")]
+    assert no_retry_wait == []
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "failure",
+    [httpx2.ConnectError("boom"), (502, {"detail": "Bad gateway"}), (503, None), (504, None)],
+    ids=["network", "502", "503", "504"],
+)
+def test_execute_retries_a_failed_request_with_a_growing_delay(remote_server, jobs_server, no_retry_wait, failure):
+    jobs_server.script("GET", "/jobs/j1", failure, failure, (200, {"status": "ready"}))
+
+    _run(remote_server)
+
+    assert jobs_server.calls.count(("GET", "/jobs/j1")) == 3
+    assert no_retry_wait == [1.0, 2.0]
+
+
+@pytest.mark.unit
+def test_execute_gives_up_once_the_retries_are_exhausted(remote_server, jobs_server, no_retry_wait, monkeypatch):
+    monkeypatch.setattr(remotes_module, "_JOB_RETRY_SECS", 0)
+    jobs_server.script("GET", "/jobs/j1", httpx2.ConnectError("boom"))
+
+    with pytest.raises(RemoteRequestError, match="lost during the execution"):
+        _run(remote_server)
+
+    assert jobs_server.calls[-1] == ("DELETE", "/jobs/j1")  # tried anyway, the server abandons the job otherwise
+
+
+@pytest.mark.unit
+def test_execute_logs_in_again_on_a_401_then_sends_the_request_once_more(remote_server, jobs_server, auto_login_ok):
+    """An access token expiring during a long execution"""
+    jobs_server.script(
+        "GET", "/jobs/j1", (401, {"detail": "Invalid or expired access token"}), (200, {"status": "ready"})
     )
+
+    _run(remote_server)
+
+    assert remote_server.address.access_token == "a1"
+    assert jobs_server.requests[2].headers["Authorization"] == "Bearer a1"
+
+
+@pytest.mark.unit
+def test_execute_raises_remote_http_status_error_if_still_401_after_logging_in_again(
+    remote_server, jobs_server, auto_login_ok
+):
+    jobs_server.script("GET", "/jobs/j1", (401, {"detail": "Invalid or expired access token"}))
 
     with pytest.raises(RemoteHTTPStatusError):
-        with remote_server.execute("Q1", "hash1", DisplayFormat(), {}):
-            pass
+        _run(remote_server)
+
+    assert jobs_server.calls.count(("GET", "/jobs/j1")) == 2
 
 
 @pytest.mark.unit
-def test_execute_checks_health_before_streaming(remote_server, monkeypatch):
-    """The GET /health pre-flight must hit the right URL, before the POST /execute stream."""
+def test_execute_raises_remote_auth_error_if_logging_in_again_fails(remote_server, jobs_server, monkeypatch):
+    jobs_server.script("GET", "/jobs/j1", (401, {"detail": "Invalid or expired access token"}))
+    error = httpx2.HTTPStatusError("401", request=None, response=None)  # type: ignore
+    monkeypatch.setattr(httpx2, "post", lambda **kwargs: _FakeResponse(status_error=error))
+
+    with pytest.raises(RemoteAuthError):
+        _run(remote_server)
+
+
+@pytest.mark.unit
+def test_execute_stops_at_once_while_waiting_for_the_server(remote_server, jobs_server):
+    """A status request can wait about 20 s on the server: a stop doesn't wait for it to end"""
+    answering = threading.Event()
+    release = threading.Event()
+
+    def slow_status(_request):
+        answering.set()
+        release.wait(timeout=10)
+        return 200, {"status": "running"}
+
+    jobs_server.script("GET", "/jobs/j1", slow_status)
+    started = time.monotonic()
+    try:
+        with pytest.raises(RemoteStopped):
+            _run(remote_server, should_stop=answering.is_set)
+    finally:
+        release.set()
+
+    assert time.monotonic() - started < 5
+    assert jobs_server.calls[-1] == ("DELETE", "/jobs/j1")
+
+
+@pytest.mark.unit
+def test_execute_deletes_the_job_when_its_rows_are_left_unread(remote_server, jobs_server):
+    jobs_server.script("GET", "/jobs/j1/batches/1", _batch(1, [[1], [2]], last=False, columns=["id"]))
+
+    with remote_server.execute("Q1", "hash1", DisplayFormat(), {}) as cursor:
+        next(iter(cursor))
+
+    assert ("GET", "/jobs/j1/batches/2") not in jobs_server.calls
+    assert jobs_server.calls[-1] == ("DELETE", "/jobs/j1")
+
+
+@pytest.mark.unit
+def test_execute_lets_errors_of_the_caller_through_unchanged(remote_server, jobs_server):
+    with pytest.raises(ValueError, match="caller failure"):
+        with remote_server.execute("Q1", "hash1", DisplayFormat(), {}):
+            raise ValueError("caller failure")
+
+    assert jobs_server.calls[-1] == ("DELETE", "/jobs/j1")
+
+
+@pytest.mark.unit
+def test_execute_ends_normally_even_if_the_job_can_not_be_deleted(remote_server, jobs_server):
+    jobs_server.script("DELETE", "/jobs/j1", httpx2.ConnectError("boom"))
+
+    assert _run(remote_server) == ((), [])
+
+
+@pytest.mark.unit
+def test_execute_checks_health_before_creating_the_job(remote_server, jobs_server, monkeypatch):
     captured = {}
-    lines = _ndjson_lines({"__columns__": []})
 
     def fake_get(url, timeout=None):
         captured["url"] = url
         return _FakeResponse({"status": "ok"})
 
     monkeypatch.setattr(httpx2, "get", fake_get)
-    monkeypatch.setattr(httpx2, "stream", lambda *a, **k: _FakeStreamContext(_FakeStreamResponse(lines)))
 
-    with remote_server.execute("Q1", "hash1", DisplayFormat(), {}) as rows:
-        list(rows)
+    _run(remote_server)
 
     assert captured["url"] == "http://127.0.0.1:8000/health"
 
 
 @pytest.mark.unit
-def test_execute_fails_fast_without_streaming_if_health_check_fails(remote_server, monkeypatch):
-    """Regression: if Pytre_Server itself is unreachable, execute() must fail via the short
-    /health timeout instead of ever attempting the long-timeout POST /execute stream. Delegated
-    to Remote.check_health() - see its own dedicated tests for the exception-wrapping details."""
+def test_execute_fails_fast_without_creating_a_job_if_health_check_fails(remote_server, jobs_server, monkeypatch):
+    """If Pytre_Server itself is unreachable, execute() fails on the short /health timeout. Delegated to
+    Remote.check_health() - see its own tests for the exception-wrapping details."""
 
     def fake_get(**kwargs):
         raise httpx2.ConnectError("boom")
 
     monkeypatch.setattr(httpx2, "get", fake_get)
-    monkeypatch.setattr(httpx2, "stream", lambda *a, **k: pytest.fail("httpx2.stream should not be called"))
 
     with pytest.raises(RemoteRequestError):
-        with remote_server.execute("Q1", "hash1", DisplayFormat(), {}):
-            pass
+        _run(remote_server)
+
+    assert jobs_server.calls == []
 
 
 @pytest.mark.unit
-def test_execute_relogs_in_and_retries_once_on_401(remote_server, monkeypatch):
-    """No upfront token check: a missing/expired token surfaces as a 401 on the first POST
-    /execute attempt, handled by the same retry-and-relogin path as a later invalidation."""
-    _mock_health_check_ok(monkeypatch)
-    success_lines = _ndjson_lines({"__columns__": ["id"]}, {"__row__": ["1"]})
-    stream_contexts = iter(
-        [
-            _FakeStreamContext(_FakeStreamResponse([], status_code=401)),
-            _FakeStreamContext(_FakeStreamResponse(success_lines, status_code=200)),
-        ]
-    )
-    monkeypatch.setattr(httpx2, "stream", lambda *a, **k: next(stream_contexts))
-    monkeypatch.setattr(
-        httpx2, "post", lambda **kwargs: _FakeResponse({"refresh_token": "r1", "access_token": "new-token"})
-    )
-
-    with remote_server.execute("Q1", "hash1", DisplayFormat(), {}) as rows:
-        result = list(rows)
-
-    assert result == [("1",)]
-    assert remote_server.address.access_token == "new-token"
+def test_the_client_delays_fit_the_jobs_contract():
+    """A response comes before the read timeout, and a request retried until the end of the client's retry window
+    still finds the job: the server keeps it JOB_ABANDON_SECS without news"""
+    assert remotes_module._JOB_READ_TIMEOUT > JOB_WAIT_SECS
+    assert remotes_module._JOB_RETRY_SECS + JOB_WAIT_SECS < JOB_ABANDON_SECS
 
 
 @pytest.mark.unit
-def test_execute_raises_remote_http_status_error_if_still_401_after_relogin(remote_server, monkeypatch):
-    """Relogin succeeded (new token issued) but the retried request is still rejected - the
-    2nd attempt is the last one (max_login_retry reached), so it must surface as-is, wrapped
-    the same way as any other non-retriable HTTP failure."""
-    _mock_health_check_ok(monkeypatch)
-    error = httpx2.HTTPStatusError("401", request=None, response=None)  # type: ignore
-    stream_contexts = iter(
-        [
-            _FakeStreamContext(_FakeStreamResponse([], status_code=401)),
-            _FakeStreamContext(_FakeStreamResponse([], status_code=401, status_error=error)),
-        ]
-    )
-    monkeypatch.setattr(httpx2, "stream", lambda *a, **k: next(stream_contexts))
-    monkeypatch.setattr(
-        httpx2, "post", lambda **kwargs: _FakeResponse({"refresh_token": "r1", "access_token": "new-token"})
-    )
-
-    with pytest.raises(RemoteHTTPStatusError):
-        with remote_server.execute("Q1", "hash1", DisplayFormat(), {}):
-            pass
-
-
-@pytest.mark.unit
-def test_execute_raises_remote_auth_error_if_relogin_fails_with_bad_credentials(remote_server, monkeypatch):
-    """Login itself fails because credentials are no longer valid (e.g. stored password
-    changed server-side) - propagates as RemoteAuthError, distinct from a network failure or a
-    plain HTTP failure on /execute itself, so callers can offer to re-enter credentials."""
-    _mock_health_check_ok(monkeypatch)
-    monkeypatch.setattr(
-        httpx2, "stream", lambda *a, **k: _FakeStreamContext(_FakeStreamResponse([], status_code=401))
-    )
-    error = httpx2.HTTPStatusError("401", request=None, response=None)  # type: ignore
-    monkeypatch.setattr(httpx2, "post", lambda **kwargs: _FakeResponse(status_error=error))
-
-    with pytest.raises(RemoteAuthError):
-        with remote_server.execute("Q1", "hash1", DisplayFormat(), {}):
-            pass
-
-
-@pytest.mark.unit
-def test_execute_raises_remote_request_error_if_relogin_fails_due_to_network(remote_server, monkeypatch):
-    """Login itself fails due to a network error while retrying after a 401 - propagates as
-    RemoteRequestError, distinct from the bad-credentials case above."""
-    _mock_health_check_ok(monkeypatch)
-    monkeypatch.setattr(
-        httpx2, "stream", lambda *a, **k: _FakeStreamContext(_FakeStreamResponse([], status_code=401))
-    )
-
-    def fake_post(**kwargs):
-        raise httpx2.ConnectError("boom")
-
-    monkeypatch.setattr(httpx2, "post", fake_post)
-
-    with pytest.raises(RemoteRequestError):
-        with remote_server.execute("Q1", "hash1", DisplayFormat(), {}):
-            pass
-
-
-def _lines_then_raise(lines: list[str], error: Exception):
-    """Lines read from the stream, then a network failure while waiting for the next one."""
-    yield from lines
-    raise error
-
-
-@pytest.mark.unit
-def test_execute_wraps_read_timeout_while_waiting_for_columns(remote_server, monkeypatch):
-    """Nothing received before the client's timeout, e.g. pings not reaching it while the query executes."""
-    _mock_health_check_ok(monkeypatch)
-    timeout = httpx2.ReadTimeout("timed out")
-    lines = _lines_then_raise(_ndjson_lines({"__ping__": True}), timeout)
-    monkeypatch.setattr(httpx2, "stream", lambda *a, **k: _FakeStreamContext(_FakeStreamResponse(lines)))
-
-    with pytest.raises(RemoteRequestError, match="Nothing received from .* minutes") as exc_info:
-        with remote_server.execute("Q1", "hash1", DisplayFormat(), {}):
-            pytest.fail("no cursor expected without columns")
-
-    assert exc_info.value.__cause__ is timeout
-
-
-@pytest.mark.unit
-def test_execute_wraps_read_timeout_while_reading_rows(remote_server, monkeypatch):
-    """Raised by the caller's own iteration, inside its `with` block: wrapped all the same."""
-    _mock_health_check_ok(monkeypatch)
-    timeout = httpx2.ReadTimeout("timed out")
-    lines = _lines_then_raise(_ndjson_lines({"__columns__": ["id"]}, {"__row__": ["1"]}), timeout)
-    monkeypatch.setattr(httpx2, "stream", lambda *a, **k: _FakeStreamContext(_FakeStreamResponse(lines)))
-
-    collected = []
-    with pytest.raises(RemoteRequestError, match="Nothing received from") as exc_info:
-        with remote_server.execute("Q1", "hash1", DisplayFormat(), {}) as rows:
-            for row in rows:
-                collected.append(row)
-
-    assert collected == [("1",)]  # the row read before the timeout is not lost
-    assert exc_info.value.__cause__ is timeout
-
-
-@pytest.mark.unit
-def test_execute_wraps_connection_lost_while_reading_rows(remote_server, monkeypatch):
-    _mock_health_check_ok(monkeypatch)
-    error = httpx2.ReadError("connection reset")
-    lines = _lines_then_raise(_ndjson_lines({"__columns__": ["id"]}), error)
-    monkeypatch.setattr(httpx2, "stream", lambda *a, **k: _FakeStreamContext(_FakeStreamResponse(lines)))
-
-    with pytest.raises(RemoteRequestError, match="lost during the execution : connection reset") as exc_info:
-        with remote_server.execute("Q1", "hash1", DisplayFormat(), {}) as rows:
-            list(rows)
-
-    assert exc_info.value.__cause__ is error
-
-
-@pytest.mark.unit
-def test_execute_lets_errors_of_the_caller_through_unchanged(remote_server, monkeypatch):
-    """Only network errors are wrapped, not what the caller raises while handling the rows."""
-    _mock_health_check_ok(monkeypatch)
-    lines = _ndjson_lines({"__columns__": ["id"]}, {"__row__": ["1"]})
-    monkeypatch.setattr(httpx2, "stream", lambda *a, **k: _FakeStreamContext(_FakeStreamResponse(lines)))
-
-    with pytest.raises(ValueError, match="caller failure"):
-        with remote_server.execute("Q1", "hash1", DisplayFormat(), {}):
-            raise ValueError("caller failure")
+def test_remote_job_waits_unless_stopped(remote_server):
+    job = RemoteJob(remote_server.remote, should_stop=lambda: True)
+    try:
+        with pytest.raises(RemoteStopped):
+            job._wait_unless_stopped(10)
+    finally:
+        job.__exit__(None, None, None)
 
 
 @pytest.mark.unit

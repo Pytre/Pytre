@@ -259,10 +259,10 @@ The same options apply to `Pytre_Server.exe` and `python -m Pytre_Server`, `--he
 | `--host` | `127.0.0.1` | Address to listen on, `0.0.0.0` for every interface. Keep the default when the reverse proxy runs on the server itself |
 | `--port` | `8000` | Port to listen on |
 | `--forwarded-allow-ips` | `127.0.0.1`, or `$FORWARDED_ALLOW_IPS` | Comma-separated addresses of the reverse proxies whose `X-Forwarded-*` headers are trusted. Never `*` unless the server can only be reached through the proxy |
-| `--chunk-size` | `2000` | Rows sent per chunk of a query result |
+| `--batch-size` | `5000` | Rows sent per batch of a query result |
 | `--db-pool-size` | `30` | Maximum number of queries running at once on each SQL server |
 | `--max-concurrency-per-user` | `4` | Maximum number of requests running at once for each user |
-| `--heartbeat-secs` | `30` | Seconds between keep-alive pings while a query runs, `0` to disable them |
+| `--heartbeat-secs` | `30` | Seconds between keep-alive pings while a query runs through `/execute`, the former way to run queries, `0` to disable them |
 | `--log-file` | none | File the logs are written to, also used to refill the web administration logs at startup |
 | `--log-max-mb` | `5` | Size of the log file before it rotates, in MB |
 | `--log-backups` | `1` | Number of rotated log files kept |

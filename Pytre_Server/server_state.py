@@ -18,6 +18,7 @@ from Pytre_Core.users import verify_password
 from Pytre_Core.utils import log as _log
 from Pytre_Core.sql_query.query_drivers_server import AsyncSqlDriver, get_driver
 
+from Pytre_Server.jobs import JobRegistry
 from Pytre_Server.log_buffer import LogBufferHandler
 from Pytre_Server.login_throttle import LoginThrottle
 from Pytre_Server.query_catalog import QueryCatalog
@@ -96,6 +97,7 @@ class ServerResources:
     db_pool_size: int = 30  # concurrent queries each driver can run on its SQL server
 
     user_semaphores: dict[str, asyncio.Semaphore] = field(default_factory=dict)
+    jobs: JobRegistry = field(default_factory=JobRegistry)  # executions by jobs in progress, see /jobs
     login_throttle: LoginThrottle = field(default_factory=LoginThrottle)
     password_semaphore: asyncio.BoundedSemaphore = field(
         default_factory=lambda: asyncio.BoundedSemaphore(PASSWORD_MAX_CONCURRENT_CHECKS), repr=False
@@ -316,7 +318,7 @@ class ServerState:
 
     app_ctx: AppContext
     query_catalog: QueryCatalog
-    chunk_size: int  # rows to stream to client in a chunk
+    batch_size: int  # rows per batch of a job's result, and per chunk of /execute's stream
     max_concurrency_per_user: int  # concurrent requests allowed per user
     heartbeat_secs: int = 30  # seconds between NDJSON pings while a query executes, 0 to disable
     resources: ServerResources = field(default_factory=ServerResources)

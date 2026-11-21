@@ -8,7 +8,17 @@ from decimal import Decimal
 
 import pytest
 
-from Pytre_Core.remote_protocol import StreamKey, decode_row_value, encode_row_value, stream_error, stream_line
+from Pytre_Core.remote_protocol import (
+    Batch,
+    JobKey,
+    JobStatus,
+    StreamKey,
+    decode_row_value,
+    encode_row_value,
+    error_payload,
+    stream_error,
+    stream_line,
+)
 
 
 # ================================================================================
@@ -124,3 +134,59 @@ def test_encoded_row_values_round_trip_through_a_stream_line(value):
     record = json.loads(stream_line(StreamKey.ROW, (encode_row_value(value),)))
 
     assert decode_row_value(record[StreamKey.ROW][0]) == value
+
+
+# ================================================================================
+# JSON responses of /jobs
+# ================================================================================
+
+
+@pytest.mark.unit
+def test_job_keys_and_statuses_are_the_ones_on_the_wire():
+    assert [key.value for key in JobKey] == ["job_id", "status", "error", "batch", "columns", "rows", "last"]
+    assert [status.value for status in JobStatus] == ["running", "ready", "pending", "ok", "error", "cancelled"]
+
+
+@pytest.mark.unit
+def test_error_payload_reports_the_error_type_and_its_prefixed_message():
+    assert error_payload(ValueError("boom"), "SQL error: ") == {"type": "ValueError", "message": "SQL error: boom"}
+
+
+@pytest.mark.unit
+def test_stream_error_carries_the_error_payload():
+    error = RuntimeError("boom")
+
+    assert json.loads(stream_error(error, "x: "))[StreamKey.ERROR] == error_payload(error, "x: ")
+
+
+@pytest.mark.unit
+def test_batch_encodes_a_compact_json_response():
+    body = Batch(2, [(1, "a")], last=True).encode()
+
+    assert body == b'{"status":"ok","batch":2,"rows":[[1,"a"]],"last":true}'
+
+
+@pytest.mark.unit
+def test_batch_carries_its_columns_only_when_given():
+    assert json.loads(Batch(1, [], last=False, columns=["id"]).encode())[JobKey.COLUMNS] == ["id"]
+    assert JobKey.COLUMNS not in json.loads(Batch(2, [], last=False).encode())
+
+
+@pytest.mark.unit
+def test_batch_round_trips_its_values():
+    rows = [(datetime(2026, 1, 1, 10, 30), date(2026, 1, 1), Decimal("12.50"), "a", 3, None)]
+    batch = Batch(1, rows, last=False, columns=["dt", "d", "dec", "s", "i", "n"])
+
+    assert Batch.decode(json.loads(batch.encode())) == batch
+
+
+@pytest.mark.unit
+def test_batch_encode_raises_type_error_for_a_value_json_can_not_encode():
+    with pytest.raises(TypeError):
+        Batch(1, [(b"bytes",)], last=True).encode()
+
+
+@pytest.mark.unit
+def test_batch_decode_raises_key_error_for_a_response_without_rows():
+    with pytest.raises(KeyError):
+        Batch.decode({"status": "ok", "batch": 1, "last": True})

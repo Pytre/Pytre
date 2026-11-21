@@ -3,8 +3,10 @@ import ipaddress
 import json
 import jwt
 import logging
+import time
+from concurrent.futures import ThreadPoolExecutor, wait
 from contextlib import contextmanager
-from collections.abc import Generator, Iterator
+from collections.abc import Callable, Generator
 from datetime import datetime, timedelta, timezone
 from functools import cache
 from pathlib import Path
@@ -17,7 +19,7 @@ import httpx2
 from Pytre_Core.app_folders import get_config_folder, get_install_folder, REMOTES_FILENAME
 from Pytre_Core.keyring import KeyringCatalog
 from Pytre_Core.policy import PlainHttpRemotesPolicy
-from Pytre_Core.remote_protocol import decode_row_value, StreamKey
+from Pytre_Core.remote_protocol import JOB_ABANDON_SECS, JOB_WAIT_SECS, Batch, JobKey, JobStatus
 from Pytre_Core.user_prefs import DisplayFormat
 from Pytre_Core.users import AuthType, Users
 from Pytre_Core.utils import detect_encoding, log as _log
@@ -30,7 +32,15 @@ _SECRET_KEYS = ("password", "encrypted_pwd", "token")  # keys to never read from
 REMOTES_CIPHER: KeyringCatalog = KeyringCatalog.REMOTES_ENCRYPTION_KEY
 
 _REQUEST_TIMEOUT = 5  # seconds - timeout for short operations
-_EXEC_TIMEOUT = 15 * 60  # seconds - timeout for SQL executions
+
+_JOB_READ_TIMEOUT = 3 * JOB_WAIT_SECS  # seconds - a /jobs response comes within JOB_WAIT_SECS, plus a margin
+_JOB_RETRY_SECS = JOB_ABANDON_SECS - 30  # seconds - retried while the server keeps the job, 30 s to spare
+_JOB_RETRIED_STATUSES = {
+    httpx2.codes.BAD_GATEWAY,
+    httpx2.codes.SERVICE_UNAVAILABLE,
+    httpx2.codes.GATEWAY_TIMEOUT,
+}  # a proxy or the server briefly unavailable
+_STOP_CHECK_SECS = 0.2  # how often a stop is looked for while waiting for the server
 
 
 def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__) -> None:
@@ -57,6 +67,10 @@ class RemoteError(Exception):
 
 class RemoteExecutionError(RemoteError):
     """Raised when Pytre_Server reports a row conversion/serialization error via a NDJSON __error__ line."""
+
+
+class RemoteStopped(RemoteError):
+    """Raised when an execution is stopped at the user's request"""
 
 
 class RemoteInsecureChannelError(RemoteError):
@@ -894,18 +908,22 @@ class RemoteServer:
 
     @contextmanager
     def execute(
-        self, query_id: str, template_hash: str, display_format: DisplayFormat, display_parameters: dict[str, str]
+        self,
+        query_id: str,
+        template_hash: str,
+        display_format: DisplayFormat,
+        display_parameters: dict[str, str],
+        should_stop: Callable[[], bool] = lambda: False,
     ) -> Generator[RemoteCursor]:
-        """Executes query_id via POST /execute, streaming NDJSON rows.
-        `display_format` is the one `parameters` were rendered with.
-        The underlying HTTP connection closes as soon as the `with` block exits."""
+        """Executes query_id as a job of the remote, see /jobs: starts it, waits for its end, then yields a cursor
+        reading its result by batches. `display_format` is the one `display_parameters` were rendered with.
+        `should_stop` is checked while waiting for the server: once true, RemoteStopped is raised.
+        The job is deleted on the server when the `with` block exits, whichever way it does."""
 
         # check if server is available to avoid long timeout if it is not
         self.remote.check_health()
 
-        # proceed to query execution as the server has been confirmed to be available
-        url = self.address.build_url("/execute")
-        body = {
+        query_data = {
             "server_id": self.id_on_remote,
             "query_id": query_id,
             "template_hash": template_hash,
@@ -913,63 +931,9 @@ class RemoteServer:
             "display_parameters": display_parameters,
         }
 
-        max_login_retry = 1
-        try:
-            for i in range(max_login_retry + 1):
-                with httpx2.stream(
-                    "POST", url, json=body, headers=self._auth_headers, timeout=_EXEC_TIMEOUT
-                ) as response:
-                    if response.status_code == 401 and not i == max_login_retry:
-                        self.remote.login()
-                        continue
-
-                    try:
-                        response.raise_for_status()
-                    except httpx2.HTTPStatusError as e:
-                        response.read()  # buffer the body as the connection closes as soon as `with` ends,
-                        raise RemoteHTTPStatusError(
-                            detail_from_response(e.response, str(e)), cause=e
-                        )  # after that e.response.json()/.text would raise ResponseNotRead
-
-                    lines = response.iter_lines()
-                    first_line = next(lines, None)
-                    while first_line is not None and StreamKey.PING in json.loads(first_line):
-                        first_line = next(lines, None)  # keep alive sent while the query is still running
-
-                    if first_line is None:
-                        col_names: tuple = ()
-                    else:
-                        first_record = json.loads(first_line)
-                        self._raise_if_error(first_record)
-                        col_names = first_record[StreamKey.COLUMNS]
-
-                    yield RemoteCursor(tuple(col_names), self._iter_records(lines))
-                    break
-        except httpx2.TimeoutException as e:
-            msg = f"Nothing received from {self.remote.id} for {_EXEC_TIMEOUT // 60} minutes, execution abandoned"
-            log(msg, logging.WARNING)
-            raise RemoteRequestError(msg, cause=e) from e
-        except httpx2.RequestError as e:
-            msg = f"Connection to {self.remote.id} lost during the execution : {e}"
-            log(msg, logging.WARNING)
-            raise RemoteRequestError(msg, cause=e) from e
-
-    def _iter_records(self, lines: Iterator[str]) -> Generator[tuple]:
-        for line in lines:
-            if not line:
-                continue
-
-            record = json.loads(line)
-            if StreamKey.PING in record:
-                continue
-            self._raise_if_error(record)
-
-            yield tuple(decode_row_value(v) for v in record[StreamKey.ROW])
-
-    def _raise_if_error(self, record: dict) -> None:
-        if StreamKey.ERROR in record:
-            error = record[StreamKey.ERROR]
-            raise RemoteExecutionError(f"{error['type']}: {error['message']}")
+        with RemoteJob(self.remote, should_stop) as job:
+            job.start(query_data)
+            yield job.cursor()
 
     def get_serialized_queries(self, display_format: DisplayFormat) -> list[dict]:
         """Fetches queries exposed by this remote server. Called on demand and not eagerly.
@@ -1025,6 +989,196 @@ class RemoteServer:
         remote = Remote(None, address)
         remote.user_infos = data.get("user_infos")
         return cls(data["id_on_remote"], data["description"], remote)
+
+
+class RemoteJob:
+    """A job of a remote seen from the client, through short requests only. A request that can be stopped is sent
+    from a worker thread, so the caller stops waiting as soon as `should_stop` says so. On exit, as a context
+    manager: the job is deleted on the server and the HTTP connection closed."""
+
+    def __init__(self, remote: Remote, should_stop: Callable[[], bool]) -> None:
+        self.id: str | None = None
+        self._remote: Remote = remote
+        self._should_stop: Callable[[], bool] = should_stop
+
+        self._http_client = httpx2.Client(timeout=httpx2.Timeout(_REQUEST_TIMEOUT, read=_JOB_READ_TIMEOUT))
+        self._worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="remote_job")
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, *_exc_info: object) -> None:
+        try:
+            self._delete()
+        finally:
+            self._worker.shutdown(wait=False, cancel_futures=True)  # a request still waiting is dropped
+            self._http_client.close()
+
+    # ------------------------------------------------------------------------------------------
+    # steps of an execution
+    # ------------------------------------------------------------------------------------------
+    def start(self, query_data: dict[str, Any]) -> None:
+        """Creates the job, then waits for the end of its execution, each status request waiting at most
+        JOB_WAIT_SECS on the server. The creation is never retried automatically: if the job was created but its
+        response lost, a retry would execute the query twice. The error is reported, and the user decides whether
+        to run it again."""
+
+        response = self._request("POST", "/jobs", query_data, retry=False, stoppable=False)
+        self.id = str(self._read_data(response)[JobKey.JOB_ID])
+
+        while True:
+            job_data = self._read_data(self._request("GET", f"/jobs/{self.id}"))
+
+            if job_data[JobKey.STATUS] == JobStatus.READY:
+                return
+
+            if job_data[JobKey.STATUS] != JobStatus.RUNNING:
+                raise self._status_error(job_data)
+
+    def cursor(self) -> RemoteCursor:
+        """Cursor over the result: the first batch is asked for at once, for its columns, the next ones as the rows
+        are read"""
+        first = self._get_batch(1)
+        return RemoteCursor(tuple(first.columns or ()), self._rows_from(first))
+
+    def _rows_from(self, batch: Batch) -> Generator[tuple]:
+        """Rows of `batch` then of the next batches, each one asked for once the previous one is read"""
+        while True:
+            yield from (tuple(row) for row in batch.rows)
+
+            if batch.last:
+                return
+
+            batch = self._get_batch(batch.n + 1)
+
+    def _get_batch(self, n: int) -> Batch:
+        """Batch `n`, asked for again while the server answers it isn't ready yet"""
+        while True:
+            job_data = self._read_data(self._request("GET", f"/jobs/{self.id}/batches/{n}"))
+
+            if job_data[JobKey.STATUS] == JobStatus.PENDING:
+                continue
+
+            if job_data[JobKey.STATUS] != JobStatus.OK:
+                raise self._status_error(job_data)
+
+            try:
+                return Batch.decode(job_data)
+            except (KeyError, TypeError, ValueError) as e:
+                raise RemoteExecutionError(f"Unexpected batch {n} from {self._remote.id}", cause=e) from e
+
+    def _delete(self) -> None:
+        """Stops the job, or acknowledges its last batch. Never raises: the server abandons it anyway"""
+        if self.id is None:
+            return
+
+        try:
+            response = self._request("DELETE", f"/jobs/{self.id}", retry=False, stoppable=False)
+            if response.status_code not in (httpx2.codes.NO_CONTENT, httpx2.codes.NOT_FOUND):
+                log(f"Job {self.id} not deleted on {self._remote.id}: HTTP {response.status_code}", logging.DEBUG)
+        except RemoteError as e:
+            log(f"Job {self.id} not deleted on {self._remote.id}: {e}", logging.DEBUG)
+
+    # ------------------------------------------------------------------------------------------
+    # requests: authentication, retries and stop
+    # ------------------------------------------------------------------------------------------
+    def _request(
+        self, method: str, route: str, body: dict | None = None, retry: bool = True, stoppable: bool = True
+    ) -> httpx2.Response:
+        """Authenticated request: on a 401, logs in again then sends it once more. When `retry`, a network error or a
+        _JOB_RETRIED_STATUSES status is retried with a growing delay for _JOB_RETRY_SECS. Raises RemoteStopped
+        when `stoppable` and should_stop says so, RemoteRequestError once the retries are exhausted."""
+        url = self._remote.address.build_url(route)
+        deadline = time.monotonic() + _JOB_RETRY_SECS
+        delay = 1.0
+        session_renewed = False  # once per request: a 401 right after renewing it would loop forever
+
+        def wait_before_retry(secs: float) -> float:
+            """Waits `secs` then returns the next delay, doubled up to 10 s"""
+            self._wait_unless_stopped(secs)
+            return min(secs * 2, 10.0)
+
+        while True:
+            try:
+                response = self._send(method, url, body, stoppable)
+            except httpx2.RequestError as e:
+                if not retry or time.monotonic() + delay > deadline:
+                    msg = f"Connection to {self._remote.id} lost during the execution : {e}"
+                    log(msg, logging.WARNING)
+                    raise RemoteRequestError(msg, cause=e) from e
+
+                log(f"Request to {self._remote.id} failed, retried in {delay:g} s: {e}", logging.WARNING)
+                delay = wait_before_retry(delay)
+
+                continue
+
+            if response.status_code == httpx2.codes.UNAUTHORIZED and not session_renewed:
+                self._remote.login()  # raises if it fails
+                session_renewed = True
+                continue
+
+            status = response.status_code
+            if not retry or status not in _JOB_RETRIED_STATUSES or time.monotonic() + delay > deadline:
+                return response
+
+            log(f"{self._remote.id} answered HTTP {status}, retried in {delay:g} s", logging.WARNING)
+            delay = wait_before_retry(delay)
+
+    def _send(self, method: str, url: str, body: dict | None, stoppable: bool) -> httpx2.Response:
+        """Sends the request: when `stoppable` from the worker thread, should_stop checked meanwhile"""
+        headers = self._remote.auth_headers
+        if not stoppable:
+            return self._http_client.request(method, url, json=body, headers=headers)
+
+        future = self._worker.submit(self._http_client.request, method, url, json=body, headers=headers)
+        while True:
+            done, _not_done = wait({future}, timeout=_STOP_CHECK_SECS)
+            if done:
+                return future.result()
+            self._check_stop()
+
+    def _wait_unless_stopped(self, secs: float) -> None:
+        """Waits `secs`, raising RemoteStopped as soon as should_stop says so"""
+        end = time.monotonic() + secs
+        while (remaining := end - time.monotonic()) > 0:
+            self._check_stop()
+            time.sleep(min(remaining, _STOP_CHECK_SECS))
+
+    def _check_stop(self) -> None:
+        if self._should_stop():
+            raise RemoteStopped(f"Execution on {self._remote.id} stopped")
+
+    # ------------------------------------------------------------------------------------------
+    # responses
+    # ------------------------------------------------------------------------------------------
+    def _read_data(self, response: httpx2.Response) -> dict[str, Any]:
+        """Decoded JSON of a successful /jobs response. Raises RemoteHTTPStatusError for an error status, and
+        RemoteExecutionError for a job the server doesn't know anymore or a body that isn't a /jobs response."""
+        try:
+            response.raise_for_status()
+        except httpx2.HTTPStatusError as e:
+            if e.response.status_code == httpx2.codes.NOT_FOUND and self.id is not None:
+                msg = f"Execution lost by {self._remote.id}: the server restarted, or the job was abandoned"
+                raise RemoteExecutionError(msg, cause=e) from e
+            raise RemoteHTTPStatusError(detail_from_response(e.response, str(e)), cause=e) from e
+
+        try:
+            job_data = response.json()
+        except ValueError as e:  # e.g. a page of a proxy
+            raise RemoteExecutionError(f"Unexpected response from {self._remote.id}", cause=e) from e
+
+        if not isinstance(job_data, dict) or JobKey.STATUS not in job_data:
+            raise RemoteExecutionError(f"Unexpected response from {self._remote.id}")
+
+        return job_data
+
+    def _status_error(self, job_data: dict[str, Any]) -> RemoteExecutionError:
+        """Error of a JobStatus.ERROR or JobStatus.CANCELLED response"""
+        if job_data[JobKey.STATUS] == JobStatus.ERROR:
+            error = job_data.get(JobKey.ERROR) or {}
+            return RemoteExecutionError(f"{error.get('type')}: {error.get('message')}")
+
+        return RemoteExecutionError(f"Execution {job_data[JobKey.STATUS]} on {self._remote.id}")
 
 
 class RemoteCursor:

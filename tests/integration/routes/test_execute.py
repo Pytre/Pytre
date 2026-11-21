@@ -64,7 +64,7 @@ def test_execute_only_builds_the_requested_query(client, auth_headers, monkeypat
     """Regression: /execute used to build every query in the catalog (and re-log errors for
     every unrelated broken one) on every call, just to use one of them - it must only build
     the requested query_id."""
-    from Pytre_Server.routes import client as client_routes
+    from Pytre_Server.routes import client_execution as client_routes
 
     original = client_routes.build_queries_from_parsers
     captured_parser_counts = []

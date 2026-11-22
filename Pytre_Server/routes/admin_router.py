@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import FileResponse, HTMLResponse
 
+from Pytre_Core.about import app_image_file
 from Pytre_Core.app_folders import get_resources_folder
 
 from Pytre_Server.templating import templates
@@ -37,7 +38,9 @@ router.include_router(protected_router)
 # ------------------------------------------------------------------------------------------
 @router.get("/static/logo.png")
 def admin_logo() -> FileResponse:
-    return FileResponse(get_resources_folder() / "app.png")
+    """The app's image, a seasonal one during some periods of the year: revalidated by the browser on each use, so
+    the new one shows from the first day of a period"""
+    return FileResponse(app_image_file(), headers={"Cache-Control": "no-cache"})
 
 
 @router.get("/favicon.ico")

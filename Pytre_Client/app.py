@@ -13,14 +13,8 @@ from types import TracebackType
 
 
 from Pytre_Core import utils
-from Pytre_Core.about import APP_NAME, CLIENT_BASENAME, AppVersion, full_version
-from Pytre_Core.app_folders import (
-    get_cache_folder,
-    get_config_folder,
-    get_resources_folder,
-    prepare_user_folders,
-    UserFolderError,
-)
+from Pytre_Core.about import APP_NAME, CLIENT_BASENAME, AppVersion, app_image_file, full_version
+from Pytre_Core.app_folders import get_cache_folder, get_config_folder, prepare_user_folders, UserFolderError
 from Pytre_Core.context import AppContext, AppMode, UserContext, detect_client_mode
 from Pytre_Core.credentials import secret_key_available
 from Pytre_Core.logs_central import ClientDriven as CentralLogs
@@ -281,14 +275,12 @@ class App(tk.Toplevel):
     # Définition de l'identité de l'appli et des styles / thème
     # ------------------------------------------------------------------------------------------
     def get_default_title(self) -> str:
-        app_version = full_version()
-        return f"{APP_NAME} - V.{app_version}"
+        return f"{APP_NAME}"
 
     def setup_app_identity(self):
         self.title(self.get_default_title())
 
-        icon_file = get_resources_folder() / "app.png"
-        icon_img = tk.PhotoImage(file=icon_file)
+        icon_img = tk.PhotoImage(file=app_image_file())
         self.iconphoto(True, icon_img)
         self.console_app.iconphoto(True, icon_img)  # setting icon for console is also needed
 

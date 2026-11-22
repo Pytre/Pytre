@@ -35,6 +35,27 @@ def test_admin_logo_is_served(client):
     assert response.headers["content-type"] == "image/png"
 
 
+def test_admin_logo_is_revalidated_by_the_browser_on_each_use(client):
+    """The image changes with the periods of the year under the same URL"""
+    response = client.get("/admin/static/logo.png")
+
+    assert response.headers["cache-control"] == "no-cache"
+    assert "etag" in response.headers
+
+
+def test_admin_logo_is_the_seasonal_one_during_a_season(client, monkeypatch):
+    from datetime import date
+
+    from Pytre_Core import about
+
+    seasonal = about.app_image_file(day=date(2026, 12, 24))
+    monkeypatch.setattr("Pytre_Server.routes.admin_router.app_image_file", lambda: seasonal)
+
+    response = client.get("/admin/static/logo.png")
+
+    assert response.content == seasonal.read_bytes()
+
+
 def test_admin_favicon_is_served(client):
     response = client.get("/admin/favicon.ico")
 

@@ -1,6 +1,8 @@
 import re
 from dataclasses import dataclass
-from enum import IntEnum
+from datetime import date, timedelta
+from enum import IntEnum, StrEnum
+from pathlib import Path
 from typing import ClassVar
 
 from Pytre_Core.app_folders import get_resources_folder
@@ -113,3 +115,62 @@ def full_version() -> str:
 def expected_git_tag() -> str:
     """Git tag expected for the current version, checked by the GitHub build workflow"""
     return f"v.{full_version()}"
+
+
+# ------------------------------------------------------------------------------------------
+# Image of the app, a seasonal one during some periods of the year
+# ------------------------------------------------------------------------------------------
+class Season(StrEnum):
+    """Periods of the year the app shows a seasonal image instead of its usual one, the value naming its file"""
+
+    CHRISTMAS = "christmas"  # December 20th to 31st
+    EASTER = "easter"  # Holy Week: the Monday before Easter to Easter Monday
+    HALLOWEEN = "halloween"  # October 25th to November 1st
+    APRIL_FOOL = "april_fool"  # April 1st
+    VALENTINE = "valentine"  # February 14th
+
+    @classmethod
+    def of(cls, day: date) -> Season | None:
+        """Season of `day`, None out of every season"""
+        easter = cls.easter_sunday(day.year)
+
+        if (day.month, day.day) >= (12, 20):
+            return cls.CHRISTMAS
+        if (10, 25) <= (day.month, day.day) <= (11, 1):
+            return cls.HALLOWEEN
+        if easter - timedelta(days=6) <= day <= easter + timedelta(days=1):
+            return cls.EASTER
+        if (day.month, day.day) == (4, 1):
+            return cls.APRIL_FOOL
+        if (day.month, day.day) == (2, 14):
+            return cls.VALENTINE
+
+        return None
+
+    @staticmethod
+    def easter_sunday(year: int) -> date:
+        """Easter Sunday of `year` in the Gregorian calendar, by the anonymous Gregorian algorithm"""
+        a = year % 19
+        b, c = divmod(year, 100)
+        d, e = divmod(b, 4)
+        f = (b + 8) // 25
+        g = (b - f + 1) // 3
+        h = (19 * a + b - d - g + 15) % 30
+        i, k = divmod(c, 4)
+        weekday_shift = (32 + 2 * e + 2 * i - h - k) % 7
+        m = (a + 11 * h + 22 * weekday_shift) // 451
+        month, day = divmod(h + weekday_shift - 7 * m + 114, 31)
+        return date(year, month, day + 1)
+
+
+def app_image_file(small: bool = False, day: date | None = None) -> Path:
+    """PNG image of the app, 512 px or 64 px when `small`: the seasonal one of the season of `day` (today by
+    default), the usual one out of every season or if the seasonal one is missing"""
+    size_suffix = "_64" if small else ""
+    resources = get_resources_folder()
+
+    season = Season.of(day or date.today())
+    if season is not None and (seasonal := resources / f"app_{season}{size_suffix}.png").exists():
+        return seasonal
+
+    return resources / f"app{size_suffix}.png"

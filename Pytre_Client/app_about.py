@@ -3,7 +3,6 @@ import webbrowser
 from tkinter import ttk, font
 
 from Pytre_Core import about
-from Pytre_Core.app_folders import get_resources_folder
 from Pytre_Core.policy import UpdatePolicy
 from Pytre_Core.updater import Updater
 from Pytre_Core.user_prefs import PrefEnum, UserPrefs
@@ -80,8 +79,7 @@ class AboutWindow(tk.Toplevel):
         self.top_frame.rowconfigure(0, weight=1)
         self.top_frame.columnconfigure(2, weight=1)
 
-        logo_file = get_resources_folder() / "app.gif"
-        self.logo_img = tk.PhotoImage(file=logo_file)
+        self.logo_img = tk.PhotoImage(file=about.app_image_file(small=True))
 
         logo_label = ttk.Label(self.top_frame, image=self.logo_img, justify="center")
         app_label = ttk.Label(self.top_frame, text=about.APP_NAME, font=("TkDefaultFont", 20, "bold"), anchor="sw")

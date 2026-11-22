@@ -3,11 +3,12 @@ Tests for Pytre_Core/about.py - AppVersion parsing, formatting and ordering
 """
 
 import dataclasses
+from datetime import date
 
 import pytest
 
 from Pytre_Core import about
-from Pytre_Core.about import AppStage, AppVersion, expected_git_tag, full_version
+from Pytre_Core.about import AppStage, AppVersion, Season, app_image_file, expected_git_tag, full_version
 
 
 # ================================================================================
@@ -254,3 +255,80 @@ def test_full_version_and_expected_git_tag(current_version, version, stage, stag
 
     assert full_version() == expected_version
     assert expected_git_tag() == expected_tag
+
+
+# ================================================================================
+# Image of the app
+# ================================================================================
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "year, expected",
+    [
+        (2019, date(2019, 4, 21)),
+        (2024, date(2024, 3, 31)),
+        (2025, date(2025, 4, 20)),
+        (2026, date(2026, 4, 5)),
+        (2027, date(2027, 3, 28)),
+        (2038, date(2038, 4, 25)),  # the latest possible date
+        (2285, date(2285, 3, 22)),  # the earliest possible date
+    ],
+)
+def test_easter_sunday(year, expected):
+    assert Season.easter_sunday(year) == expected
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "day, expected",
+    [
+        (date(2026, 12, 19), None),
+        (date(2026, 12, 20), Season.CHRISTMAS),
+        (date(2026, 12, 31), Season.CHRISTMAS),
+        (date(2027, 1, 1), None),
+        (date(2026, 10, 24), None),
+        (date(2026, 10, 25), Season.HALLOWEEN),
+        (date(2026, 11, 1), Season.HALLOWEEN),
+        (date(2026, 11, 2), None),
+        (date(2026, 3, 29), None),  # Easter 2026 is April 5th: its Holy Week starts on March 30th
+        (date(2026, 3, 30), Season.EASTER),
+        (date(2026, 4, 5), Season.EASTER),
+        (date(2026, 4, 6), Season.EASTER),  # Easter Monday
+        (date(2026, 4, 7), None),
+        (date(2026, 7, 14), None),
+    ],
+)
+def test_season_of_a_day(day, expected):
+    assert Season.of(day) == expected
+
+
+@pytest.mark.unit
+def test_every_season_has_its_images():
+    """The images are looked for by the season's value: a missing one would silently show the usual image"""
+    for season in Season:
+        for size_suffix in ("", "_64"):
+            assert (about.get_resources_folder() / f"app_{season}{size_suffix}.png").is_file()
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("small, expected", [(False, "app_christmas.png"), (True, "app_christmas_64.png")])
+def test_app_image_file_is_the_seasonal_one_during_a_season(small, expected):
+    assert app_image_file(small, day=date(2026, 12, 24)).name == expected
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("small, expected", [(False, "app.png"), (True, "app_64.png")])
+def test_app_image_file_is_the_usual_one_out_of_every_season(small, expected):
+    path = app_image_file(small, day=date(2026, 7, 14))
+
+    assert path.name == expected
+    assert path.is_file()
+
+
+@pytest.mark.unit
+def test_app_image_file_falls_back_to_the_usual_one_if_the_seasonal_one_is_missing(tmp_path, monkeypatch):
+    (tmp_path / "app.png").write_bytes(b"png")
+    monkeypatch.setattr(about, "get_resources_folder", lambda: tmp_path)
+
+    assert app_image_file(day=date(2026, 12, 24)) == tmp_path / "app.png"

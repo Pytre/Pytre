@@ -18,7 +18,6 @@ from Pytre_Core.sql_query.query_drivers_server import (
     APP_ID,
     AsyncSqlConnectionError,
     AsyncSqlExecutionError,
-    FastMssqlDriver,
     PyMssqlDriver,
 )
 from tests.integration.conftest import requires_docker
@@ -121,32 +120,6 @@ async def test_values_are_json_serializable_whatever_the_column_type(driver):
     [row] = await _rows(driver, _TYPED_QUERY)
 
     json.dumps([encode_row_value(value) for value in row])  # must not raise
-
-
-@requires_docker
-@pytest.mark.anyio
-async def test_values_are_the_same_as_with_fastmssql(driver):
-    """Switching a server between "SQL Server" and "SQL Server (fastmssql)" must not change what clients receive."""
-    fast_driver = FastMssqlDriver(
-        host=TEST_SQL_SERVER["host"],
-        port=int(TEST_SQL_SERVER["port"]),
-        database=TEST_SQL_SERVER["database"],
-        username=TEST_SQL_SERVER["user"],
-        password=TEST_SQL_SERVER["password"],
-        trust_certificate=True,  # mssql-test docker uses a self-signed certificate
-    )
-    await fast_driver.connect()
-    try:
-        [fast_row] = await _rows(fast_driver, _TYPED_QUERY)
-    finally:
-        await fast_driver.disconnect()
-
-    [row] = await _rows(driver, _TYPED_QUERY)
-
-    columns = ["i", "b", "dec", "f", "nv", "d", "dt2", "dt", "tm", "u", "bin", "n"]
-    encoded = dict(zip(columns, (encode_row_value(value) for value in row)))
-    fast_encoded = dict(zip(columns, (encode_row_value(value) for value in fast_row)))
-    assert encoded == fast_encoded
 
 
 # ================================================================================

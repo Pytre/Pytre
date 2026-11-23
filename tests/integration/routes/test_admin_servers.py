@@ -244,7 +244,6 @@ def test_server_form_tells_which_types_verify_the_certificate(admin_client):
 
     options = _type_options(html)
     assert 'data-verifies-certificate="false"' in options["SQL Server"]
-    assert 'data-verifies-certificate="true"' in options["SQL Server (fastmssql)"]
     assert 'data-verifies-certificate="true"' in options["PostgreSQL"]
     assert re.search(r'<span id="trust-unsupported"[^>]*\bhidden\b[^>]*>[^<]*not supported', html)
 
@@ -260,20 +259,6 @@ def test_server_form_keeps_the_trust_value_while_its_checkbox_is_disabled(admin_
     assert 'name="trust_server_certificate"' in kept.group(0)
     assert 'value="1"' in kept.group(0)
     assert re.search(r"\bdisabled\b", kept.group(0))
-
-
-def test_create_fastmssql_server_round_trips(isolated_admin_client):
-    response = isolated_admin_client.post(
-        "/admin/servers/new",
-        data={"id": "fast_srv", "type": "SQL Server (fastmssql)", "login_timeout": "60", "timeout": "300"},
-        follow_redirects=False,
-    )
-    assert response.status_code == 303
-
-    uuid = _find_uuid(isolated_admin_client.get("/admin/servers").text, "fast_srv")
-    edit_page = isolated_admin_client.get(f"/admin/servers/{uuid}/edit").text
-
-    assert _selected_type(edit_page) == "SQL Server (fastmssql)"
 
 
 def test_edit_server_preserves_password_when_field_left_blank(isolated_admin_client):

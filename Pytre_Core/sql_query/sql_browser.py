@@ -1,4 +1,6 @@
-"""SQL Server Browser (SSRP) client - resolves a named instance's dynamic TCP port."""
+"""SQL Server Browser (SSRP) client - resolves a named instance's dynamic TCP port.
+Not used by the current drivers: pymssql (FreeTDS) resolves named instances itself. Kept for a driver
+connecting to SQL Server without that resolution."""
 
 import asyncio
 import logging

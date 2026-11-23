@@ -289,8 +289,7 @@ async def test_verify_password_capped_retrieves_the_error_of_a_check_nobody_wait
 def _make_fake_driver_factory(monkeypatch) -> list[Mock]:
     """Monkeypatches get_driver() so _get_driver_entry() never touches a real connection.
     Returns the list of fake driver instances created, in construction order.
-    Driver construction details (trust_certificate forwarding, host resolution...) are
-    fastmssql-specific and tested against get_driver()/FastMssqlDriver directly in
+    Driver construction details are tested against get_driver() and each driver directly in
     tests/unit/core/test_query_drivers_server.py, not here."""
     created: list[Mock] = []
 

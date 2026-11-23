@@ -39,17 +39,6 @@ def test_get_connection_mssql_calls_pymssql_connect():
 
 
 @pytest.mark.unit
-def test_get_connection_fastmssql_falls_back_to_pymssql():
-    """fastmssql is a server-only type: the client connects to such a server with pymssql."""
-    server = Server(Mock())
-    server.type = ServerType.fastmssql.name
-
-    fake_conn = Mock()
-    with patch("Pytre_Core.sql_query.query_drivers_client.pymssql.connect", return_value=fake_conn):
-        assert get_connection(server) is fake_conn
-
-
-@pytest.mark.unit
 def test_conn_mssql_names_the_client_application():
     server = Server(Mock())
     server.type = ServerType.mssql.name

@@ -832,19 +832,17 @@ def test_server_type_enum_values():
     from Pytre_Core.servers import ServerType
 
     assert ServerType.mssql.value == "SQL Server"
-    assert ServerType.fastmssql.value == "SQL Server (fastmssql)"
     assert ServerType.postgre.value == "PostgreSQL"
     assert ServerType.mssql.name == "mssql"
-    assert ServerType.fastmssql.name == "fastmssql"
     assert ServerType.postgre.name == "postgre"
 
 
 @pytest.mark.unit
-def test_only_fastmssql_is_server_only():
-    """The client has no fastmssql driver - it never offers this type."""
+def test_no_type_is_server_only_today():
+    """The client offers every type: each one has a driver on the client too."""
     from Pytre_Core.servers import ServerType
 
-    assert {server_type for server_type in ServerType if server_type.server_only} == {ServerType.fastmssql}
+    assert not any(server_type.server_only for server_type in ServerType)
 
 
 @pytest.mark.unit
@@ -1375,8 +1373,7 @@ def test_load_from_entry_missing_trust_server_certificate_defaults_to_false(mock
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("server_type", ["mssql", "fastmssql"])
-def test_load_from_entry_defaults_charset_for_mssql(mock_kee, server_type):
+def test_load_from_entry_defaults_charset_for_mssql(mock_kee):
     """_load_from_entry should default charset to UTF-8 for SQL Server servers without one set"""
     entry = Mock()
     entry.uuid = "uuid-1"
@@ -1386,7 +1383,7 @@ def test_load_from_entry_defaults_charset_for_mssql(mock_kee, server_type):
     entry.notes = ""
     entry.tags = []
     entry.custom_properties = ["type"]
-    entry.get_custom_property = Mock(side_effect=lambda key: server_type if key == "type" else None)
+    entry.get_custom_property = Mock(side_effect=lambda key: "mssql" if key == "type" else None)
 
     mock_kee.grp_servers.entries = [entry]
     servers = Servers(mock_kee)

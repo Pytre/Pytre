@@ -23,7 +23,7 @@ class ServerConnectionError(Exception):
 
 
 def get_connection(server: Server) -> Connection:
-    if server.type in (ServerType.mssql.name, ServerType.fastmssql.name):
+    if server.type == ServerType.mssql.name:
         return _conn_mssql(server)
     elif server.type == ServerType.postgre.name:
         return _conn_postgre(server)

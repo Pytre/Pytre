@@ -360,12 +360,13 @@ class Servers:
 
 class ServerType(Enum):
     mssql = "SQL Server"
-    fastmssql = "SQL Server (fastmssql)"
     postgre = "PostgreSQL"
 
     @property
     def server_only(self) -> bool:
-        return self is ServerType.fastmssql
+        """Whether only the server can query this type, the client then never offering it. None today: kept for a
+        type whose driver would only run on the server."""
+        return False
 
     @property
     def verifies_certificate(self) -> bool:
@@ -479,7 +480,7 @@ class Server:
         # modify charset if not set, depending on server type
         if self.charset:
             pass
-        elif self.type in (ServerType.mssql.name, ServerType.fastmssql.name):
+        elif self.type == ServerType.mssql.name:
             self.charset: str = "UTF-8"
         elif self.type == ServerType.postgre.name:
             self.charset: str = "UTF8"

@@ -15,14 +15,12 @@ from typing import Any, cast, Protocol
 import asyncpg
 import asyncpg.cursor
 import asyncpg.transaction
-import fastmssql
 import pymssql
 
 from Pytre_Core.about import APP_NAME, full_version
 from Pytre_Core.servers import ServerType, Server
 from Pytre_Core.utils import log as _log
-from Pytre_Core.sql_query.query_drivers_mssql import CONN_PROPERTIES, connect_mssql, error_msg as mssql_error_msg
-from Pytre_Core.sql_query.sql_browser import split_instance_host, resolve_instance_port
+from Pytre_Core.sql_query.query_drivers_mssql import connect_mssql, error_msg as mssql_error_msg
 
 APP_ID = f"{APP_NAME}_Server_{full_version()}"
 
@@ -36,8 +34,6 @@ def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__)
 async def get_driver(server: Server, pool_size: int) -> AsyncSqlDriver:
     if server.type == ServerType.mssql.name:
         return PyMssqlDriver(server, pool_size)
-    elif server.type == ServerType.fastmssql.name:
-        return await FastMssqlDriver._driver(server, pool_size)
     elif server.type == ServerType.postgre.name:
         return AsyncpgDriver._driver(server, pool_size)
     else:
@@ -213,123 +209,6 @@ class _PymssqlResult:
             self._conn.close()
             self._conn = None
             self._cursor = None
-
-
-# ------------------------------------------------------------------------------------------
-# fastmssql driver implementation
-# ------------------------------------------------------------------------------------------
-class FastMssqlDriver:
-    """AsyncSqlDriver implementation using fastmssql."""
-
-    _conn_properties = CONN_PROPERTIES
-    _recompile_option = "\nOPTION (RECOMPILE);"
-
-    def __init__(
-        self,
-        host: str,
-        port: int,
-        database: str,
-        username: str,
-        password: str,
-        trust_certificate: bool = False,
-        pool_config: fastmssql.PoolConfig | None = None,
-    ) -> None:
-
-        self._connection = fastmssql.Connection(
-            server=host,
-            port=port,
-            database=database,
-            username=username,
-            password=password,
-            pool_config=pool_config,
-            ssl_config=fastmssql.SslConfig(trust_server_certificate=trust_certificate),
-            application_name=APP_ID,
-            application_intent=fastmssql.ApplicationIntent.READ_ONLY,
-        )
-
-    async def connect(self) -> None:
-        try:
-            await self._connection.connect()
-        except fastmssql.SqlConnectionError as e:
-            raise AsyncSqlConnectionError(str(e)) from e
-
-    async def disconnect(self) -> None:
-        await self._connection.disconnect()
-
-    async def execute(self, template: str, params: dict[str, Any]) -> AsyncSqlResult:
-        # translate command and parameters to positional style to match fastmssql query args
-        positional_template, params_lst = _to_positional_style(template, params, "@P{}")
-
-        # add session options
-        sql = self._conn_properties + positional_template.rstrip().rstrip(";") + self._recompile_option
-
-        try:
-            return _FastMssqlResult(await self._connection.query(sql, params_lst))
-        except fastmssql.SqlConnectionError as e:
-            raise AsyncSqlConnectionError(str(e)) from e
-        except fastmssql.SqlError as e:
-            raise AsyncSqlExecutionError(str(e)) from e
-
-    @classmethod
-    async def _driver(cls, server: Server, pool_size: int) -> FastMssqlDriver:
-        """Returns an mssql driver. Resolve host/port connection target.
-        Values other than the pool size are those of fastmssql's performance()."""
-        hostname, port = await cls._resolve_conn_host(server.host, int(server.port))
-
-        return FastMssqlDriver(
-            host=hostname,
-            port=port,
-            database=server.database,
-            username=server.user,
-            password=server.password,
-            trust_certificate=server.trust_server_certificate,
-            pool_config=fastmssql.PoolConfig(
-                max_size=pool_size,
-                min_idle=min(10, pool_size),
-                max_lifetime_secs=7200,
-                idle_timeout_secs=1800,
-                connection_timeout_secs=10,
-            ),
-        )
-
-    @classmethod
-    async def _resolve_conn_host(cls, host: str, port: int) -> tuple[str, int]:
-        """Return (hostname, port) to actually connect to.
-        If `host` has no named-instance suffix (no backslash), returns it unchanged - no network call.
-        Otherwise resolves the instance's real TCP port via the SQL Browser service;
-        falls back to the configured port unchanged if resolution fails (Browser service disabled/unreachable)."""
-
-        hostname, instance_name = split_instance_host(host)
-        target = (hostname, int(port))
-
-        if instance_name is None:
-            log(f"'{host}' has no named-instance suffix, using configured port as-is", logging.DEBUG)
-        else:
-            resolved_port = await resolve_instance_port(hostname, instance_name)
-            if resolved_port is not None:
-                target = (hostname, resolved_port)
-
-        return target
-
-
-class _FastMssqlResult:
-    """fastmssql loaded every row before query() returns, and its pooled connection is already
-    released - fetch() only converts rows batch by batch."""
-
-    def __init__(self, stream: fastmssql.QueryStream) -> None:
-        self._stream: fastmssql.QueryStream = stream
-
-    def columns(self) -> list[str]:
-        try:
-            return self._stream.columns()
-        except ValueError:
-            return []  # fastmssql can't tell the column names if no line is returned
-
-    async def fetch(self, n: int) -> list[tuple[Any, ...]]:
-        return [tuple(_json_safe(value) for value in row.values()) for row in self._stream.fetch(n)]
-
-    async def close(self) -> None:
-        pass
 
 
 # ------------------------------------------------------------------------------------------
@@ -563,7 +442,7 @@ def _json_safe(value: Any, nested: bool = False) -> Any:
 
 def _to_positional_style(cmd_template: str, cmd_parameters: dict[str, Any], placeholder: str) -> tuple[str, list]:
     """Convert a template using %(name)s style and a dict for parameters into a template
-    using positional `placeholder` style (e.g "@P{}" for @P1, @P2, ...) and an ordered list of parameters."""
+    using positional `placeholder` style (e.g "${}" for $1, $2, ...) and an ordered list of parameters."""
 
     name_pos: dict[str, int] = {}
 

@@ -566,7 +566,7 @@ def test_sql_record_to_text_converts_values(exec_app_ctx, exec_user_ctx):
 def test_sql_record_to_text_without_server_skips_charset_fixup(exec_app_ctx, exec_user_ctx):
     """Mirrors the remote execution path: self.server is None (only self.remote is set in
     practice), so the pymssql/psycopg2 charset fixup must be skipped rather than raising -
-    fastmssql already returns clean UTF-8, so there is nothing to fix up for a remote record."""
+    the server already fixed the text up, so there is nothing to do for a remote record."""
     qe = QueryExecute(exec_app_ctx, exec_user_ctx)
 
     result = qe._convert_sql_record((1, "hello", None))
@@ -703,8 +703,8 @@ def test_execute_remote_handles_server_error(qe, mock_query, remote_config):
 
 @pytest.mark.unit
 def test_execute_remote_handles_empty_result(qe, mock_query, remote_config):
-    """fastmssql can't report columns for 0 rows (confirmed against the real driver) -
-    Pytre_Server falls back to an empty columns list, so the header row here is empty too."""
+    """A remote result without any column (e.g. a statement returning no result set) gives an
+    empty header row too."""
     mock_query.get_exec_config.return_value = replace(remote_config, remote_server=_FakeRemote(columns=(), rows=[]))
 
     rows_count, output = qe.execute()

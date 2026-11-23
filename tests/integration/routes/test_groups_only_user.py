@@ -2,7 +2,7 @@
 Integration tests for a user excluded from the "all" group (User.no_all_group): the server must only
 list and execute the queries shared with one of the user's own groups. The test query has no groups,
 so it is open to every regular user but must be refused to such a user, both in the GET /queries list
-and on POST /execute. Uses `isolated_client` - the test user is modified in a per-test database copy.
+and on POST /jobs. Uses `isolated_client` - the test user is modified in a per-test database copy.
 """
 
 import json
@@ -52,7 +52,7 @@ def test_groups_only_user_can_not_execute_the_query_without_groups(isolated_clie
     headers = _login_as_regular_user(isolated_client, no_all_group=True)
 
     response = isolated_client.post(
-        "/execute",
+        "/jobs",
         json={
             "server_id": TEST_SERVER_ID,
             "query_id": TEST_QUERY_ID,

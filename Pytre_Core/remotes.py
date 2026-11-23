@@ -66,7 +66,7 @@ class RemoteError(Exception):
 
 
 class RemoteExecutionError(RemoteError):
-    """Raised when Pytre_Server reports a row conversion/serialization error via a NDJSON __error__ line."""
+    """Raised when Pytre_Server reports the execution failed, or doesn't know it anymore"""
 
 
 class RemoteStopped(RemoteError):

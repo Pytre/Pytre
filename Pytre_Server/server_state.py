@@ -184,7 +184,7 @@ class ServerResources:
     # concurrency caps (executions per user and password checks)
     # ------------------------------------------------------------------------------------------
     def _get_user_semaphore(self, max_concurrency: int, username: str) -> asyncio.Semaphore:
-        """Lazily creates a per-user semaphore capping concurrent /execute requests.
+        """Lazily creates a per-user semaphore capping concurrent executions.
         No lock needed: dict access has no await point, so two "concurrent" tasks
         can't interleave between the check and the creation."""
         if username not in self.user_semaphores:
@@ -318,9 +318,8 @@ class ServerState:
 
     app_ctx: AppContext
     query_catalog: QueryCatalog
-    batch_size: int  # rows per batch of a job's result, and per chunk of /execute's stream
+    batch_size: int  # rows per batch of a job's result
     max_concurrency_per_user: int  # concurrent requests allowed per user
-    heartbeat_secs: int = 30  # seconds between NDJSON pings while a query executes, 0 to disable
     resources: ServerResources = field(default_factory=ServerResources)
 
 

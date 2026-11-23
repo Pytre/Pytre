@@ -149,11 +149,6 @@ def test_options_refuse_zero_or_a_negative_value(option, value, capsys):
     assert f"argument {option}: must be at least 1" in capsys.readouterr().err
 
 
-@pytest.mark.unit
-def test_heartbeat_secs_accepts_zero_to_disable_the_pings():
-    assert create_parser().parse_args(["--heartbeat-secs", "0"]).heartbeat_secs == 0
-
-
 # ================================================================================
 # process_master_key_args
 # ================================================================================
@@ -265,7 +260,6 @@ def test_start_server_runs_uvicorn_with_resolved_master_key(monkeypatch):
         batch_size=5000,
         db_pool_size=30,
         max_concurrency_per_user=4,
-        heartbeat_secs=30,
         log_buffer_mb=5,
         log_backups=1,
         log_file=None,

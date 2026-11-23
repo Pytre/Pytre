@@ -164,7 +164,6 @@ def queries_reload(
         query_catalog=new_catalog,
         batch_size=state.batch_size,
         max_concurrency_per_user=state.max_concurrency_per_user,
-        heartbeat_secs=state.heartbeat_secs,
         resources=state.resources,
     )
 

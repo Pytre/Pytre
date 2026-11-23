@@ -60,7 +60,7 @@ def test_get_user_semaphore_different_users_get_different_semaphores(server_stat
 
 @pytest.mark.unit
 def test_ignore_hash_until_defaults_to_empty(server_state):
-    """ignore_hash_until starts empty - an empty dict means /execute checks the hash for
+    """ignore_hash_until starts empty - an empty dict means a job's creation checks the hash for
     every query."""
     assert server_state.resources.ignore_hash_until == {}
 
@@ -395,7 +395,7 @@ async def test_use_driver_decrements_inflight_even_if_the_caller_raises(server_s
 
 @pytest.mark.anyio
 async def test_use_driver_nested_calls_accumulate_and_unwind(server_state, monkeypatch):
-    """Simulates two concurrent /execute calls sharing the same pooled driver."""
+    """Simulates two concurrent jobs sharing the same pooled driver."""
     _make_fake_driver_factory(monkeypatch)
     server = _make_server("srv1")
 

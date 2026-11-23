@@ -262,7 +262,6 @@ The same options apply to `Pytre_Server.exe` and `python -m Pytre_Server`, `--he
 | `--batch-size` | `5000` | Rows sent per batch of a query result |
 | `--db-pool-size` | `30` | Maximum number of queries running at once on each SQL server |
 | `--max-concurrency-per-user` | `4` | Maximum number of requests running at once for each user |
-| `--heartbeat-secs` | `30` | Seconds between keep-alive pings while a query runs through `/execute`, the former way to run queries, `0` to disable them |
 | `--log-file` | none | File the logs are written to, also used to refill the web administration logs at startup |
 | `--log-max-mb` | `5` | Size of the log file before it rotates, in MB |
 | `--log-backups` | `1` | Number of rotated log files kept |
@@ -329,9 +328,9 @@ Pytre is licensed under GNU Affero General Public License 3. You can find the li
 
 ## Main libraries used
 
-- Client: [pymssql](https://github.com/pymssql/pymssql), [psycopg2](https://github.com/psycopg/psycopg2), [httpx2](https://github.com/pydantic/httpx2)
-- Server: [FastAPI](https://github.com/fastapi/fastapi), [uvicorn](https://github.com/encode/uvicorn), [pymssql](https://github.com/pymssql/pymssql), [fastmssql](https://github.com/Rivendael/FastMssql), [asyncpg](https://github.com/MagicStack/asyncpg), [Authlib](https://github.com/authlib/authlib), [PyJWT](https://github.com/jpadilla/pyjwt), [argon2-cffi](https://github.com/hynek/argon2-cffi), [Jinja2](https://github.com/pallets/jinja)
-- Both: [pykeepass](https://github.com/libkeepass/pykeepass), [cryptography](https://github.com/pyca/cryptography), [keyring](https://github.com/jaraco/keyring)
+- Client: [psycopg2](https://github.com/psycopg/psycopg2)
+- Server: [FastAPI](https://github.com/fastapi/fastapi), [uvicorn](https://github.com/encode/uvicorn), [fastmssql](https://github.com/Rivendael/FastMssql), [asyncpg](https://github.com/MagicStack/asyncpg), [Jinja2](https://github.com/pallets/jinja)
+- Both: [pymssql](https://github.com/pymssql/pymssql), [httpx2](https://github.com/pydantic/httpx2), [Authlib](https://github.com/authlib/authlib), [PyJWT](https://github.com/jpadilla/pyjwt), [argon2-cffi](https://github.com/hynek/argon2-cffi), [pykeepass](https://github.com/libkeepass/pykeepass), [cryptography](https://github.com/pyca/cryptography), [keyring](https://github.com/jaraco/keyring)
 
 ## Credits
 

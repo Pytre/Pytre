@@ -173,7 +173,7 @@ async def test_columns_are_available_without_any_row(driver):
 @requires_postgre_docker
 @pytest.mark.anyio
 async def test_results_are_json_serializable_whatever_the_column_type(driver):
-    """UUID/interval/time/bytea/inet/arrays would break json.dumps in _stream_result_ndjson otherwise."""
+    """UUID/interval/time/bytea/inet/arrays would break json.dumps when a job encodes its batches otherwise."""
     rows = await _rows(
         driver,
         "SELECT gen_random_uuid() AS u, '1 day'::interval AS iv, current_time AS tm, '\\xdead'::bytea AS b, "

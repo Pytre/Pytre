@@ -44,7 +44,7 @@ def test_list_servers_includes_requesting_users_own_info(client, auth_headers):
 
 
 def test_list_servers_rejects_token_for_a_nonexistent_user(client):
-    """require_access_token (shared by /servers, /queries, /execute) delegates to
+    """require_access_token (shared by /servers, /queries, /jobs) delegates to
     username_from_token(), which must reject a well-formed, correctly signed token whose
     subject doesn't correspond to any real account - e.g. a deleted user, or a forged token."""
     app_ctx = AppContext(master_key=TEST_DB_PASSWORD)

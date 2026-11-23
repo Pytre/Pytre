@@ -6,10 +6,9 @@ Confirms: await driver.execute(...) stays responsive on its own (fastmssql's PyO
 binding yields control during the network wait), but the subsequent row conversion
 has no await point (result.fetch() wraps the sync-only QueryStream.fetch()) and starves
 the loop for its whole duration. Running that conversion in loop.run_in_executor() is
-one way to restore responsiveness (tested below) - but it is not what /execute
-actually does: it streams NDJSON in chunks instead (Pytre_Server/result_streaming.py's
-stream_result_ndjson), where the chunk boundaries themselves provide the yield points,
-with no executor involved.
+one way to restore responsiveness (tested below) - but it is not what a job does: it reads
+the result by batches instead (Pytre_Server/jobs.py), each batch a fetch of its own, so the
+boundaries between batches provide the yield points, with no executor involved.
 
 Requires the local mssql-test docker container (see tests/resources/build_test_keepass.py for
 its pinned connection details) - skipped automatically if it isn't reachable.
@@ -117,9 +116,9 @@ async def test_query_call_does_not_block_event_loop(driver):
 async def test_raw_fetch_blocks_event_loop(driver):
     """Characterization test: result.fetch() has no await point (QueryStream is
     sync-only), so it starves the loop for its whole duration. If this ever starts
-    failing because fastmssql grows a real async fetch, that's good news - the
-    chunked streaming in Pytre_Server/result_streaming.py's stream_result_ndjson (and the
-    executor-based alternative characterized below) would no longer be needed."""
+    failing because fastmssql grows a real async fetch, that's good news - reading by
+    batches in Pytre_Server/jobs.py (and the executor-based alternative characterized
+    below) would no longer be needed to keep the loop responsive."""
     result = await driver.execute(_BIG_QUERY, {})
 
     rows, elapsed, max_gap = await _measure(_fetch_all(result))
@@ -132,13 +131,12 @@ async def test_raw_fetch_blocks_event_loop(driver):
 @requires_docker
 @pytest.mark.anyio
 async def test_fetch_wrapped_in_executor_does_not_block_event_loop(driver):
-    """Characterization test, not a regression test tied to /execute's current
+    """Characterization test, not a regression test tied to the jobs' current
     implementation: running row conversion in loop.run_in_executor() is one way
-    to keep the event loop responsive while reading a large result. The /execute route
-    actually uses a different technique (chunked NDJSON streaming via stream_result_ndjson,
-    where each yield between chunks hands control back to the loop) - this test documents
-    that the executor approach also works, as a lower-level fact about fastmssql/asyncio,
-    independent of which technique /execute happens to use."""
+    to keep the event loop responsive while reading a large result. A job actually uses
+    a different technique (reading by batches, each fetch handing control back to the loop
+    once done) - this test documents that the executor approach also works, as a
+    lower-level fact about fastmssql/asyncio, independent of which technique the jobs use."""
     result = await driver.execute(_BIG_QUERY, {})
     loop = asyncio.get_running_loop()
 

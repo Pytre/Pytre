@@ -6,12 +6,12 @@ Gated by require_admin_session (see admin_router.py).
 
 import asyncio
 from collections.abc import AsyncGenerator
+from typing import Protocol
 
 from fastapi import APIRouter, Depends, Header, Request
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 
 from Pytre_Server.log_buffer import LogBufferHandler
-from Pytre_Server.result_streaming import DisconnectAware
 from Pytre_Server.server_state import ServerState, get_server_state
 from Pytre_Server.templating import templates
 
@@ -21,6 +21,13 @@ POLL_INTERVAL_SECS = 0.75
 INITIAL_PAGE_SIZE = 300
 BATCH_SIZE = 300
 LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
+
+
+class DisconnectAware(Protocol):
+    """Minimal surface needed from FastAPI's Request - only is_disconnected() - lets tests pass lightweight doubles
+    instead of a full ASGI Request"""
+
+    async def is_disconnected(self) -> bool: ...
 
 
 @router.get("", response_class=HTMLResponse)

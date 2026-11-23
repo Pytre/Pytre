@@ -1412,7 +1412,7 @@ async def test_pg_fetch_after_close_returns_no_row():
 
 @pytest.mark.anyio
 async def test_pg_cancelled_fetch_cancels_the_query():
-    """Client gone: stream_result_ndjson cancels its fetch task, which must cancel the query on PostgreSQL
+    """Job closed: it cancels its batch preparation, whose fetch must cancel the query on PostgreSQL
     right away (asyncpg does on a cancelled call) - not leave it running until close()."""
     connection = _FakeConnection(columns=["n"], records=[_FakeRecord(n=1)], blocked="fetch")
     result = await _pg_result(connection)

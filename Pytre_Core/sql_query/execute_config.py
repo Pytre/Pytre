@@ -19,7 +19,7 @@ class LocalExecuteCfg:
 @dataclass(frozen=True)
 class RemoteExecuteCfg(LocalExecuteCfg):
     remote_server: RemoteServer | None = None
-    remote_query_id: str = ""  # collision-proof id sent to /execute - query_id
+    remote_query_id: str = ""  # collision-proof id sent to /jobs - query_id is the label shown to the user
     template_hash: str = ""
     display_format: DisplayFormat = field(default_factory=DisplayFormat)  # format display_parameters use
     display_parameters: dict[str, str] = field(default_factory=dict)

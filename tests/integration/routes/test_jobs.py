@@ -1,7 +1,7 @@
 """
-Integration tests for the /jobs routes (Pytre_Server/routes/client_execution_jobs.py): a job is created like an
-/execute request is checked, then its status and batches are asked for. The SQL driver is faked except in the
-test marked `requires_docker`, which compares a real execution with /execute's.
+Integration tests for the /jobs routes (Pytre_Server/routes/client_jobs.py): a job is created once its request is
+checked (Pytre_Server/routes/client_execution.py), then its status and batches are asked for. The SQL driver is
+faked except in the test marked `requires_docker`, which reads a real result.
 
 The TestClient is used as a context manager: its event loop then lives for the whole test, as the server's does,
 so a job created by a request goes on running between two requests.
@@ -66,18 +66,21 @@ class _FakeResult:
 
 
 class _FakeExecution:
-    """What every execution on the mssql test server gives: `rows`, after `delay` seconds"""
+    """What every execution on the mssql test server gives: `rows`, after `delay` seconds. Keeps the SQL parameters
+    of the last execution."""
 
     def __init__(self) -> None:
         self.rows: list[tuple] = [(1, "a"), (2, "b"), (3, "c")]
         self.delay: float = 0
+        self.params: dict | None = None
 
 
 @pytest.fixture
 def fake_execution(monkeypatch) -> _FakeExecution:
     execution = _FakeExecution()
 
-    async def fake_execute(_driver, _template, _params):
+    async def fake_execute(_driver, _template, params):
+        execution.params = params
         await asyncio.sleep(execution.delay)
         return _FakeResult(list(execution.rows))
 
@@ -249,13 +252,14 @@ def test_a_job_of_another_user_is_not_found(jobs_client, headers, fake_execution
     "changes, expected",
     [
         ({"query_id": "UNKNOWN_QUERY"}, 404),
+        ({"server_id": "UNKNOWN_SERVER"}, 404),
         ({"template_hash": "stale_hash_value"}, 409),
         ({"display_parameters": {"@unknown": "x"}}, 409),
         ({"display_parameters": {"@1": "not-a-date"}}, 400),
     ],
-    ids=["unknown_query", "stale_hash", "parameters_mismatch", "invalid_value"],
+    ids=["unknown_query", "unknown_server", "stale_hash", "parameters_mismatch", "invalid_value"],
 )
-def test_a_job_is_refused_like_an_execute_request(jobs_client, headers, changes, expected):
+def test_a_job_is_refused_for_an_invalid_request(jobs_client, headers, changes, expected):
     body = _request_body(jobs_client, headers, **changes)
 
     assert jobs_client.post("/jobs", json=body, headers=headers).status_code == expected
@@ -269,24 +273,92 @@ def test_a_job_is_refused_when_the_user_is_at_the_concurrency_limit(jobs_client,
     assert jobs_client.post("/jobs", json=body, headers=headers).status_code == 429
 
 
+@pytest.mark.parametrize("display_format", [None, {"date_format": "%d/%m", "decimal_separator": ","}])
+def test_a_job_is_refused_for_a_missing_or_invalid_display_format(jobs_client, headers, display_format):
+    body = _request_body(jobs_client, headers)
+    if display_format is None:
+        del body["display_format"]
+    else:
+        body["display_format"] = display_format
+
+    assert jobs_client.post("/jobs", json=body, headers=headers).status_code == 422
+
+
+@pytest.mark.parametrize(
+    "date_format, display_value", [("%d/%m/%Y", "10/03/2025"), ("%m/%d/%Y", "03/10/2025"), ("%Y-%m-%d", "2025-03-10")]
+)
+def test_a_job_reads_the_parameters_with_the_client_display_format(
+    jobs_client, headers, fake_execution, date_format, display_value
+):
+    """The same date typed in different formats reaches the database as the same value"""
+    display_format = {"date_format": date_format, "decimal_separator": ","}
+    body = _request_body(jobs_client, headers, display_format=display_format, display_parameters={"@1": display_value})
+
+    job_id = jobs_client.post("/jobs", json=body, headers=headers).json()["job_id"]
+    _wait_ready(jobs_client, headers, job_id)
+
+    assert fake_execution.params == {"@1": "2025-03-10"}
+
+
+def test_a_job_builds_only_the_requested_query(jobs_client, headers, fake_execution, monkeypatch):
+    """Building every query of the catalog would re-log the errors of every unrelated broken one, on each job"""
+    from Pytre_Server.routes import client_execution
+
+    original = client_execution.build_queries_from_parsers
+    parser_counts = []
+
+    def spy(app_ctx, user_ctx, parsers):
+        parser_counts.append(len(parsers))
+        return original(app_ctx, user_ctx, parsers)
+
+    monkeypatch.setattr(client_execution, "build_queries_from_parsers", spy)
+
+    jobs_client.post("/jobs", json=_request_body(jobs_client, headers), headers=headers)
+
+    assert parser_counts == [1]
+
+
+def _exempt_from_the_hash_check(client: TestClient, days: int) -> None:
+    from datetime import datetime, timedelta, timezone
+
+    until = datetime.now(timezone.utc) + timedelta(days=days)
+    client.app.state.server.resources.ignore_hash_until[TEST_QUERY_ID] = until  # type: ignore  # create_app()'s
+
+
+def test_a_job_with_a_stale_hash_is_accepted_while_its_query_is_exempted(jobs_client, headers, fake_execution):
+    _exempt_from_the_hash_check(jobs_client, days=1)
+    body = _request_body(jobs_client, headers, template_hash="stale_hash_value")
+
+    assert jobs_client.post("/jobs", json=body, headers=headers).status_code == 201
+
+
+def test_a_job_still_checks_the_parameters_while_its_query_is_exempted(jobs_client, headers):
+    """The exemption only covers the SQL body: the template hash never covers the parameters"""
+    _exempt_from_the_hash_check(jobs_client, days=1)
+    body = _request_body(jobs_client, headers, template_hash="stale_hash_value", display_parameters={"@unknown": "x"})
+
+    assert jobs_client.post("/jobs", json=body, headers=headers).status_code == 409
+
+
+def test_a_job_with_a_stale_hash_is_refused_once_the_exemption_expired(jobs_client, headers):
+    _exempt_from_the_hash_check(jobs_client, days=-1)
+    body = _request_body(jobs_client, headers, template_hash="stale_hash_value")
+
+    assert jobs_client.post("/jobs", json=body, headers=headers).status_code == 409
+
+
 # ------------------------------------------------------------------------------
 # Real execution
 # ------------------------------------------------------------------------------
 
 
 @requires_docker
-def test_a_job_reads_the_same_result_as_execute(jobs_client, headers):
-    body = _request_body(jobs_client, headers)
-
-    response = jobs_client.post("/execute", json=body, headers=headers)
-    lines = [json.loads(line) for line in response.text.splitlines() if line]
-    expected_columns = lines[0]["__columns__"]
-    expected_rows = [line["__row__"] for line in lines[1:] if "__row__" in line]
-
+def test_a_job_reads_a_real_result(jobs_client, headers):
     job_id = _create(jobs_client, headers)
+
     assert _wait_ready(jobs_client, headers, job_id) == {"status": "ready"}
     columns, rows = _read_all(jobs_client, headers, job_id)
     jobs_client.delete(f"/jobs/{job_id}", headers=headers)
 
-    assert columns == expected_columns
-    assert rows == expected_rows
+    assert columns == ["id", "label", "filter_date"]
+    assert rows and all(len(row) == len(columns) for row in rows)

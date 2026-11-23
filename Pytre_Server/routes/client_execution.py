@@ -1,5 +1,5 @@
-"""Preparation shared by both ways to execute a query, /execute and /jobs: the request is checked against the
-queries the user is authorized to use, and one of the user's execution slots is taken. No route here."""
+"""Preparation of a query execution, for POST /jobs: the request is checked against the queries the user is
+authorized to use, and one of the user's execution slots is taken. No route here."""
 
 import asyncio
 import logging
@@ -24,7 +24,7 @@ def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__)
 
 
 class ExecuteRequest(BaseModel):
-    """Request body for POST /execute and POST /jobs"""
+    """Request body for POST /jobs"""
 
     server_id: str
     query_id: str
@@ -44,7 +44,7 @@ class PreparedExecution:
 
 
 async def prepare_execution(request: ExecuteRequest, username: str, state: ServerState) -> PreparedExecution:
-    """Checks `request` and takes one of the user's execution slots, for /execute and /jobs.
+    """Checks `request` and takes one of the user's execution slots, for /jobs.
     Raises HTTPException: 404 unknown or unauthorized query, 409 stale query or parameters, 400 invalid value,
     429 too many executions at once for the user."""
     resources: ServerResources = state.resources
@@ -65,7 +65,7 @@ async def prepare_execution(request: ExecuteRequest, username: str, state: Serve
         http_error = status.HTTP_429_TOO_MANY_REQUESTS
         raise HTTPException(status_code=http_error, detail="Too many concurrent requests, try again later")
 
-    await semaphore.acquire()  # released once the execution is over: by _run_query() or by the job
+    await semaphore.acquire()  # released by the job once it holds nothing anymore, see Job.start()
 
     # log execution request
     msg_params = f"with {params} as parameters" if params else "(no parameter)"

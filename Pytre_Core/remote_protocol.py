@@ -13,33 +13,6 @@ JOB_WAIT_SECS = 20  # longest wait of a /jobs response before the server answers
 JOB_ABANDON_SECS = 120  # a job nothing was asked for since so long is cancelled by the server
 
 
-def error_payload(error: BaseException, prefix: str = "") -> dict[str, str]:
-    """How `error` is reported to the client, its message preceded by `prefix`"""
-    return {"type": type(error).__name__, "message": f"{prefix}{error}"}
-
-
-# ------------------------------------------------------------------------------------------
-# NDJSON lines of /execute
-# ------------------------------------------------------------------------------------------
-class StreamKey(StrEnum):
-    """Key of each NDJSON line streamed by Pytre_Server's /execute - one key per line."""
-
-    COLUMNS = "__columns__"
-    ROW = "__row__"
-    PING = "__ping__"
-    ERROR = "__error__"
-
-
-def stream_line(key: StreamKey, payload: Any) -> str:
-    """One NDJSON line of /execute's response, newline included."""
-    return json.dumps({key: payload}) + "\n"
-
-
-def stream_error(error: BaseException, prefix: str = "") -> str:
-    """NDJSON line reporting `error` to the client, its message preceded by `prefix`."""
-    return stream_line(StreamKey.ERROR, error_payload(error, prefix))
-
-
 # ------------------------------------------------------------------------------------------
 # Row values encoding
 # ------------------------------------------------------------------------------------------
@@ -74,6 +47,11 @@ def decode_row_value(value: Any) -> Any:
 # ------------------------------------------------------------------------------------------
 # JSON responses of /jobs: an execution started by a call, its result read by numbered batches
 # ------------------------------------------------------------------------------------------
+def error_payload(error: BaseException, prefix: str = "") -> dict[str, str]:
+    """How `error` is reported to the client, its message preceded by `prefix`"""
+    return {"type": type(error).__name__, "message": f"{prefix}{error}"}
+
+
 class JobStatus(StrEnum):
     """`status` of each JSON response of /jobs"""
 

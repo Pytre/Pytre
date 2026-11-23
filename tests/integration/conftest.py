@@ -100,7 +100,7 @@ def isolated_local_admin_client(monkeypatch, tmp_path) -> TestClient:
 @pytest.fixture
 def auth_headers(client) -> dict[str, str]:
     """Bearer token headers for TEST_USERNAME, obtained via a real /login call against
-    `client` - every protected route (/servers, /queries, /execute, /change-password) needs
+    `client` - every protected route (/servers, /queries, /jobs, /change-password) needs
     this instead of the old `username` query param/body field."""
     response = client.post("/login", json={"username": TEST_USERNAME, "password": TEST_USER_PASSWORD})
     token = response.json()["access_token"]

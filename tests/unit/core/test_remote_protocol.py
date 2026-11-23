@@ -12,76 +12,10 @@ from Pytre_Core.remote_protocol import (
     Batch,
     JobKey,
     JobStatus,
-    StreamKey,
     decode_row_value,
     encode_row_value,
     error_payload,
-    stream_error,
-    stream_line,
 )
-
-
-# ================================================================================
-# NDJSON lines of /execute
-# ================================================================================
-
-
-@pytest.mark.unit
-def test_stream_keys_are_the_ones_on_the_wire():
-    """Clients and servers of other versions rely on these exact values."""
-    assert {key.name: str(key) for key in StreamKey} == {
-        "COLUMNS": "__columns__",
-        "ROW": "__row__",
-        "PING": "__ping__",
-        "ERROR": "__error__",
-    }
-
-
-@pytest.mark.unit
-def test_stream_keys_match_the_keys_of_a_decoded_line():
-    record = json.loads('{"__ping__": true}')
-
-    assert StreamKey.PING in record
-    assert record[StreamKey.PING] is True
-
-
-@pytest.mark.unit
-@pytest.mark.parametrize(
-    "key, payload, expected",
-    [
-        (StreamKey.COLUMNS, ("id", "label"), '{"__columns__": ["id", "label"]}\n'),
-        (StreamKey.ROW, (1, None, {"$date": "2026-01-01"}), '{"__row__": [1, null, {"$date": "2026-01-01"}]}\n'),
-        (StreamKey.PING, True, '{"__ping__": true}\n'),
-    ],
-)
-def test_stream_line_is_one_json_object_and_a_newline(key, payload, expected):
-    assert stream_line(key, payload) == expected
-
-
-@pytest.mark.unit
-def test_stream_lines_concatenate_into_ndjson():
-    lines = stream_line(StreamKey.COLUMNS, ["n"]) + stream_line(StreamKey.ROW, [1]) + stream_line(StreamKey.ROW, [2])
-
-    assert [json.loads(line) for line in lines.splitlines()] == [
-        {"__columns__": ["n"]},
-        {"__row__": [1]},
-        {"__row__": [2]},
-    ]
-
-
-@pytest.mark.unit
-def test_stream_error_reports_the_error_type_and_message():
-    line = stream_error(ValueError("boom"))
-
-    assert line.endswith("\n")
-    assert json.loads(line) == {"__error__": {"type": "ValueError", "message": "boom"}}
-
-
-@pytest.mark.unit
-def test_stream_error_prefixes_the_message_only():
-    line = stream_error(ConnectionError("refused"), "Server unavailable: ")
-
-    assert json.loads(line) == {"__error__": {"type": "ConnectionError", "message": "Server unavailable: refused"}}
 
 
 # ================================================================================
@@ -127,15 +61,6 @@ def test_encode_decode_round_trip(value):
     assert decode_row_value(encode_row_value(value)) == value
 
 
-@pytest.mark.unit
-@pytest.mark.parametrize("value", [datetime(2026, 1, 1, 10, 30), date(2026, 1, 1), Decimal("12.50")])
-def test_encoded_row_values_round_trip_through_a_stream_line(value):
-    """What the server sends is what the client reads back."""
-    record = json.loads(stream_line(StreamKey.ROW, (encode_row_value(value),)))
-
-    assert decode_row_value(record[StreamKey.ROW][0]) == value
-
-
 # ================================================================================
 # JSON responses of /jobs
 # ================================================================================
@@ -150,13 +75,6 @@ def test_job_keys_and_statuses_are_the_ones_on_the_wire():
 @pytest.mark.unit
 def test_error_payload_reports_the_error_type_and_its_prefixed_message():
     assert error_payload(ValueError("boom"), "SQL error: ") == {"type": "ValueError", "message": "SQL error: boom"}
-
-
-@pytest.mark.unit
-def test_stream_error_carries_the_error_payload():
-    error = RuntimeError("boom")
-
-    assert json.loads(stream_error(error, "x: "))[StreamKey.ERROR] == error_payload(error, "x: ")
 
 
 @pytest.mark.unit

@@ -1,0 +1,7 @@
+-r requirements-client.txt
+-r requirements-server.txt
+pyinstaller>=6.22.3
+pytest>=9.1.1
+pytest-cov>=7.1.0
+pytest-mock>=3.17.0
+pytest-xdist>=3.8.0

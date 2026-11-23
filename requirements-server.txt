@@ -1,15 +1,14 @@
 argon2-cffi>=25.1.0
-asyncpg>=0.30.0    # async PostgreSQL driver (Pytre_Server)
-authlib>=1.8       # OpenID Connect client flows (SSO)
-cryptography>=46.0.3
-fastapi>=0.140.0
-fastmssql>=0.7.7   # mssql driver for the "SQL Server (fastmssql)" type (Pytre_Server)
-httpx2>=2.9.1      # OpenID Connect requests to the identity provider, and FastAPI's TestClient in the tests
+asyncpg>=0.32.0    # async PostgreSQL driver (Pytre_Server)
+authlib>=1.9.1     # OpenID Connect client flows (SSO)
+cryptography>=50.0.2
+fastapi>=0.145.0
+httpx2>=2.13.1     # OpenID Connect requests to the identity provider, and FastAPI's TestClient in the tests
 jinja2>=3.1.6      # server-rendered admin pages
 keyring>=25.7.0
-pyjwt>=2.10.1
-pykeepass>=4.0.6
-pymssql>=2.3.8     # mssql driver for the "SQL Server" type (Pytre_Server)
-python-multipart>=0.0.20  # required by FastAPI to parse the hash-password form
-uvicorn>=0.51.0
-
+pyjwt>=2.15.1
+pykeepass>=4.2.0
+pymssql>=2.4.4     # mssql driver for the "SQL Server" type (Pytre_Server)
+python-dateutil>=2.9.0  # parsing of the query parameters' dates
+python-multipart>=0.0.32  # required by FastAPI to parse the hash-password form
+uvicorn>=0.54.0

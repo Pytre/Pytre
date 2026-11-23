@@ -1,0 +1,10 @@
+argon2-cffi>=25.1.0
+authlib>=1.9.1
+cryptography>=50.0.2
+httpx2>=2.13.1
+keyring>=25.7.0
+psycopg2>=2.9.13
+pyjwt>=2.15.1
+pykeepass>=4.2.0
+pymssql>=2.4.4
+python-dateutil>=2.9.0

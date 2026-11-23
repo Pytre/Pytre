@@ -6,7 +6,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-uv pip compile requirements.txt requirements-server.txt \
+uv pip compile requirements-dev.txt \
     --universal \
     --python-version 3.14 \
     --generate-hashes \

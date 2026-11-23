@@ -286,7 +286,7 @@ Requires Python 3.14 or later (tested with 3.14).
 ### Client
 
 ```
-pip install -r requirements.txt
+pip install -r requirements-client.txt
 python -m Pytre_Client
 ```
 
@@ -320,7 +320,8 @@ pyinstaller Pytre_Server.spec
 
 Executables are written to `dist/`, the client folder to `dist/Pytre_Client/`: `Pytre_Client.exe` and its `_internal_<version>` folder, a new version being extracted next to the running one when the client updates itself.  
 The MSI is built from that folder with WiX 7 and `Pytre_Client.wxs`, see the "Build client installer" step of `.github/workflows/build.yml`.  
-`requirements-build.lock` pins the exact versions used for releases, regenerate it with `requirements-update_lock.sh` after changing `requirements*.txt`.
+`requirements-build.lock` pins the exact versions used for releases, regenerate it with `requirements-update_lock.sh` after changing `requirements*.txt`.  
+For development, `pip install -r requirements-dev.txt` installs the client's and the server's dependencies, plus the tools to build and test.
 
 ## License
 
@@ -329,7 +330,7 @@ Pytre is licensed under GNU Affero General Public License 3. You can find the li
 ## Main libraries used
 
 - Client: [psycopg2](https://github.com/psycopg/psycopg2)
-- Server: [FastAPI](https://github.com/fastapi/fastapi), [uvicorn](https://github.com/encode/uvicorn), [fastmssql](https://github.com/Rivendael/FastMssql), [asyncpg](https://github.com/MagicStack/asyncpg), [Jinja2](https://github.com/pallets/jinja)
+- Server: [FastAPI](https://github.com/fastapi/fastapi), [uvicorn](https://github.com/encode/uvicorn), [asyncpg](https://github.com/MagicStack/asyncpg), [Jinja2](https://github.com/pallets/jinja)
 - Both: [pymssql](https://github.com/pymssql/pymssql), [httpx2](https://github.com/pydantic/httpx2), [Authlib](https://github.com/authlib/authlib), [PyJWT](https://github.com/jpadilla/pyjwt), [argon2-cffi](https://github.com/hynek/argon2-cffi), [pykeepass](https://github.com/libkeepass/pykeepass), [cryptography](https://github.com/pyca/cryptography), [keyring](https://github.com/jaraco/keyring)
 
 ## Credits

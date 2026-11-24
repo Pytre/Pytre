@@ -9,7 +9,7 @@ from typing import TextIO
 from Pytre_Core.about import APP_NAME
 from Pytre_Core.utils import log, LOGGER_ROOT_NAME
 
-from Pytre_Client.app_theme import set_theme, get_system
+from Pytre_Client.app_theme import set_theme
 from Pytre_Client.ui_utils import textbox_ctx_menu
 
 
@@ -65,7 +65,7 @@ class ConsoleWindow(tk.Toplevel):
 
     def _set_position(self):
         self.update_idletasks()
-        if get_system() == "Windows":
+        if sys.platform == "win32":
             x = int(self.winfo_screenwidth() / 2 - self.winfo_width() / 2)
             y = int(self.winfo_screenheight() / 2 - self.winfo_height() / 1.8)
             self.geometry(f"+{x}+{y}")

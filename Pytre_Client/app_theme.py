@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+import sys
 import tkinter as tk
 from tkinter import ttk, font
 
-from Pytre_Core.utils import get_system
 
 THEME_ON: bool = False
 
@@ -15,7 +15,7 @@ def theme_is_on() -> bool:
 def set_theme(root: tk.Toplevel) -> bool:
     global THEME_ON
 
-    if not get_system() == "Windows":
+    if not sys.platform == "win32":
         set_win10_like_theme(root)
         THEME_ON = True
 

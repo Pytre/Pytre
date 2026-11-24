@@ -1,3 +1,4 @@
+import sys
 import tkinter as tk
 import webbrowser
 from tkinter import ttk, font
@@ -6,7 +7,6 @@ from Pytre_Core import about
 from Pytre_Core.policy import UpdatePolicy
 from Pytre_Core.updater import Updater
 from Pytre_Core.user_prefs import PrefEnum, UserPrefs
-from Pytre_Core.utils import get_system
 
 import Pytre_Client.ui_utils as ui_utils
 from Pytre_Client.app_theme import set_theme
@@ -70,7 +70,7 @@ class AboutWindow(tk.Toplevel):
             x = int(self.parent.winfo_x() + self.parent.winfo_width() / 2 - 400 / 2)
             y = int(self.parent.winfo_y() + self.parent.winfo_height() / 2 - 350 / 2)
             self.geometry(f"+{x}+{y}")
-        elif get_system() == "Windows":
+        elif sys.platform == "win32":
             x = int(self.winfo_screenwidth() / 2 - 400 / 2)
             y = int(self.winfo_screenheight() / 2 - 350 / 1.8)
             self.geometry(f"+{x}+{y}")

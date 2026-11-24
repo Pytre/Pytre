@@ -2,12 +2,11 @@ import codecs
 import hmac
 import logging
 import os
-import platform
 import secrets
 import subprocess
-
-
+import sys
 from pathlib import Path
+
 
 LOGGER_ROOT_NAME = "Pytre"
 
@@ -50,33 +49,26 @@ def secret_fingerprint(secret: str) -> str:
     return hmac.new(_FINGERPRINT_KEY, secret.encode("utf-8"), "sha256").hexdigest()
 
 
-def get_system() -> str:
-    return platform.system()
-
-
 def startfile(filename: str | Path) -> None:
     validated_filename: Path = validate_path(filename)
-    system: str = platform.system()
 
-    if system == "Windows":
-        os.startfile(str(validated_filename))  # type: ignore
+    if sys.platform == "win32":
+        os.startfile(str(validated_filename))
         return
-    elif system == "Darwin":  # macOS
+    elif sys.platform == "darwin":  # macOS
         subprocess.Popen(["open", str(validated_filename)])
-    elif system == "Linux":
+    elif sys.platform == "linux":
         file_manager = get_file_manager()
         if not validated_filename.is_file() and file_manager:
             subprocess.Popen([file_manager, "--select", str(validated_filename)])
         else:
             subprocess.Popen(["xdg-open", str(validated_filename)])
     else:
-        raise ValueError(f"OS not supported: {system}")
+        raise ValueError(f"OS not supported: {sys.platform}")
 
 
 def showfile(filename: str | Path) -> None:
     validated_filename: Path = validate_path(filename)
-
-    system: str = platform.system()
 
     is_file = Path(validated_filename).is_file()
     file_manager = get_file_manager()
@@ -90,11 +82,11 @@ def showfile(filename: str | Path) -> None:
     args = [file_manager, native_path]
     if is_file:
         select_cmd: str = ""
-        if system == "Windows":
+        if sys.platform == "win32":
             select_cmd = "/select,"
-        elif system == "Linux":
+        elif sys.platform == "linux":
             select_cmd = "--select"
-        elif system == "Darwin":
+        elif sys.platform == "darwin":
             select_cmd = "-R"
 
         args.insert(1, select_cmd)
@@ -124,16 +116,14 @@ def validate_path(filename: str | Path) -> Path:
 
 
 def get_file_manager() -> str:
-    system: str = platform.system()
-
-    if system == "Windows":
+    if sys.platform == "win32":
         return "explorer"
-    elif system == "Darwin":  # macOS
+    elif sys.platform == "darwin":  # macOS
         return "open"
-    elif system == "Linux":
+    elif sys.platform == "linux":
         return _linux_file_manager()
     else:
-        raise ValueError(f"OS not supported: {system}")
+        raise ValueError(f"OS not supported: {sys.platform}")
 
 
 def _linux_file_manager() -> str:

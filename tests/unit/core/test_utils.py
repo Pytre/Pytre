@@ -8,7 +8,7 @@ REGRESSION TESTS:
 import pytest
 import os
 from pathlib import Path
-from unittest.mock import patch, mock_open
+from unittest.mock import patch
 
 from Pytre_Core.utils import secret_fingerprint, validate_path, startfile, showfile
 
@@ -177,8 +177,10 @@ def test_startfile_accepts_str_or_path(tmp_path):
     test_file.write_text("content")
 
     # Mock subprocess and get_file_manager to avoid actually opening file
-    with patch('Pytre_Core.utils.subprocess.Popen') as mock_popen, \
-         patch('Pytre_Core.utils.get_file_manager', return_value=None):
+    with (
+        patch("Pytre_Core.utils.subprocess.Popen") as mock_popen,
+        patch("Pytre_Core.utils.get_file_manager", return_value=None),
+    ):
         # Test with Path
         startfile(test_file)
         assert mock_popen.called
@@ -198,8 +200,10 @@ def test_showfile_accepts_str_or_path(tmp_path):
     test_file.write_text("content")
 
     # Mock both subprocess and get_file_manager to avoid side effects
-    with patch('Pytre_Core.utils.subprocess.Popen') as mock_popen, \
-         patch('Pytre_Core.utils.get_file_manager', return_value='nautilus'):
+    with (
+        patch("Pytre_Core.utils.subprocess.Popen") as mock_popen,
+        patch("Pytre_Core.utils.get_file_manager", return_value="nautilus"),
+    ):
         # Test with Path
         showfile(test_file)
         assert mock_popen.called
@@ -246,25 +250,9 @@ def test_validate_path_rejects_special_devices():
     """Special device files should be rejected"""
     # /dev/null is not a regular file or directory
     # Note: This test may behave differently on Windows
-    if os.name == 'posix':  # Unix-like systems
+    if os.name == "posix":  # Unix-like systems
         with pytest.raises(ValueError, match="not a regular file or directory"):
             validate_path("/dev/null")
-
-
-# ================================================================================
-# Platform Detection Tests
-# ================================================================================
-
-
-@pytest.mark.unit
-def test_get_system_returns_platform():
-    """get_system should return current platform"""
-    from Pytre_Core.utils import get_system
-
-    result = get_system()
-
-    # Should return one of the known platforms
-    assert result in ["Windows", "Linux", "Darwin"]
 
 
 # ================================================================================
@@ -277,7 +265,7 @@ def test_get_file_manager_windows():
     """get_file_manager should return explorer on Windows"""
     from Pytre_Core.utils import get_file_manager
 
-    with patch("platform.system", return_value="Windows"):
+    with patch("sys.platform", "win32"):
         result = get_file_manager()
         assert result == "explorer"
 
@@ -287,7 +275,7 @@ def test_get_file_manager_darwin():
     """get_file_manager should return open on macOS"""
     from Pytre_Core.utils import get_file_manager
 
-    with patch("platform.system", return_value="Darwin"):
+    with patch("sys.platform", "darwin"):
         result = get_file_manager()
         assert result == "open"
 
@@ -297,7 +285,7 @@ def test_get_file_manager_linux():
     """get_file_manager should call _linux_file_manager on Linux"""
     from Pytre_Core.utils import get_file_manager
 
-    with patch("platform.system", return_value="Linux"):
+    with patch("sys.platform", "linux"):
         with patch("Pytre_Core.utils._linux_file_manager", return_value="nautilus"):
             result = get_file_manager()
             assert result == "nautilus"
@@ -308,7 +296,7 @@ def test_get_file_manager_unsupported_os():
     """get_file_manager should raise ValueError for unsupported OS"""
     from Pytre_Core.utils import get_file_manager
 
-    with patch("platform.system", return_value="FreeBSD"):
+    with patch("sys.platform", "freebsd14"):
         with pytest.raises(ValueError, match="not supported"):
             get_file_manager()
 
@@ -334,7 +322,7 @@ def test_linux_file_manager_handles_empty_desktop_entry():
     """_linux_file_manager should return empty string if desktop entry is empty"""
     from Pytre_Core.utils import _linux_file_manager
 
-    mock_result = type('obj', (), {'stdout': '  \n'})()
+    mock_result = type("obj", (), {"stdout": "  \n"})()
 
     with patch("subprocess.run", return_value=mock_result):
         result = _linux_file_manager()
@@ -346,7 +334,7 @@ def test_linux_file_manager_handles_missing_desktop_file():
     """_linux_file_manager should return empty string if desktop file doesn't exist"""
     from Pytre_Core.utils import _linux_file_manager
 
-    mock_result = type('obj', (), {'stdout': 'nautilus.desktop\n'})()
+    mock_result = type("obj", (), {"stdout": "nautilus.desktop\n"})()
 
     with patch("subprocess.run", return_value=mock_result):
         # Mock Path.exists to return False
@@ -373,7 +361,7 @@ Type=Application
 """
     desktop_file.write_text(desktop_content)
 
-    mock_result = type('obj', (), {'stdout': 'nautilus.desktop\n'})()
+    mock_result = type("obj", (), {"stdout": "nautilus.desktop\n"})()
 
     with patch("subprocess.run", return_value=mock_result):
         # Mock Path.home to return tmp_path
@@ -388,13 +376,13 @@ Type=Application
 
 
 @pytest.mark.unit
-@pytest.mark.skipif(os.name != 'nt', reason="os.startfile only exists on Windows")
+@pytest.mark.skipif(os.name != "nt", reason="os.startfile only exists on Windows")
 def test_startfile_windows_calls_os_startfile(tmp_path):
     """startfile should call os.startfile on Windows"""
     test_file = tmp_path / "test.txt"
     test_file.write_text("content")
 
-    with patch("platform.system", return_value="Windows"):
+    with patch("sys.platform", "win32"):
         with patch("os.startfile") as mock_startfile:
             startfile(test_file)
 
@@ -408,7 +396,7 @@ def test_startfile_darwin_uses_open_command(tmp_path):
     test_file = tmp_path / "test.txt"
     test_file.write_text("content")
 
-    with patch("platform.system", return_value="Darwin"):
+    with patch("sys.platform", "darwin"):
         with patch("subprocess.Popen") as mock_popen:
             startfile(test_file)
 
@@ -424,7 +412,7 @@ def test_startfile_linux_file_uses_xdg_open(tmp_path):
     test_file = tmp_path / "test.txt"
     test_file.write_text("content")
 
-    with patch("platform.system", return_value="Linux"):
+    with patch("sys.platform", "linux"):
         with patch("Pytre_Core.utils.get_file_manager", return_value=None):
             with patch("subprocess.Popen") as mock_popen:
                 startfile(test_file)
@@ -440,7 +428,7 @@ def test_startfile_linux_directory_uses_file_manager(tmp_path):
     test_dir = tmp_path / "test_dir"
     test_dir.mkdir()
 
-    with patch("platform.system", return_value="Linux"):
+    with patch("sys.platform", "linux"):
         with patch("Pytre_Core.utils.get_file_manager", return_value="nautilus"):
             with patch("subprocess.Popen") as mock_popen:
                 startfile(test_dir)
@@ -457,7 +445,7 @@ def test_startfile_unsupported_os_raises_error(tmp_path):
     test_file = tmp_path / "test.txt"
     test_file.write_text("content")
 
-    with patch("platform.system", return_value="FreeBSD"):
+    with patch("sys.platform", "freebsd14"):
         with pytest.raises(ValueError, match="not supported"):
             startfile(test_file)
 
@@ -487,7 +475,7 @@ def test_showfile_windows_uses_select_flag(tmp_path):
     test_file = tmp_path / "test.txt"
     test_file.write_text("content")
 
-    with patch("platform.system", return_value="Windows"):
+    with patch("sys.platform", "win32"):
         with patch("Pytre_Core.utils.get_file_manager", return_value="explorer"):
             with patch("subprocess.Popen") as mock_popen:
                 showfile(test_file)
@@ -504,7 +492,7 @@ def test_showfile_linux_uses_select_flag(tmp_path):
     test_file = tmp_path / "test.txt"
     test_file.write_text("content")
 
-    with patch("platform.system", return_value="Linux"):
+    with patch("sys.platform", "linux"):
         with patch("Pytre_Core.utils.get_file_manager", return_value="nautilus"):
             with patch("subprocess.Popen") as mock_popen:
                 showfile(test_file)
@@ -521,7 +509,7 @@ def test_showfile_darwin_uses_reveal_flag(tmp_path):
     test_file = tmp_path / "test.txt"
     test_file.write_text("content")
 
-    with patch("platform.system", return_value="Darwin"):
+    with patch("sys.platform", "darwin"):
         with patch("Pytre_Core.utils.get_file_manager", return_value="open"):
             with patch("subprocess.Popen") as mock_popen:
                 showfile(test_file)

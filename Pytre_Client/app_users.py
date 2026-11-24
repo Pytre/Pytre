@@ -1,4 +1,5 @@
 import logging
+import sys
 import tkinter as tk
 from dataclasses import dataclass
 from tkinter import ttk, Event, font, messagebox, filedialog
@@ -56,7 +57,7 @@ class UsersWindow(tk.Toplevel):
         self.geometry("1000x800")
         if self.parent:
             ui_utils.ui_center(self, self.parent)
-        elif utils.get_system() == "Windows":
+        elif sys.platform == "win32":
             self.geometry("+100+75")
         self.resizable(True, True)
 
@@ -518,7 +519,7 @@ class UserDialog(tk.Toplevel):
         self.user_modified: bool = False
 
         self.focus_set()
-        if utils.get_system() == "Linux":
+        if sys.platform == "linux":
             self.update_idletasks()  # needed to update correctly on Linux
         ui_utils.ui_disable_parent(self, self.parent)
         self.transient(self.parent)

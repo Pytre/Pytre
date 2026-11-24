@@ -1,11 +1,11 @@
-import platform
+import sys
 import tkinter as tk
 from collections.abc import Callable, Sequence
 from tkinter import ttk, font
 
 
 def ui_center(tk_window: tk.Tk | tk.Toplevel, tk_parent: tk.Tk | tk.Toplevel | None = None) -> None:
-    if platform.system() != "Windows" and not tk_parent:
+    if sys.platform != "win32" and not tk_parent:
         return
 
     tk_window.update_idletasks()
@@ -22,18 +22,14 @@ def ui_center(tk_window: tk.Tk | tk.Toplevel, tk_parent: tk.Tk | tk.Toplevel | N
 
 
 def ui_disable_parent(tk_window: tk.Tk | tk.Toplevel, tk_parent: tk.Tk | tk.Toplevel | None = None) -> None:
-    system: str = platform.system()
-
-    if system != "Windows":
+    if sys.platform != "win32":
         tk_window.grab_set()
     elif tk_parent:
         tk_parent.wm_attributes("-disabled", True)
 
 
 def ui_undisable_parent(tk_window: tk.Tk | tk.Toplevel, tk_parent: tk.Tk | tk.Toplevel | None = None) -> None:
-    system: str = platform.system()
-
-    if system != "Windows":
+    if sys.platform != "win32":
         tk_window.grab_release()
     elif tk_parent:
         tk_parent.wm_attributes("-disabled", False)

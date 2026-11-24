@@ -1,4 +1,5 @@
 import logging
+import sys
 import tkinter as tk
 import traceback
 import webbrowser
@@ -527,7 +528,7 @@ class App(tk.Toplevel):
             self.btn_frame.columnconfigure(column, weight=my_weight)
 
     def setup_ui_position(self):
-        if not utils.get_system() == "Windows":
+        if not sys.platform == "win32":
             self.geometry("1100x750")
 
         ui_utils.ui_center(self)

@@ -1,10 +1,9 @@
+import sys
 import tkinter as tk
 from dataclasses import dataclass
 from tkinter import ttk, Event, filedialog, messagebox
 from collections.abc import Iterator
-from typing import cast
 
-from Pytre_Core import utils
 from Pytre_Core.kee import Kee
 from Pytre_Core.servers import Servers, Server, ServerType
 from Pytre_Core.about import APP_NAME
@@ -66,7 +65,7 @@ class ServersWindow(tk.Toplevel):
         self.minsize(width=400, height=100)
         if self.parent:
             self.geometry(f"+{self.parent.winfo_x() + 100}+{self.parent.winfo_y() + 50}")
-        elif utils.get_system() == "Windows":
+        elif sys.platform == "win32":
             self.geometry("+200+150")
         self.resizable(True, True)
 

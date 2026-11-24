@@ -1,12 +1,11 @@
+import sys
+import tkinter as tk
 from dataclasses import dataclass, field
 from enum import Enum
 from collections.abc import Callable
-
-import tkinter as tk
 from tkinter import ttk, Event, messagebox
 from pathlib import Path
 
-from Pytre_Core import utils
 from Pytre_Core.settings import Settings
 from Pytre_Core.user_prefs import CsvFormat, PrefEnum, UserPrefs
 from Pytre_Core.about import APP_NAME
@@ -79,7 +78,7 @@ class MainSettingsWindow(tk.Toplevel):
         self.minsize(width=400, height=100)
         if self.parent:
             self.geometry(f"+{self.parent.winfo_x() + 200}+{self.parent.winfo_y() + 150}")
-        elif utils.get_system() == "Windows":
+        elif sys.platform == "win32":
             self.geometry("+200+150")
         self.resizable(True, True)
 

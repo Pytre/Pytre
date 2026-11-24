@@ -544,20 +544,18 @@ class App(tk.Toplevel):
     def ui_params_update(self, params: dict[str, SqlParam] | None = None):
         self.ui_params_reset()
 
-        count_not_hidden = 0
+        count_shown = 0
         if params is not None:
-            count_not_hidden = len([p for p in params if not params[p].is_hidden])
+            count_shown = len([p for p in params.values() if p.is_shown])
 
-        if params is None or count_not_hidden == 0:
+        if params is None or count_shown == 0:
             self._ui_no_param_update()
         else:
             self._ui_with_params_update(params)
 
     def _ui_with_params_update(self, params: dict[str, SqlParam]):
         for i, key in enumerate(params):
-            # ne pas afficher le paramètre si il doit être caché
-            # et que l'utilisateur n'est pas un super utilisateur
-            if params[key].is_hidden and not params[key].user.admin:
+            if not params[key].is_shown:
                 continue
 
             label = ttk.Label(self.params_inner, text=params[key].description + " : ", justify=tk.LEFT)

@@ -197,6 +197,26 @@ def test_sql_param_hidden_parameter(display_format, mock_user):
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize(
+    "flags, admin, expected",
+    [
+        ("", False, True),
+        ("", True, True),
+        ("|HIDE", False, False),
+        ("|HIDE", True, True),
+    ],
+    ids=["visible_to_a_user", "visible_to_an_admin", "hidden_to_a_user", "hidden_to_an_admin"],
+)
+def test_sql_param_is_shown_to_its_user(display_format, mock_user, flags, admin, expected):
+    """A hidden parameter is shown for input to an admin only"""
+    mock_user.admin = admin
+
+    param = SqlParam(display_format, mock_user, f"@param as int = 100  -- Description{flags}")
+
+    assert param.is_shown is expected
+
+
+@pytest.mark.unit
 def test_sql_param_check_control(display_format, mock_user):
     """SqlParam should parse CHECK control"""
     # For CHECK, first value becomes 'on', second becomes 'off'

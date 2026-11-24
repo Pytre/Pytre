@@ -51,6 +51,11 @@ class SqlParam:
 
         self.set_default()
 
+    @property
+    def is_shown(self) -> bool:
+        """Whether the parameter is shown to its user for input: a hidden one is only shown to an admin"""
+        return not self.is_hidden or self.user.admin
+
     # ------------------------------------------------------------------------------------------
     # Default value initialization
     # ------------------------------------------------------------------------------------------

@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import csv
 import io
-import getpass
 import json
 import logging
 import os
 import secrets
+import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
@@ -539,11 +539,36 @@ class Users:
 
     @staticmethod
     def get_current_username() -> str:
-        """OS username, prefixed by its domain if any"""
-        domain = os.environ.get("userdnsdomain") or ""
-        name = getpass.getuser()
-        domain_and_name = f"{domain}\\{name}" if domain else name
-        return domain_and_name
+        """Account of the session running the app, prefixed by its DNS domain if any, e.g. corp.example.com\\name.
+        Asked to the system, never to the environment vars as they can be set to anything before the app starts."""
+        if sys.platform != "win32":
+            import pwd  # not on Windows
+
+            return pwd.getpwuid(os.getuid()).pw_name
+        else:
+            # DNS domain\name of a domain account, name alone of a local account, as the security token of the process
+            # tells Windows - the token was set when the session opened, the user can't change it
+            import ctypes  # Windows only for WinDLL
+            from ctypes import wintypes
+
+            # domain account: GetUserNameExW(NameDnsDomain), failing for a local account which has no DNS domain
+            name_dns_domain = 12  # EXTENDED_NAME_FORMAT
+            secur32 = ctypes.WinDLL("secur32", use_last_error=True)
+            size = wintypes.ULONG(0)
+            secur32.GetUserNameExW(name_dns_domain, None, ctypes.byref(size))  # sets the size needed
+            if size.value:
+                buffer = ctypes.create_unicode_buffer(size.value)
+                if secur32.GetUserNameExW(name_dns_domain, buffer, ctypes.byref(size)):
+                    return buffer.value
+
+            # local account: GetUserNameW
+            advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+            size = wintypes.DWORD(0)
+            advapi32.GetUserNameW(None, ctypes.byref(size))  # sets the size needed
+            buffer = ctypes.create_unicode_buffer(size.value)
+            if not advapi32.GetUserNameW(buffer, ctypes.byref(size)):
+                raise OSError(ctypes.get_last_error(), "The account of the session couldn't be read")
+            return buffer.value
 
     def find_entry_by_username(self, username: str, exclude_uuid: str = "") -> Entry | None:
         if self.kee_grp is None:

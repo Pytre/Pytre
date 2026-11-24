@@ -11,6 +11,7 @@ import csv
 import json
 import logging
 import shutil
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import Mock, call, patch
@@ -939,33 +940,99 @@ def test_find_user_by_uuid_returns_none_if_not_found(mock_kee):
     assert result is None
 
 
+class _FakeWinDll:
+    """Stands for ctypes.WinDLL("secur32") and ctypes.WinDLL("advapi32"): GetUserNameExW / GetUserNameW answer as
+    Windows does, the size first then the name. `dns_name` None for a local account, which has no DNS domain;
+    `sam_name` None when even GetUserNameW fails."""
+
+    def __init__(self, dns_name: str | None, sam_name: str | None) -> None:
+        self.dns_name = dns_name
+        self.sam_name = sam_name
+
+    def __call__(self, _library: str, use_last_error: bool = False) -> _FakeWinDll:
+        return self
+
+    def GetUserNameExW(self, _name_format: int, buffer, size_ref) -> int:
+        return self._answer(self.dns_name, buffer, size_ref)
+
+    def GetUserNameW(self, buffer, size_ref) -> int:
+        return self._answer(self.sam_name, buffer, size_ref)
+
+    @staticmethod
+    def _answer(name: str | None, buffer, size_ref) -> int:
+        if name is None:
+            size_ref._obj.value = 0
+            return 0
+        if buffer is None:
+            size_ref._obj.value = len(name) + 1  # with the ending null character
+            return 0
+        buffer.value = name
+        return 1
+
+
+@pytest.fixture
+def windows(monkeypatch):
+    """Runs get_current_username() as on Windows, with the system calls answered by a _FakeWinDll"""
+    import ctypes
+    from types import SimpleNamespace
+
+    def as_windows(dns_name: str | None, sam_name: str | None = "jdoe") -> None:
+        monkeypatch.setattr("Pytre_Core.users.sys", SimpleNamespace(platform="win32"))
+        monkeypatch.setattr(ctypes, "WinDLL", _FakeWinDll(dns_name, sam_name), raising=False)
+        monkeypatch.setattr(ctypes, "get_last_error", lambda: 5, raising=False)  # Windows only
+
+    return as_windows
+
+
 @pytest.mark.unit
-def test_get_current_username_uses_getpass(mock_kee, monkeypatch):
-    """get_current_username should return the OS username, prefixed by domain if set"""
-    users = Users(mock_kee)
+def test_get_current_username_is_the_dns_domain_and_name_of_a_windows_domain_account(windows):
+    windows(dns_name="corp.example.com\\jdoe")
 
-    monkeypatch.setattr("Pytre_Core.users.getpass.getuser", lambda: "jdoe")
-    monkeypatch.delenv("userdnsdomain", raising=False)
-
-    assert users.get_current_username() == "jdoe"
+    assert Users.get_current_username() == "corp.example.com\\jdoe"
 
 
 @pytest.mark.unit
-def test_get_current_username_prefixes_domain(mock_kee, monkeypatch):
-    """get_current_username should prefix with the domain when set"""
-    users = Users(mock_kee)
+def test_get_current_username_is_the_name_alone_of_a_windows_local_account(windows):
+    windows(dns_name=None, sam_name="jdoe")
 
-    monkeypatch.setattr("Pytre_Core.users.getpass.getuser", lambda: "jdoe")
-    monkeypatch.setenv("userdnsdomain", "CORP")
-
-    assert users.get_current_username() == "CORP\\jdoe"
+    assert Users.get_current_username() == "jdoe"
 
 
 @pytest.mark.unit
-def test_get_current_username_is_usable_without_users_instance(monkeypatch):
+def test_get_current_username_raises_if_windows_can_not_read_the_account(windows):
+    windows(dns_name=None, sam_name=None)
+
+    with pytest.raises(OSError, match="couldn't be read"):
+        Users.get_current_username()
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("variable", ["LOGNAME", "USER", "LNAME", "USERNAME"])
+def test_get_current_username_ignores_the_environment_variables(windows, monkeypatch, variable):
+    """They can be set to anything before the app starts: an admin's name would grant their rights"""
+    windows(dns_name="corp.example.com\\jdoe")
+    monkeypatch.setenv(variable, "an_admin")
+    monkeypatch.setenv("USERDNSDOMAIN", "OTHER.DOMAIN")
+
+    assert Users.get_current_username() == "corp.example.com\\jdoe"
+
+
+@pytest.mark.unit
+@pytest.mark.skipif(sys.platform == "win32", reason="the account database of Linux and macOS")
+def test_get_current_username_is_the_account_of_the_process_out_of_windows(monkeypatch):
+    import os
+    import pwd
+
+    monkeypatch.setenv("USER", "an_admin")
+    monkeypatch.setenv("LOGNAME", "an_admin")
+
+    assert Users.get_current_username() == pwd.getpwuid(os.getuid()).pw_name
+
+
+@pytest.mark.unit
+def test_get_current_username_is_usable_without_users_instance(windows):
     """Static: a user can be detected without any users database (CLIENT mode)"""
-    monkeypatch.setattr("Pytre_Core.users.getpass.getuser", lambda: "jdoe")
-    monkeypatch.delenv("userdnsdomain", raising=False)
+    windows(dns_name=None, sam_name="jdoe")
 
     assert Users.get_current_username() == "jdoe"
 
@@ -976,9 +1043,8 @@ def test_get_current_username_is_usable_without_users_instance(monkeypatch):
 
 
 @pytest.mark.unit
-def test_user_without_users_database_is_the_os_user_authorized_without_rights(monkeypatch):
-    monkeypatch.setattr("Pytre_Core.users.getpass.getuser", lambda: "jdoe")
-    monkeypatch.delenv("userdnsdomain", raising=False)
+def test_user_without_users_database_is_the_os_user_authorized_without_rights(windows):
+    windows(dns_name=None, sam_name="jdoe")
 
     user = User(None)
 

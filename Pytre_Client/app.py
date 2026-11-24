@@ -280,9 +280,9 @@ class App(tk.Toplevel):
     def setup_app_identity(self):
         self.title(self.get_default_title())
 
-        icon_img = tk.PhotoImage(file=app_image_file())
-        self.iconphoto(True, icon_img)
-        self.console_app.iconphoto(True, icon_img)  # setting icon for console is also needed
+        self.icon_imgs = (tk.PhotoImage(file=app_image_file()), tk.PhotoImage(file=app_image_file(small=True)))
+        self.iconphoto(True, *self.icon_imgs)
+        self.console_app.iconphoto(True, *self.icon_imgs)  # setting icon for console is also needed
 
     def setup_style(self):
         set_theme(self)

@@ -1044,7 +1044,7 @@ class RemoteJob:
     def _rows_from(self, batch: Batch) -> Generator[tuple]:
         """Rows of `batch` then of the next batches, each one asked for once the previous one is read"""
         while True:
-            yield from (tuple(row) for row in batch.rows)
+            yield from batch.rows
 
             if batch.last:
                 return

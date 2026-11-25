@@ -81,7 +81,7 @@ class Batch:
     columns come with the first batch only"""
 
     n: int
-    rows: Sequence[Sequence[Any]]
+    rows: Sequence[tuple[Any, ...]]
     last: bool  # whether no batch follows
     columns: Sequence[str] | None = None
 

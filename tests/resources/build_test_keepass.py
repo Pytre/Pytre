@@ -79,7 +79,7 @@ def main() -> None:
     server.user = TEST_SQL_SERVER["user"]
     server.password = TEST_SQL_SERVER["password"]
     server.type = TEST_SQL_SERVER["type"]
-    server.trust_server_certificate = True  # mssql-test docker uses a self-signed certificate
+    server.trust_certificate = True  # mssql-test docker uses a self-signed certificate
     server.save()
 
     pg_server = Server(servers)
@@ -92,7 +92,7 @@ def main() -> None:
     pg_server.password = TEST_PG_SERVER["password"]
     pg_server.type = TEST_PG_SERVER["type"]
     pg_server.charset = "UTF8"
-    pg_server.trust_server_certificate = True  # postgre-test docker uses a self-signed certificate
+    pg_server.trust_certificate = True  # postgre-test docker uses a self-signed certificate
     pg_server.save()
 
     users = Users(kee)

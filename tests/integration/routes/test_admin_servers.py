@@ -153,14 +153,14 @@ def test_create_server_trust_certificate_checkbox_round_trips(isolated_admin_cli
     }
 
     response = isolated_admin_client.post(
-        "/admin/servers/new", data={**base_data, "trust_server_certificate": "1"}, follow_redirects=False
+        "/admin/servers/new", data={**base_data, "trust_certificate": "1"}, follow_redirects=False
     )
     assert response.status_code == 303
 
     list_page = isolated_admin_client.get("/admin/servers")
     uuid = _find_uuid(list_page.text, "trust_srv")
     edit_page = isolated_admin_client.get(f"/admin/servers/{uuid}/edit").text
-    checkbox = re.search(r'<input[^>]*id="trust_server_certificate"[^>]*>', edit_page)
+    checkbox = re.search(r'<input[^>]*id="trust_certificate"[^>]*>', edit_page)
     assert checkbox is not None
     assert "checked" in checkbox.group(0)
 
@@ -169,7 +169,7 @@ def test_create_server_trust_certificate_checkbox_round_trips(isolated_admin_cli
     assert response.status_code == 303
 
     edit_page = isolated_admin_client.get(f"/admin/servers/{uuid}/edit").text
-    checkbox = re.search(r'<input[^>]*id="trust_server_certificate"[^>]*>', edit_page)
+    checkbox = re.search(r'<input[^>]*id="trust_certificate"[^>]*>', edit_page)
     assert checkbox is not None
     assert "checked" not in checkbox.group(0)
 
@@ -256,7 +256,7 @@ def test_server_form_keeps_the_trust_value_while_its_checkbox_is_disabled(admin_
     kept = re.search(r'<input[^>]*id="trust-kept"[^>]*>', html)
     assert kept is not None
     assert 'type="hidden"' in kept.group(0)
-    assert 'name="trust_server_certificate"' in kept.group(0)
+    assert 'name="trust_certificate"' in kept.group(0)
     assert 'value="1"' in kept.group(0)
     assert re.search(r"\bdisabled\b", kept.group(0))
 
@@ -504,6 +504,55 @@ def test_save_server_resets_the_cached_connection_for_that_server(isolated_admin
     assert "edit_conn" not in resources.driver_entries
 
 
+# ================================================================================
+# Max concurrency
+# ================================================================================
+
+_CONCURRENCY_FORM = {"id": "conc_srv", "description": "", "login": "", "password": "", "type": "SQL Server", "login_timeout": "60", "timeout": "300"}  # fmt: skip
+
+
+def _max_concurrency_input(html: str) -> str:
+    field = re.search(r'<input[^>]*id="max_concurrency"[^>]*>', html)
+    assert field is not None, "max_concurrency input not found"
+    return field.group(0)
+
+
+def test_new_server_form_proposes_the_default_max_concurrency(admin_client):
+    assert 'value="30"' in _max_concurrency_input(admin_client.get("/admin/servers/new").text)
+
+
+def test_max_concurrency_round_trips_through_the_form(isolated_admin_client):
+    isolated_admin_client.post("/admin/servers/new", data={**_CONCURRENCY_FORM, "max_concurrency": "7"})
+    uuid = _find_uuid(isolated_admin_client.get("/admin/servers").text, "conc_srv")
+
+    edit_page = isolated_admin_client.get(f"/admin/servers/{uuid}/edit").text
+
+    assert 'value="7"' in _max_concurrency_input(edit_page)
+
+
+def test_create_server_refuses_a_max_concurrency_below_one(isolated_admin_client):
+    response = isolated_admin_client.post("/admin/servers/new", data={**_CONCURRENCY_FORM, "max_concurrency": "0"})
+
+    assert response.status_code == 200
+    assert "max_concurrency doit être d&#39;au moins 1 : 0" in response.text
+    assert ">conc_srv<" not in isolated_admin_client.get("/admin/servers").text
+
+
+def test_saved_max_concurrency_applies_to_the_next_executions_at_once(isolated_admin_client):
+    """The server executions look up is replaced, and its driver dropped: the next one is built with the new value"""
+    isolated_admin_client.post("/admin/servers/new", data=_CONCURRENCY_FORM)
+    uuid = _find_uuid(isolated_admin_client.get("/admin/servers").text, "conc_srv")
+    state = isolated_admin_client.app.state.server
+    fake_driver = Mock()
+    fake_driver.disconnect = AsyncMock()
+    state.resources.driver_entries["conc_srv"] = _DriverEntry(driver=fake_driver)
+
+    isolated_admin_client.post(f"/admin/servers/{uuid}/edit", data={**_CONCURRENCY_FORM, "max_concurrency": "7"})
+
+    assert state.app_ctx.servers.servers_dict["conc_srv"].max_concurrency == 7
+    assert "conc_srv" not in state.resources.driver_entries
+
+
 def test_delete_server_resets_the_cached_connection_for_that_server(isolated_admin_client):
     isolated_admin_client.post(
         "/admin/servers/new",
@@ -585,7 +634,7 @@ def _stored(uuid: str):
         {"port": "1434"},
         {"server": "OTHER"},
         {"type": "PostgreSQL"},
-        {"trust_server_certificate": "1"},
+        {"trust_certificate": "1"},
     ],
     ids=["host", "port", "instance", "type", "certificate"],
 )

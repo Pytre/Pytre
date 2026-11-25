@@ -88,13 +88,12 @@ class _ClientCodePending:
 class ServerResources:
     """Shared, mutable state that must survive a full ServerState reload
 
-    Each driver runs at most `db_pool_size` queries at once on its SQL server.
+    Each driver runs at most its server's max_concurrency queries at once on its SQL server.
     One driver per server_id is created lazily and reused across every user's requests, never per-request."""
 
     driver_entries: dict[str, _DriverEntry] = field(default_factory=dict)  # server.id -> driver entry
     drivers_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     _disconnect_tasks: set[asyncio.Task] = field(default_factory=set, repr=False)  # ref to avoid garbage collection
-    db_pool_size: int = 30  # concurrent queries each driver can run on its SQL server
 
     user_semaphores: dict[str, asyncio.Semaphore] = field(default_factory=dict)
     jobs: JobRegistry = field(default_factory=JobRegistry)  # executions by jobs in progress, see /jobs
@@ -137,7 +136,7 @@ class ServerResources:
             if server.id in self.driver_entries:  # check again: another request may have connected first
                 return self.driver_entries[server.id]
 
-            driver = await get_driver(server, self.db_pool_size)
+            driver = await get_driver(server)
             await driver.connect()  # not cached on failure - next call retries fresh
 
             driver_entry = _DriverEntry(driver=driver)

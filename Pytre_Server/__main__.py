@@ -50,7 +50,6 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument("--host", default="127.0.0.1", help="Address to bind the server to (0.0.0.0 for any)")
     parser.add_argument("--port", type=pos_int, default=8000, help="Port to run the server on (default %(default)s)")
     parser.add_argument("--batch-size", type=pos_int, default=5000, help="Rows sent per batch of a query result (default %(default)s)")
-    parser.add_argument("--db-pool-size", type=pos_int, default=30, help="Max concurrent queries per SQL server (default %(default)s)")
     parser.add_argument("--max-concurrency-per-user", type=pos_int, default=4, help="Max concurrent requests per user (default %(default)s)")
     parser.add_argument("--forwarded-allow-ips", default=None, help="Comma-separated IPs of reverse proxies whose X-Forwarded-* headers are trusted "
                                                                     "(default: uvicorn's, i.e. $FORWARDED_ALLOW_IPS or 127.0.0.1). Never use '*' "
@@ -124,7 +123,6 @@ def start_server(args: argparse.Namespace):
         create_app(
             master_key=master_key,
             batch_size=args.batch_size,
-            db_pool_size=args.db_pool_size,
             max_concurrency_per_user=args.max_concurrency_per_user,
             log_buffer_mb=args.log_buffer_mb,
             log_backups=args.log_backups,

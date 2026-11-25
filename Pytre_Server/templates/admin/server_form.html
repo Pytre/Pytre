@@ -1,4 +1,5 @@
 {% extends "admin/base.html" %}
+{% from "admin/_macros.html" import info_tip %}
 {% block title %}{% if server.uuid %}Edit server{% else %}New server{% endif %} — Pytre Server{% endblock %}
 {% block main_class %}main-flush{% endblock %}
 {% block content %}
@@ -70,13 +71,13 @@
             <input type="text" id="server" name="server" value="{{ server.server }}">
 
             
-            <label for="trust_server_certificate">Server certificate (skip TLS validation)</label>
+            <label for="trust_certificate">Server certificate (skip TLS validation)</label>
             <label class="checkbox-item">
-                <input type="checkbox" id="trust_server_certificate" name="trust_server_certificate" value="1" {% if server.trust_server_certificate %}checked{% endif %} style="margin-top: 4px;">
-                <span id="trust-state-text" style="margin-top: 4px;">{{ "trusted" if server.trust_server_certificate else "untrusted" }}</span>
+                <input type="checkbox" id="trust_certificate" name="trust_certificate" value="1" {% if server.trust_certificate %}checked{% endif %} style="margin-top: 4px;">
+                <span id="trust-state-text" style="margin-top: 4px;">{{ "trusted" if server.trust_certificate else "untrusted" }}</span>
                 <span id="trust-unsupported" style="margin-top: 4px;" hidden> (not supported by this server type)</span>
             </label>
-            <input type="hidden" id="trust-kept" name="trust_server_certificate" value="1" disabled>
+            <input type="hidden" id="trust-kept" name="trust_certificate" value="1" disabled>
 
             <div class="form-row">
                 <div class="form-col">
@@ -84,12 +85,16 @@
                     <input type="text" id="charset" name="charset" value="{{ server.charset }}">
                 </div>
                 <div class="form-col">
-                    <label for="login_timeout">Login Timeout</label>
+                    <label for="login_timeout">Login Timeout in secs</label>
                     <input type="text" id="login_timeout" name="login_timeout" value="{{ server.login_timeout }}">
                 </div>
                 <div class="form-col">
-                    <label for="timeout">Timeout</label>
+                    <label for="timeout">Timeout in secs</label>
                     <input type="text" id="timeout" name="timeout" value="{{ server.timeout }}">
+                </div>
+                <div class="form-col">
+                    <label for="max_concurrency">Max concurrency{{ info_tip("Executions running at once on this server, all users together. Beyond, an execution waits up to 10 seconds for its turn, then fails. Applies at once to new executions, running ones end as they began.") }}</label>
+                    <input type="text" id="max_concurrency" name="max_concurrency" value="{{ server.max_concurrency }}">
                 </div>
             </div>
 
@@ -125,7 +130,7 @@
 
         <script>
         (function () {
-            var trustCheckbox = document.getElementById("trust_server_certificate");
+            var trustCheckbox = document.getElementById("trust_certificate");
             var trustStateText = document.getElementById("trust-state-text");
             
             function syncTrustState() {

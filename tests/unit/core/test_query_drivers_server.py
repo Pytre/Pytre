@@ -9,6 +9,7 @@ import threading
 import uuid
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
+from typing import Any
 from unittest.mock import AsyncMock, Mock, patch
 
 import asyncpg
@@ -34,23 +35,20 @@ def anyio_backend():
     return "asyncio"
 
 
-def _make_server(
-    host: str = "h",
-    port: str = "1433",
-    trust_server_certificate: bool = False,
-    server_type: str = ServerType.mssql.name,
-) -> Mock:
-    return Mock(
-        type=server_type,
-        host=host,
-        port=port,
-        database="db",
-        user="u",
-        password="p",
-        trust_server_certificate=trust_server_certificate,
-        login_timeout=60,
-        timeout=300,
-    )
+def _make_server(server_type: str = ServerType.mssql.name, **fields: Any) -> Server:
+    """A real server SRV1 on host h, with `fields` set on it: a renamed field fails here, not silently in a Mock."""
+    server = Server(Mock())
+    server.id = "SRV1"
+    server.type = server_type
+    server.host, server.database, server.user, server.password = "h", "db", "u", "p"
+    for name, value in fields.items():
+        assert hasattr(server, name), f"Server has no field {name}"
+        setattr(server, name, value)
+    return server
+
+
+def _make_pg_server(**fields: Any) -> Server:
+    return _make_server(ServerType.postgre.name, **{"port": "5432", **fields})
 
 
 # ================================================================================
@@ -126,7 +124,7 @@ def test_ignores_unused_dict_entries():
 
 @pytest.mark.anyio
 async def test_get_driver_dispatches_mssql_to_pymssql_driver():
-    driver = await get_driver(_make_pymssql_server(), 12)
+    driver = await get_driver(_make_server(max_concurrency=12))
 
     try:
         assert isinstance(driver, PyMssqlDriver)
@@ -137,16 +135,11 @@ async def test_get_driver_dispatches_mssql_to_pymssql_driver():
 
 
 @pytest.mark.anyio
-async def test_get_driver_dispatches_postgre_to_asyncpg_driver(monkeypatch):
-    fake_driver = Mock()
-    build = Mock(return_value=fake_driver)
-    monkeypatch.setattr(AsyncpgDriver, "_driver", build)
-    server = _make_server(server_type=ServerType.postgre.name)
+async def test_get_driver_dispatches_postgre_to_asyncpg_driver():
+    driver = await get_driver(_make_pg_server(max_concurrency=12))
 
-    driver = await get_driver(server, 12)
-
-    assert driver is fake_driver
-    build.assert_called_once_with(server, 12)
+    assert isinstance(driver, AsyncpgDriver)
+    assert driver._pool_size == 12
 
 
 @pytest.mark.anyio
@@ -154,7 +147,7 @@ async def test_get_driver_unknown_type_raises_error():
     server = Mock(type="unknown")
 
     with pytest.raises(ValueError):
-        await get_driver(server, 30)
+        await get_driver(server)
 
 
 # ================================================================================
@@ -235,13 +228,6 @@ class _FakePymssqlConnection:
         self.record("close")
 
 
-def _make_pymssql_server() -> Server:
-    server = Server(Mock())
-    server.id = "SRV1"
-    server.host = "h"
-    return server
-
-
 def _free_slots(driver: PyMssqlDriver) -> int:
     return driver._slots._value
 
@@ -264,8 +250,8 @@ def _patch_connect(monkeypatch, connection: _FakePymssqlConnection | None = None
 def make_pymssql_driver():
     drivers: list[PyMssqlDriver] = []
 
-    def make(pool_size: int = 30) -> PyMssqlDriver:
-        driver = PyMssqlDriver(_make_pymssql_server(), pool_size)
+    def make(max_concurrency: int = 30) -> PyMssqlDriver:
+        driver = PyMssqlDriver(_make_server(max_concurrency=max_concurrency))
         drivers.append(driver)
         return driver
 
@@ -299,8 +285,8 @@ async def test_pymssql_execute_runs_the_template_in_a_driver_thread(monkeypatch,
 async def test_pymssql_driver_keeps_the_server_parameters_it_was_built_with(monkeypatch):
     """Editing a server only applies once its connections are reset (a new driver is built)."""
     connect_calls = _patch_connect(monkeypatch, _FakePymssqlConnection())
-    server = _make_pymssql_server()
-    driver = PyMssqlDriver(server, 1)
+    server = _make_server(max_concurrency=1)
+    driver = PyMssqlDriver(server)
     server.host = "edited-host"
 
     try:
@@ -316,7 +302,7 @@ async def test_pymssql_driver_keeps_the_server_parameters_it_was_built_with(monk
 async def test_pymssql_connection_error_is_translated_and_frees_the_slot(monkeypatch, make_pymssql_driver):
     original = pymssql.OperationalError((18456, b"Login failed for user 'u'."))  # connect errors carry 1 tuple
     _patch_connect(monkeypatch, error=original)
-    driver = make_pymssql_driver(pool_size=1)
+    driver = make_pymssql_driver(max_concurrency=1)
 
     with pytest.raises(AsyncSqlConnectionError) as exc_info:
         await driver.execute("SELECT 1", {})
@@ -331,7 +317,7 @@ async def test_pymssql_sql_error_is_translated_and_closes_the_connection(monkeyp
     original = pymssql.ProgrammingError(102, b"Incorrect syntax near 'SELEC'.")  # cursor errors carry 2 args
     connection = _FakePymssqlConnection(execute_error=original)
     _patch_connect(monkeypatch, connection)
-    driver = make_pymssql_driver(pool_size=1)
+    driver = make_pymssql_driver(max_concurrency=1)
 
     with pytest.raises(AsyncSqlExecutionError) as exc_info:
         await driver.execute("SELEC 1", {})
@@ -345,7 +331,7 @@ async def test_pymssql_sql_error_is_translated_and_closes_the_connection(monkeyp
 @pytest.mark.anyio
 async def test_pymssql_saturated_pool_is_a_connection_error(monkeypatch, make_pymssql_driver):
     _patch_connect(monkeypatch, _FakePymssqlConnection())
-    driver = make_pymssql_driver(pool_size=1)
+    driver = make_pymssql_driver(max_concurrency=1)
     driver._acquire_timeout_secs = 0.05
     first = await driver.execute("SELECT 1 AS n", {})
 
@@ -368,7 +354,7 @@ async def test_pymssql_cancelled_execute_closes_once_the_thread_is_done(monkeypa
     cursor.execute() returns, from a driver thread."""
     connection = _FakePymssqlConnection(rows=[(1,)], blocked_call="execute")
     _patch_connect(monkeypatch, connection)
-    driver = make_pymssql_driver(pool_size=1)
+    driver = make_pymssql_driver(max_concurrency=1)
 
     execute_task = asyncio.create_task(driver.execute("SELECT n", {}))
     await asyncio.to_thread(connection.entered.wait, 5)
@@ -477,7 +463,7 @@ async def test_pymssql_fetch_error_is_an_execution_error(monkeypatch, make_pymss
 async def test_pymssql_close_cancels_unread_rows_and_frees_the_slot(monkeypatch, make_pymssql_driver):
     connection = _FakePymssqlConnection(rows=[(1,), (2,), (3,)])
     _patch_connect(monkeypatch, connection)
-    driver = make_pymssql_driver(pool_size=1)
+    driver = make_pymssql_driver(max_concurrency=1)
     result = await driver.execute("SELECT n", {})
     await result.fetch(1)
 
@@ -492,7 +478,7 @@ async def test_pymssql_close_cancels_unread_rows_and_frees_the_slot(monkeypatch,
 async def test_pymssql_close_can_be_called_several_times(monkeypatch, make_pymssql_driver):
     connection = _FakePymssqlConnection(rows=[(1,)])
     _patch_connect(monkeypatch, connection)
-    driver = make_pymssql_driver(pool_size=1)
+    driver = make_pymssql_driver(max_concurrency=1)
     result = await driver.execute("SELECT n", {})
 
     await result.close()
@@ -526,7 +512,7 @@ async def test_pymssql_close_still_closes_when_cancel_fails(monkeypatch, make_py
     """cancel() raises pymssql's internal _mssql errors, which aren't pymssql.Error subclasses."""
     connection = _FakePymssqlConnection(rows=[(1,), (2,)], cancel_error=error)
     _patch_connect(monkeypatch, connection)
-    driver = make_pymssql_driver(pool_size=1)
+    driver = make_pymssql_driver(max_concurrency=1)
     result = await driver.execute("SELECT n", {})
 
     await result.close()  # must not raise
@@ -541,7 +527,7 @@ async def test_pymssql_close_waits_for_the_running_fetch(monkeypatch, make_pymss
     returns, from a driver thread."""
     connection = _FakePymssqlConnection(rows=[(1,), (2,), (3,)], blocked_call="fetchmany")
     _patch_connect(monkeypatch, connection)
-    driver = make_pymssql_driver(pool_size=1)
+    driver = make_pymssql_driver(max_concurrency=1)
     result = await driver.execute("SELECT n", {})
 
     fetch_task = asyncio.create_task(result.fetch(1))
@@ -570,7 +556,7 @@ async def test_pymssql_cancelled_close_keeps_closing(monkeypatch, make_pymssql_d
     connection open or the slot taken."""
     connection = _FakePymssqlConnection(rows=[(1,), (2,)], blocked_call="fetchmany")
     _patch_connect(monkeypatch, connection)
-    driver = make_pymssql_driver(pool_size=1)
+    driver = make_pymssql_driver(max_concurrency=1)
     result = await driver.execute("SELECT n", {})
 
     fetch_task = asyncio.create_task(result.fetch(1))
@@ -716,7 +702,7 @@ class _FakePool:
 
 
 def _make_pg_driver(connection: _FakeConnection | None = None, acquire_error=None, **kwargs) -> AsyncpgDriver:
-    driver = AsyncpgDriver(host="h", port=5432, database="db", username="u", password="p", **kwargs)
+    driver = AsyncpgDriver(_make_pg_server(**kwargs))
     driver._pool = _FakePool(connection or _FakeConnection(), acquire_error)  # type: ignore
     return driver
 
@@ -740,26 +726,25 @@ _PG_CONNECTIVITY_ERRORS = [
 
 @pytest.mark.unit
 def test_pg_driver_verifies_certificate_by_default():
-    assert AsyncpgDriver("h", 5432, "db", "u", "p")._ssl is True
+    assert AsyncpgDriver(_make_pg_server())._ssl is True
 
 
 @pytest.mark.unit
 def test_pg_driver_trust_certificate_accepts_what_the_server_offers():
-    assert AsyncpgDriver("h", 5432, "db", "u", "p", trust_certificate=True)._ssl == "prefer"
+    assert AsyncpgDriver(_make_pg_server(trust_certificate=True))._ssl == "prefer"
 
 
 @pytest.mark.unit
 def test_pg_driver_builds_from_server_parameters():
-    server = _make_server(
-        host="pg-host", port="5433", trust_server_certificate=True, server_type=ServerType.postgre.name
+    server = _make_pg_server(
+        host="pg-host", port="5433", trust_certificate=True, timeout=30, login_timeout=5, max_concurrency=12
     )
-    server.timeout = 30
-    server.login_timeout = 5
 
-    driver = AsyncpgDriver._driver(server, pool_size=12)
+    driver = AsyncpgDriver(server)
 
     assert driver._host == "pg-host"
     assert driver._port == 5433
+    assert (driver._database, driver._username, driver._password) == ("db", "u", "p")
     assert driver._ssl == "prefer"
     assert driver._login_timeout == 5
     assert driver._statement_timeout_ms == 30_000
@@ -772,7 +757,7 @@ def test_pg_driver_builds_from_server_parameters():
 @pytest.mark.anyio
 async def test_pg_connect_creates_a_read_only_pool_with_timeouts():
     create_pool = AsyncMock(return_value=Mock())
-    driver = AsyncpgDriver("h", 5432, "db", "u", "p", login_timeout=7, statement_timeout_secs=12)
+    driver = AsyncpgDriver(_make_pg_server(login_timeout=7, timeout=12))
 
     with patch("Pytre_Core.sql_query.query_drivers_server.asyncpg.create_pool", create_pool):
         await driver.connect()
@@ -787,16 +772,16 @@ async def test_pg_connect_creates_a_read_only_pool_with_timeouts():
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("pool_size, min_size", [(12, 2), (1, 1)])
-async def test_pg_connect_sizes_the_pool(pool_size, min_size):
+@pytest.mark.parametrize("max_concurrency, min_size", [(12, 2), (1, 1)])
+async def test_pg_connect_sizes_the_pool(max_concurrency, min_size):
     create_pool = AsyncMock(return_value=Mock())
-    driver = AsyncpgDriver("h", 5432, "db", "u", "p", pool_size=pool_size)
+    driver = AsyncpgDriver(_make_pg_server(max_concurrency=max_concurrency))
 
     with patch("Pytre_Core.sql_query.query_drivers_server.asyncpg.create_pool", create_pool):
         await driver.connect()
 
     kwargs = create_pool.call_args.kwargs
-    assert kwargs["max_size"] == pool_size
+    assert kwargs["max_size"] == max_concurrency
     assert kwargs["min_size"] == min_size  # asyncpg refuses a min_size above max_size
 
 
@@ -812,7 +797,7 @@ async def test_pg_connect_sizes_the_pool(pool_size, min_size):
     ],
 )
 async def test_pg_connect_translates_every_failure_to_a_connection_error(error):
-    driver = AsyncpgDriver("h", 5432, "db", "u", "p")
+    driver = AsyncpgDriver(_make_pg_server())
 
     with patch("Pytre_Core.sql_query.query_drivers_server.asyncpg.create_pool", AsyncMock(side_effect=error)):
         with pytest.raises(AsyncSqlConnectionError) as exc_info:
@@ -839,7 +824,7 @@ async def test_pg_disconnect_closes_the_pool_and_is_idempotent():
 
 @pytest.mark.anyio
 async def test_pg_execute_requires_a_connected_driver():
-    driver = AsyncpgDriver("h", 5432, "db", "u", "p")
+    driver = AsyncpgDriver(_make_pg_server())
 
     with pytest.raises(AsyncSqlConnectionError):
         await driver.execute("SELECT 1", {})

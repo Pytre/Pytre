@@ -157,7 +157,7 @@ async def test_sessions_are_named_after_pytre_server(driver):
 @requires_docker
 @pytest.mark.anyio
 async def test_saturated_pool_is_a_connection_error():
-    driver = PyMssqlDriver(_server(), pool_size=1)
+    driver = PyMssqlDriver(_server(max_concurrency=1))
     driver._acquire_timeout_secs = 0.5
     try:
         first = await driver.execute("SELECT 1 AS n", {})

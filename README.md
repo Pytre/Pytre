@@ -184,7 +184,9 @@ A client never sends SQL to a server. For each execution, it only sends the serv
 - refuses the execution if the client's version of the query differs from its own: the client has to refresh its list,
 - checks the parameter names match the query and their values are valid (type, size, allowed values),
 - replaces hidden parameters with the values it computes itself, unless the user is an admin,
-- caps the number of executions running at once for each user, and logs each execution with its parameters.
+- caps the number of executions running at once for each user and for each SQL server, and logs each execution with its parameters.
+
+The number of executions running at once on a SQL server, all users together, is set for each server in the web administration (*Max concurrency*, 30 by default). Beyond it, an execution waits up to 10 seconds for its turn, then fails. The change applies at once to new executions, those already running end as they started.
 
 Values are passed to the database as query parameters, except for `@!` parameters, which are written into the SQL text and only accept a value from the query's list of allowed values.
 
@@ -260,7 +262,6 @@ The same options apply to `Pytre_Server.exe` and `python -m Pytre_Server`, `--he
 | `--port` | `8000` | Port to listen on |
 | `--forwarded-allow-ips` | `127.0.0.1`, or `$FORWARDED_ALLOW_IPS` | Comma-separated addresses of the reverse proxies whose `X-Forwarded-*` headers are trusted. Never `*` unless the server can only be reached through the proxy |
 | `--batch-size` | `5000` | Rows sent per batch of a query result |
-| `--db-pool-size` | `30` | Maximum number of queries running at once on each SQL server |
 | `--max-concurrency-per-user` | `4` | Maximum number of requests running at once for each user |
 | `--log-file` | none | File the logs are written to, also used to refill the web administration logs at startup |
 | `--log-max-mb` | `5` | Size of the log file before it rotates, in MB |

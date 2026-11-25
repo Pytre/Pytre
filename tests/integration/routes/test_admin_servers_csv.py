@@ -5,10 +5,12 @@ Integration tests for the /admin/servers/{import,export} routes.
 import csv
 import io
 import logging
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
 from Pytre_Core.context import AppContext
+from Pytre_Server.server_state import _DriverEntry
 from tests.conftest import audit_fields, audit_records
 from tests.integration.conftest import TEST_DB_PASSWORD, TEST_USERNAME
 from tests.integration.routes.conftest import TESTCLIENT_HOST
@@ -18,7 +20,7 @@ pytestmark = pytest.mark.integration
 
 _CSV_HEADER = (
     "id;description;type;user;password;charset;database;host;port;server;login_timeout;timeout;"
-    "trust_server_certificate;grp_authorized"
+    "trust_certificate;grp_authorized"
 )
 
 
@@ -162,6 +164,25 @@ def test_import_accepts_a_new_host_with_the_password(isolated_admin_client):
 
 
 # ================================================================================
+# Import: applied at once
+# ================================================================================
+
+
+def test_import_applies_the_imported_servers_to_the_next_executions_at_once(isolated_admin_client):
+    """The servers executions look up are replaced, and every driver dropped: the next ones use the new values"""
+    content = _export_with(isolated_admin_client, TEST_SQL_SERVER["id"], Max_Concurrency="7")
+    state = isolated_admin_client.app.state.server
+    fake_driver = Mock()
+    fake_driver.disconnect = AsyncMock()
+    state.resources.driver_entries[TEST_SQL_SERVER["id"]] = _DriverEntry(driver=fake_driver)
+
+    isolated_admin_client.post("/admin/servers/import", files={"file": ("servers.csv", content, "text/csv")})
+
+    assert state.app_ctx.servers.servers_dict[TEST_SQL_SERVER["id"]].max_concurrency == 7
+    assert state.resources.driver_entries == {}
+
+
+# ================================================================================
 # Export confirmation
 # ================================================================================
 
@@ -186,7 +207,7 @@ def test_servers_list_tells_a_remote_export_has_no_password(admin_client):
 
 def test_import_is_audited_for_each_server_it_created_or_updated_then_summed_up(isolated_admin_client, caplog):
     content = _export_with(isolated_admin_client, TEST_SQL_SERVER["id"], Description="Renamed")
-    content += "imported_server;Imported;mssql;sa;pwd;UTF-8;master;127.0.0.1;1433;;60;300;false;\n".encode()
+    content += "imported_server;Imported;mssql;sa;pwd;UTF-8;master;127.0.0.1;1433;;60;300;30;false;\n".encode()
     caplog.clear()
 
     with caplog.at_level(logging.INFO):

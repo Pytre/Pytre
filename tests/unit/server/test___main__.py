@@ -129,7 +129,6 @@ def test_pos_int_refuses_anything_else(value, error):
 POSITIVE_OPTIONS = [
     "--port",
     "--batch-size",
-    "--db-pool-size",
     "--max-concurrency-per-user",
     "--log-max-mb",
     "--log-backups",
@@ -258,7 +257,6 @@ def test_start_server_runs_uvicorn_with_resolved_master_key(monkeypatch):
     create_app_mock.assert_called_once_with(
         master_key="s3cret",
         batch_size=5000,
-        db_pool_size=30,
         max_concurrency_per_user=4,
         log_buffer_mb=5,
         log_backups=1,
@@ -292,19 +290,6 @@ def test_start_server_forwards_log_backups_to_create_app(monkeypatch):
     start_server(args)
 
     assert create_app_mock.call_args.kwargs["log_backups"] == 4
-
-
-@pytest.mark.unit
-def test_start_server_forwards_db_pool_size_to_create_app(monkeypatch):
-    monkeypatch.setattr("Pytre_Server.__main__.get_master_key_interactive", Mock(return_value="s3cret"))
-    create_app_mock = Mock(return_value="app")
-    monkeypatch.setattr("Pytre_Server.__main__.create_app", create_app_mock)
-    monkeypatch.setattr("Pytre_Server.__main__.uvicorn.run", Mock())
-    args = create_parser().parse_args(["--db-pool-size", "8"])
-
-    start_server(args)
-
-    assert create_app_mock.call_args.kwargs["db_pool_size"] == 8
 
 
 @pytest.mark.unit

@@ -15,6 +15,7 @@ from Pytre_Core.utils import detect_encoding, log as _log, secret_fingerprint
 
 
 DEFAULT_PORT = "1433"  # port, as a string not an int, of a server that has none
+DEFAULT_MAX_CONCURRENCY = 30  # see Server.max_concurrency
 
 
 def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__) -> None:
@@ -43,7 +44,8 @@ class ServerField(Enum):
     SERVER = ("server", _DbKind.CUSTOM, "server")
     LOGIN_TIMEOUT = ("login_timeout", _DbKind.CUSTOM, "login_timeout")
     TIMEOUT = ("timeout", _DbKind.CUSTOM, "timeout")
-    TRUST_CERTIFICATE = ("trust_server_certificate", _DbKind.CUSTOM, "trust_server_certificate")
+    MAX_CONCURRENCY = ("max_concurrency", _DbKind.CUSTOM, "max_concurrency")
+    TRUST_CERTIFICATE = ("trust_certificate", _DbKind.CUSTOM, "trust_server_certificate")
     GROUPS = ("grp_authorized", _DbKind.TAGS, "")
 
     def __init__(self, csv_header: str, db_kind: _DbKind, db_key: str):
@@ -55,6 +57,12 @@ class ServerField(Enum):
     def label(self) -> str:
         """Human-readable header label for csv_export()."""
         return self.csv_header.title()
+
+    @property
+    def csv_optional(self) -> bool:
+        """Whether an imported CSV file may lack this column: the value is then left unchanged. Columns added after
+        the first CSV files were written, so these files can still be imported."""
+        return self in (ServerField.MAX_CONCURRENCY, ServerField.TRUST_CERTIFICATE)
 
 
 @dataclass(frozen=True, slots=True)
@@ -195,7 +203,7 @@ class Servers:
             entries_dict[(s_entry.title or "").upper()] = s_entry
 
         # define expected columns
-        cols_required = [f.csv_header for f in ServerField]
+        cols_required = [f.csv_header for f in ServerField if not f.csv_optional]
 
         # identify file encoding
         encoding = detect_encoding(filepath)
@@ -252,6 +260,8 @@ class Servers:
                     setattr(s_entry, field.db_key, value)
 
                 for field in [f for f in ServerField if f.db_kind is _DbKind.CUSTOM]:
+                    if field.csv_header not in row:  # optional column missing: no change
+                        continue
                     s_entry.set_custom_property(field.db_key, row[field.csv_header])
 
                 # update groups using csv.reader to parse imported string
@@ -275,14 +285,17 @@ class Servers:
         if entry is None or row[ServerField.PWD.csv_header].strip():
             return False
 
+        current = Server(self, entry=entry)
+        trust_new = row.get(ServerField.TRUST_CERTIFICATE.csv_header)  # optional in csv
+
         new_target = ServerTarget.of(
             row[ServerField.TYPE.csv_header],
             row[ServerField.HOST.csv_header],
             row[ServerField.PORT.csv_header],
             row[ServerField.SERVER.csv_header],
-            row[ServerField.TRUST_CERTIFICATE.csv_header].strip().lower() == "true",
+            current.trust_certificate if trust_new is None else trust_new.strip().lower() == "true",
         )
-        return Server(self, entry=entry).target != new_target
+        return current.target != new_target
 
     def csv_export(
         self, filepath: Path | str, delimiter: str = ";", overwrite: bool = False, with_passwords: bool = False
@@ -392,7 +405,8 @@ class Server:
         self.server: str = ""
         self.login_timeout: int = 60
         self.timeout: int = 300
-        self.trust_server_certificate: bool = False
+        self.max_concurrency: int = DEFAULT_MAX_CONCURRENCY  # for Pytre_Server, all users together
+        self.trust_certificate: bool = False
         self.grp_authorized: list[str] = []
 
         if entry:
@@ -400,7 +414,7 @@ class Server:
 
     @property
     def target(self) -> ServerTarget:
-        return ServerTarget.of(self.type, self.host, self.port, self.server, self.trust_server_certificate)
+        return ServerTarget.of(self.type, self.host, self.port, self.server, self.trust_certificate)
 
     def audit_fields(self) -> dict[str, Any]:
         """The fields of the server the audit log follows. Those in AUDIT_SECRETS hold a fingerprint of a secret,
@@ -412,13 +426,14 @@ class Server:
             "host": self.host,
             "port": self.port,
             "server": self.server,
-            "trust_server_certificate": self.trust_server_certificate,
+            "trust_certificate": self.trust_certificate,
             "database": self.database,
             "user": self.user,
             "password": secret_fingerprint(self.password),
             "charset": self.charset,
             "login_timeout": self.login_timeout,
             "timeout": self.timeout,
+            "max_concurrency": self.max_concurrency,
             "grp_authorized": set(self.grp_authorized),
         }
 
@@ -437,7 +452,8 @@ class Server:
             "server": self.server,
             "login_timeout": self.login_timeout,
             "timeout": self.timeout,
-            "trust_server_certificate": self.trust_server_certificate,
+            "max_concurrency": self.max_concurrency,
+            "trust_certificate": self.trust_certificate,
             "grp_authorized": self.grp_authorized,
         }
 
@@ -463,13 +479,19 @@ class Server:
         self.charset = (s_entry.get_custom_property(ServerField.CHARSET.db_key) or "").upper()  # force upper
 
         login_timeout = s_entry.get_custom_property(ServerField.LOGIN_TIMEOUT.db_key) or ""
-        self.login_timeout = int(login_timeout) if login_timeout.isdigit() else self.login_timeout  # must be a number
+        if login_timeout.isdigit():
+            self.login_timeout = int(login_timeout)
 
         timeout = s_entry.get_custom_property(ServerField.TIMEOUT.db_key) or ""
-        self.timeout = int(timeout) if timeout.isdigit() else self.timeout  # must be a number
+        if timeout.isdigit():
+            self.timeout = int(timeout)
+
+        max_concurrency = s_entry.get_custom_property(ServerField.MAX_CONCURRENCY.db_key) or ""
+        if max_concurrency.isdigit() and int(max_concurrency) >= 1:
+            self.max_concurrency = int(max_concurrency)
 
         trust_cert = s_entry.get_custom_property(ServerField.TRUST_CERTIFICATE.db_key) or ""
-        self.trust_server_certificate = trust_cert.lower() == "true"
+        self.trust_certificate = trust_cert.lower() == "true"
 
         # Retrieve groups from keepass entry tags
         tags = s_entry.tags if s_entry.tags else []
@@ -512,6 +534,8 @@ class Server:
             raise ValueError(f"La valeur de timeout doit être un nombre : {self.timeout}")
         if not str(self.login_timeout).isdigit():
             raise ValueError(f"La valeur de login_timeout doit être un nombre : {self.login_timeout}")
+        if not str(self.max_concurrency).isdigit() or int(self.max_concurrency) < 1:
+            raise ValueError(f"La valeur de max_concurrency doit être d'au moins 1 : {self.max_concurrency}")
 
         # Get existing entry or create a new one
         entry = self.servers.kee.db.find_entries(uuid=UUID(self.uuid), first=True) if self.uuid else None
@@ -534,9 +558,8 @@ class Server:
         entry.set_custom_property(ServerField.SERVER.db_key, self.server)
         entry.set_custom_property(ServerField.LOGIN_TIMEOUT.db_key, str(self.login_timeout))
         entry.set_custom_property(ServerField.TIMEOUT.db_key, str(self.timeout))
-        entry.set_custom_property(
-            ServerField.TRUST_CERTIFICATE.db_key, "true" if self.trust_server_certificate else "false"
-        )
+        entry.set_custom_property(ServerField.MAX_CONCURRENCY.db_key, str(self.max_concurrency))
+        entry.set_custom_property(ServerField.TRUST_CERTIFICATE.db_key, "true" if self.trust_certificate else "false")
 
         # Sanitize grp, keepass tags forbid colon and semi colon
         entry.tags = [grp.replace(",", "_").replace(";", "_") for grp in self.grp_authorized]

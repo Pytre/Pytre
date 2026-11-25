@@ -9,10 +9,12 @@ import asyncio
 import json
 import time
 from typing import Any
+from unittest.mock import Mock
 
 import pytest
 
 from Pytre_Core.remote_protocol import encode_row_value
+from Pytre_Core.servers import Server, ServerType
 from Pytre_Core.sql_query.query_drivers_server import (
     APP_ID,
     AsyncpgDriver,
@@ -24,17 +26,21 @@ from tests.resources.build_test_keepass import TEST_PG_SERVER
 
 pytestmark = pytest.mark.integration
 
-_CONNECTION: dict[str, Any] = {
-    "host": TEST_PG_SERVER["host"],
-    "port": int(TEST_PG_SERVER["port"]),
-    "database": TEST_PG_SERVER["database"],
-    "username": TEST_PG_SERVER["user"],
-    "password": TEST_PG_SERVER["password"],
-}
-
-
-def _connection(**overrides: Any) -> dict[str, Any]:
-    return {**_CONNECTION, **overrides}
+def _server(**overrides: Any) -> Server:
+    """The postgre-test server, trusted (self-signed certificate), with `overrides` set on it."""
+    server = Server(Mock())
+    server.id = TEST_PG_SERVER["id"]
+    server.type = ServerType.postgre.name
+    server.host = TEST_PG_SERVER["host"]
+    server.port = str(TEST_PG_SERVER["port"])
+    server.database = TEST_PG_SERVER["database"]
+    server.user = TEST_PG_SERVER["user"]
+    server.password = TEST_PG_SERVER["password"]
+    server.trust_certificate = True
+    for name, value in overrides.items():
+        assert hasattr(server, name), f"Server has no field {name}"
+        setattr(server, name, value)
+    return server
 
 
 @pytest.fixture
@@ -44,7 +50,7 @@ def anyio_backend():
 
 @pytest.fixture
 async def driver():
-    d = AsyncpgDriver(**_CONNECTION, trust_certificate=True, statement_timeout_secs=2)  # self-signed certificate
+    d = AsyncpgDriver(_server(timeout=2))
     await d.connect()
     yield d
     await d.disconnect()
@@ -73,7 +79,7 @@ async def test_trusted_connection_accepts_the_self_signed_certificate(driver):
 @requires_postgre_docker
 @pytest.mark.anyio
 async def test_certificate_is_verified_unless_the_server_is_trusted():
-    driver = AsyncpgDriver(**_CONNECTION, trust_certificate=False)
+    driver = AsyncpgDriver(_server(trust_certificate=False))
 
     with pytest.raises(AsyncSqlConnectionError) as exc_info:
         await driver.connect()
@@ -84,7 +90,7 @@ async def test_certificate_is_verified_unless_the_server_is_trusted():
 @requires_postgre_docker
 @pytest.mark.anyio
 async def test_wrong_password_is_a_connection_error():
-    driver = AsyncpgDriver(**_connection(password="not-the-password"), trust_certificate=True)
+    driver = AsyncpgDriver(_server(password="not-the-password"))
 
     with pytest.raises(AsyncSqlConnectionError):
         await driver.connect()
@@ -93,7 +99,7 @@ async def test_wrong_password_is_a_connection_error():
 @requires_postgre_docker
 @pytest.mark.anyio
 async def test_unreachable_server_is_a_connection_error():
-    driver = AsyncpgDriver(**_connection(port=5999), trust_certificate=True)
+    driver = AsyncpgDriver(_server(port="5999"))
 
     with pytest.raises(AsyncSqlConnectionError):
         await driver.connect()
@@ -229,7 +235,7 @@ async def test_statement_timeout_is_enforced_by_the_server(driver):
 @pytest.mark.anyio
 async def test_saturated_pool_is_a_connection_error():
     """A result keeps its connection until it's closed."""
-    driver = AsyncpgDriver(**_CONNECTION, trust_certificate=True, pool_size=1)
+    driver = AsyncpgDriver(_server(max_concurrency=1))
     driver._acquire_timeout_secs = 0.5
     await driver.connect()
     try:
@@ -323,7 +329,7 @@ async def test_closed_connections_go_back_to_the_pool_clean():
     active transaction to the event loop's exception handler."""
     reported: list[str] = []
     asyncio.get_running_loop().set_exception_handler(lambda _loop, context: reported.append(context["message"]))
-    driver = AsyncpgDriver(**_CONNECTION, trust_certificate=True, pool_size=1)
+    driver = AsyncpgDriver(_server(max_concurrency=1))
     await driver.connect()
     try:
         result = await driver.execute(_SLOW_QUERY, {})

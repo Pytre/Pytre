@@ -147,7 +147,7 @@ def test_csv_import_uses_generator_for_search(tmp_path, mock_kee):
         "server",
         "login_timeout",
         "timeout",
-        "trust_server_certificate",
+        "trust_certificate",
     ]
     row = [
         "existing_server",
@@ -218,7 +218,7 @@ def test_csv_import_creates_new_entries(tmp_path, mock_kee):
         "server",
         "login_timeout",
         "timeout",
-        "trust_server_certificate",
+        "trust_certificate",
     ]
     row = [
         "NEW_SERVER",
@@ -288,7 +288,7 @@ def test_csv_import_preserves_password_when_column_blank(tmp_path, mock_kee):
         "server",
         "login_timeout",
         "timeout",
-        "trust_server_certificate",
+        "trust_certificate",
     ]
     row = [
         "EXISTING_SERVER",
@@ -347,7 +347,7 @@ def test_csv_import_parses_groups_with_delimiter(tmp_path, mock_kee):
         "server",
         "login_timeout",
         "timeout",
-        "trust_server_certificate",
+        "trust_certificate",
     ]
     # Groups with delimiter in quotes
     row = [
@@ -409,7 +409,7 @@ def test_csv_import_replaces_invalid_chars_in_tags(tmp_path, mock_kee):
         "server",
         "login_timeout",
         "timeout",
-        "trust_server_certificate",
+        "trust_certificate",
     ]
     row = [
         "SERVER1",
@@ -769,7 +769,8 @@ def test_server_initialization():
     assert server.port == "1433"
     assert server.login_timeout == 60
     assert server.timeout == 300
-    assert server.trust_server_certificate is False
+    assert server.trust_certificate is False
+    assert server.max_concurrency == 30
     assert server.grp_authorized == []
 
 
@@ -793,7 +794,8 @@ def test_server_to_dict():
     assert result["password"] == "secret"
     assert "type" in result
     assert "port" in result
-    assert result["trust_server_certificate"] is False
+    assert result["trust_certificate"] is False
+    assert result["max_concurrency"] == 30
 
 
 @pytest.mark.unit
@@ -913,7 +915,7 @@ def test_csv_import_empty_groups_clears_tags(tmp_path, mock_kee):
         "server",
         "login_timeout",
         "timeout",
-        "trust_server_certificate",
+        "trust_certificate",
     ]
     row = ["SERVER1", "Server", "user", "pass", "", "MSSQL", "utf8", "db", "host", "1433", "srv", "5", "30", "false"]
 
@@ -1247,7 +1249,7 @@ def test_server_save_updates_existing_entry(mock_kee):
 
 @pytest.mark.unit
 def test_server_save_writes_trust_server_certificate(mock_kee):
-    """save should persist trust_server_certificate as a "true"/"false" custom property"""
+    """save should persist trust_certificate as a "true"/"false" custom property"""
     from pykeepass.entry import Entry
     from Pytre_Core.servers import Server, ServerField
 
@@ -1255,7 +1257,7 @@ def test_server_save_writes_trust_server_certificate(mock_kee):
     server = Server(servers)
     server.id = "SERVER1"
     server.uuid = "12345678-1234-1234-1234-123456789012"
-    server.trust_server_certificate = True
+    server.trust_certificate = True
 
     existing_entry = Mock(spec=Entry)
     mock_kee.db.find_entries = Mock(return_value=existing_entry)
@@ -1263,6 +1265,36 @@ def test_server_save_writes_trust_server_certificate(mock_kee):
     server.save()
 
     existing_entry.set_custom_property.assert_any_call(ServerField.TRUST_CERTIFICATE.db_key, "true")
+
+
+@pytest.mark.unit
+def test_server_save_writes_max_concurrency(mock_kee):
+    from pykeepass.entry import Entry
+
+    server = Server(Servers(mock_kee))
+    server.id = "SERVER1"
+    server.uuid = "12345678-1234-1234-1234-123456789012"
+    server.max_concurrency = 12
+
+    existing_entry = Mock(spec=Entry)
+    mock_kee.db.find_entries = Mock(return_value=existing_entry)
+
+    server.save()
+
+    existing_entry.set_custom_property.assert_any_call("max_concurrency", "12")
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("value", [0, -1, "abc", ""])
+def test_server_save_refuses_a_max_concurrency_below_one(mock_kee, value):
+    server = Server(Servers(mock_kee))
+    server.id = "SERVER1"
+    server.max_concurrency = value
+
+    with pytest.raises(ValueError, match="max_concurrency"):
+        server.save()
+
+    mock_kee.save_db.assert_not_called()
 
 
 @pytest.mark.unit
@@ -1349,7 +1381,7 @@ def test_load_from_entry_parses_trust_server_certificate_true(mock_kee):
     servers = Servers(mock_kee)
 
     server = servers.servers_dict["SERVER1"]
-    assert server.trust_server_certificate is True
+    assert server.trust_certificate is True
 
 
 @pytest.mark.unit
@@ -1369,7 +1401,40 @@ def test_load_from_entry_missing_trust_server_certificate_defaults_to_false(mock
     servers = Servers(mock_kee)
 
     server = servers.servers_dict["SERVER1"]
-    assert server.trust_server_certificate is False
+    assert server.trust_certificate is False
+
+
+def _entry_with(**props: str) -> Mock:
+    """A KeePass server entry SERVER1 holding only `props` as its custom properties."""
+    entry = Mock()
+    entry.uuid = "uuid-1"
+    entry.title = "SERVER1"
+    entry.username = "user"
+    entry.password = "pass"
+    entry.notes = ""
+    entry.tags = []
+    entry.custom_properties = list(props)
+    entry.get_custom_property = Mock(side_effect=props.get)
+    return entry
+
+
+@pytest.mark.unit
+def test_load_from_entry_parses_max_concurrency(mock_kee):
+    mock_kee.grp_servers.entries = [_entry_with(max_concurrency="12")]
+
+    assert Servers(mock_kee).servers_dict["SERVER1"].max_concurrency == 12
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("stored", [None, "", "abc", "0", "-3"])
+def test_load_from_entry_without_a_valid_max_concurrency_gives_the_default(mock_kee, stored):
+    """A server saved before the field existed, or with a value it can't use, runs 30 queries at once"""
+    from Pytre_Core.servers import DEFAULT_MAX_CONCURRENCY
+
+    props = {} if stored is None else {"max_concurrency": stored}
+    mock_kee.grp_servers.entries = [_entry_with(**props)]
+
+    assert Servers(mock_kee).servers_dict["SERVER1"].max_concurrency == DEFAULT_MAX_CONCURRENCY == 30
 
 
 @pytest.mark.unit
@@ -1412,11 +1477,10 @@ def test_load_from_entry_defaults_charset_for_postgre(mock_kee):
     assert server.charset == "UTF8"
 
 
-
-
 # ================================================================================
 # ServerTarget - where a stored password is sent to
 # ================================================================================
+
 
 def _target(
     type: str = "mssql",
@@ -1476,7 +1540,7 @@ def test_server_target_differs_when_the_certificate_is_checked_again():
 def test_server_target_property_matches_the_server_fields(mock_kee):
     server = Server(Servers(mock_kee))
     server.type, server.host, server.port, server.server = "mssql", "db.example.com", "1433", "PROD"
-    server.trust_server_certificate = False
+    server.trust_certificate = False
 
     assert server.target == _target()
 
@@ -1532,29 +1596,56 @@ def test_csv_export_includes_passwords_when_requested(mock_kee, tmp_path):
 # ================================================================================
 
 _IMPORT_HEADERS = [
-    "id", "description", "user", "password", "grp_authorized", "type", "charset", "database", "host", "port",
-    "server", "login_timeout", "timeout", "trust_server_certificate",
+    "id",
+    "description",
+    "user",
+    "password",
+    "grp_authorized",
+    "type",
+    "charset",
+    "database",
+    "host",
+    "port",
+    "server",
+    "login_timeout",
+    "timeout",
+    "max_concurrency",
+    "trust_certificate",
 ]
 
 
-def _import_file(tmp_path: Path, *rows: dict[str, str]) -> Path:
-    """A servers CSV file with `rows`, every unset column filled as for SRV on db.example.com."""
+def _import_file(tmp_path: Path, *rows: dict[str, str], without: tuple[str, ...] = ()) -> Path:
+    """A servers CSV file with `rows`, every unset column filled as for SRV on db.example.com, the columns in
+    `without` left out."""
     default = {
-        "id": "SRV", "description": "", "user": "sa", "password": "", "grp_authorized": "", "type": "mssql",
-        "charset": "", "database": "db", "host": "db.example.com", "port": "1433", "server": "",
-        "login_timeout": "60", "timeout": "300", "trust_server_certificate": "false",
+        "id": "SRV",
+        "description": "",
+        "user": "sa",
+        "password": "",
+        "grp_authorized": "",
+        "type": "mssql",
+        "charset": "",
+        "database": "db",
+        "host": "db.example.com",
+        "port": "1433",
+        "server": "",
+        "login_timeout": "60",
+        "timeout": "300",
+        "max_concurrency": "30",
+        "trust_certificate": "false",
     }
+    headers = [header for header in _IMPORT_HEADERS if header not in without]
     csv_file = tmp_path / "import.csv"
     with open(csv_file, "w", encoding="utf-8", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=_IMPORT_HEADERS, delimiter=";")
+        writer = csv.DictWriter(f, fieldnames=headers, delimiter=";")
         writer.writeheader()
         for row in rows:
-            writer.writerow({**default, **row})
+            writer.writerow({key: value for key, value in {**default, **row}.items() if key in headers})
     return csv_file
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("bad_line", ["OTHER;only two values", "OTHER" + ";x" * 14], ids=["missing", "extra"])
+@pytest.mark.parametrize("bad_line", ["OTHER;only two values", "OTHER" + ";x" * len(_IMPORT_HEADERS)], ids=["missing", "extra"])
 def test_csv_import_refuses_the_whole_file_with_a_row_not_matching_the_header(mock_kee, tmp_path, bad_line):
     """A missing or unquoted delimiter shifts the values (a host into the port...): nothing is imported"""
     entry = _stored_entry("SRV")
@@ -1586,7 +1677,7 @@ def test_csv_import_refuses_a_target_change_without_the_password(mock_kee, tmp_p
 @pytest.mark.unit
 @pytest.mark.parametrize(
     "change",
-    [{"type": "postgre"}, {"port": "1434"}, {"server": "OTHER"}, {"trust_server_certificate": "true"}],
+    [{"type": "postgre"}, {"port": "1434"}, {"server": "OTHER"}, {"trust_certificate": "true"}],
     ids=["type", "port", "instance", "certificate"],
 )
 def test_csv_import_refuses_every_kind_of_target_change_without_the_password(mock_kee, tmp_path, change):
@@ -1670,6 +1761,76 @@ def test_csv_import_is_all_or_nothing(mock_kee, tmp_path):
 
 
 # ================================================================================
+# CSV import - optional columns
+# ================================================================================
+
+
+def _written_keys(entry: Mock) -> set[str]:
+    return {call.args[0] for call in entry.set_custom_property.call_args_list}
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("value", ["12", ""], ids=["filled", "empty"])
+def test_csv_import_writes_the_max_concurrency_column(mock_kee, tmp_path, value):
+    """An empty value is written as is: the server then loads the default"""
+    entry = _stored_entry("SRV", max_concurrency="8")
+    mock_kee.grp_servers.entries = [entry]
+
+    Servers(mock_kee).csv_import(_import_file(tmp_path, {"max_concurrency": value}))
+
+    entry.set_custom_property.assert_any_call("max_concurrency", value)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("column", ["max_concurrency", "trust_certificate"])
+def test_csv_import_accepts_a_file_without_an_optional_column_and_leaves_its_value_unchanged(
+    mock_kee, tmp_path, column
+):
+    """A file written before the column existed can still be imported"""
+    from Pytre_Core.servers import ServerField
+
+    entry = _stored_entry("SRV")
+    mock_kee.grp_servers.entries = [entry]
+    db_key = next(field.db_key for field in ServerField if field.csv_header == column)
+
+    Servers(mock_kee).csv_import(_import_file(tmp_path, {"description": "changed"}, without=(column,)))
+
+    assert entry.notes == "changed"
+    assert "host" in _written_keys(entry)
+    assert db_key not in _written_keys(entry)
+
+
+@pytest.mark.unit
+def test_csv_import_without_the_trust_column_keeps_the_stored_trust_for_the_target(mock_kee, tmp_path):
+    """A trusted server re-imported without the column is no target change: no password needed"""
+    entry = _stored_entry("SRV", trust_server_certificate="true")
+    mock_kee.grp_servers.entries = [entry]
+
+    Servers(mock_kee).csv_import(_import_file(tmp_path, {"description": "changed"}, without=("trust_certificate",)))
+
+    assert entry.password == "s3cret"
+    assert "trust_server_certificate" not in _written_keys(entry)
+
+
+@pytest.mark.unit
+def test_csv_import_refuses_a_file_without_a_required_column(mock_kee, tmp_path):
+    mock_kee.grp_servers.entries = [_stored_entry("SRV")]
+
+    with pytest.raises(ValueError, match="Missing columns in file to import : timeout"):
+        Servers(mock_kee).csv_import(_import_file(tmp_path, {}, without=("timeout",)))
+
+
+@pytest.mark.unit
+def test_csv_export_includes_the_max_concurrency_column(mock_kee, tmp_path):
+    mock_kee.grp_servers.entries = [_stored_entry("SRV", max_concurrency="12")]
+
+    rows = _export_rows(Servers(mock_kee), tmp_path)
+
+    assert rows[0]["Max_Concurrency"] == "12"
+    assert rows[0]["Trust_Certificate"] == "false"
+
+
+# ================================================================================
 # Audit fields
 # ================================================================================
 
@@ -1682,13 +1843,14 @@ def test_server_audit_fields_give_every_followed_field(mock_kee):
     server.host = "db.example.com"
     server.port = "5432"
     server.server = "inst"
-    server.trust_server_certificate = True
+    server.trust_certificate = True
     server.database = "erp"
     server.user = "reader"
     server.password = "s3cret"
     server.charset = "UTF8"
     server.login_timeout = 30
     server.timeout = 600
+    server.max_concurrency = 12
     server.grp_authorized = ["sales", "finance"]
 
     assert server.audit_fields() == {
@@ -1698,13 +1860,14 @@ def test_server_audit_fields_give_every_followed_field(mock_kee):
         "host": "db.example.com",
         "port": "5432",
         "server": "inst",
-        "trust_server_certificate": True,
+        "trust_certificate": True,
         "database": "erp",
         "user": "reader",
         "password": secret_fingerprint("s3cret"),
         "charset": "UTF8",
         "login_timeout": 30,
         "timeout": 600,
+        "max_concurrency": 12,
         "grp_authorized": {"sales", "finance"},
     }
 

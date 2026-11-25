@@ -50,7 +50,8 @@ def test_server_form_apply_to_copies_every_field():
         server=" inst ",
         login_timeout=10,
         timeout=20,
-        trust_server_certificate=True,
+        max_concurrency=12,
+        trust_certificate=True,
         groups=["sales", "it"],
     )
 
@@ -68,7 +69,8 @@ def test_server_form_apply_to_copies_every_field():
     assert server.server == "inst"
     assert server.login_timeout == 10
     assert server.timeout == 20
-    assert server.trust_server_certificate is True
+    assert server.max_concurrency == 12
+    assert server.trust_certificate is True
     assert server.grp_authorized == ["sales", "it"]  # groups -> grp_authorized, replacing the previous ones
 
 
@@ -103,11 +105,20 @@ def test_server_form_apply_to_falls_back_on_mssql_for_an_unknown_type():
 
 def test_server_form_unchecked_trust_checkbox_means_untrusted():
     server = Server(Mock())
-    server.trust_server_certificate = True
+    server.trust_certificate = True
 
     _server_form().apply_to(server)  # an unchecked checkbox sends no field at all
 
-    assert server.trust_server_certificate is False
+    assert server.trust_certificate is False
+
+
+def test_server_form_without_max_concurrency_gives_the_server_default():
+    server = Server(Mock())
+    server.max_concurrency = 12
+
+    _server_form().apply_to(server)
+
+    assert server.max_concurrency == Server(Mock()).max_concurrency == 30
 
 
 def test_server_form_requires_the_timeouts():

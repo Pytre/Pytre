@@ -16,14 +16,14 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
 
-from Pytre_Core.servers import Server, ServerTarget, ServerType
+from Pytre_Core.servers import DEFAULT_MAX_CONCURRENCY, Server, ServerTarget, ServerType
 from Pytre_Server.audit import AuditedRecords, audit, changes_between, shorten
 from Pytre_Server.routes.admin_auth import is_loopback, require_admin_session
 from Pytre_Server.server_state import client_host, get_server_state, ServerState
 from Pytre_Server.templating import templates
 
 
-TARGET_FIELDS = ("type", "host", "port", "server", "trust_server_certificate")  # fields of Server.audit_fields()
+TARGET_FIELDS = ("type", "host", "port", "server", "trust_certificate")  # fields of Server.audit_fields()
 SERVERS_AUDIT = AuditedRecords(
     "server",
     "Server",
@@ -48,7 +48,8 @@ class ServerForm(BaseModel):
     server: str = ""
     login_timeout: int
     timeout: int
-    trust_server_certificate: bool = False
+    max_concurrency: int = DEFAULT_MAX_CONCURRENCY
+    trust_certificate: bool = False
     groups: list[str] = Field(default_factory=list)
 
     @property
@@ -58,7 +59,7 @@ class ServerForm(BaseModel):
     @property
     def target(self) -> ServerTarget:
         """The target this form would give the server, see apply_to()."""
-        return ServerTarget.of(self.server_type, self.host, self.port, self.server, self.trust_server_certificate)
+        return ServerTarget.of(self.server_type, self.host, self.port, self.server, self.trust_certificate)
 
     def apply_to(self, server: Server) -> None:
         """Copies the submitted values onto `server`."""
@@ -75,7 +76,8 @@ class ServerForm(BaseModel):
         server.server = self.server.strip()
         server.login_timeout = self.login_timeout
         server.timeout = self.timeout
-        server.trust_server_certificate = self.trust_server_certificate
+        server.max_concurrency = self.max_concurrency
+        server.trust_certificate = self.trust_certificate
         server.grp_authorized = self.groups
 
 
@@ -92,6 +94,13 @@ async def _reload_servers(state: ServerState) -> int:
     reset_count = await state.resources.reset_connections()
 
     return reset_count
+
+
+async def _apply_saved_servers(state: ServerState, server_id: str | None = None) -> None:
+    """Applies servers just saved: the in-memory list is rebuilt from the entries, then the drivers are reset, for
+    `server_id` or of every server, so the next executions use the new values. Running ones end as they began."""
+    await asyncio.to_thread(state.app_ctx.servers.get_all_servers)
+    await state.resources.reset_connections(server_id)
 
 
 # ------------------------------------------------------------------------------------------
@@ -217,7 +226,7 @@ async def _save_server(
 
     SERVERS_AUDIT.log_change(client_host(request), admin_username, before, server_obj.audit_fields())
 
-    await state.resources.reset_connections(server_obj.id)
+    await _apply_saved_servers(state, server_obj.id)
     return RedirectResponse(url="/admin/servers?msg=Server+saved", status_code=status.HTTP_303_SEE_OTHER)
 
 
@@ -395,6 +404,7 @@ async def servers_import_submit(
     )
     audit("server.import", client_host(request), msg, actor=admin_username)
 
+    await _apply_saved_servers(state)  # every server: any may have been changed
     return RedirectResponse(url="/admin/servers?msg=Servers+imported", status_code=status.HTTP_303_SEE_OTHER)
 
 

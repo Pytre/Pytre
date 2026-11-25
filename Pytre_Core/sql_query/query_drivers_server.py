@@ -31,11 +31,12 @@ def log(msg: str | object, level: int = logging.INFO, sublogger: str = __name__)
     _log(msg, level=level, sublogger=sublogger)
 
 
-async def get_driver(server: Server, pool_size: int) -> AsyncSqlDriver:
+async def get_driver(server: Server) -> AsyncSqlDriver:
+    """Driver of `server`, running at most server.max_concurrency queries at once"""
     if server.type == ServerType.mssql.name:
-        return PyMssqlDriver(server, pool_size)
+        return PyMssqlDriver(server)
     elif server.type == ServerType.postgre.name:
-        return AsyncpgDriver._driver(server, pool_size)
+        return AsyncpgDriver(server)
     else:
         raise ValueError("Unknown server type, getting a connection is not possible")
 
@@ -91,14 +92,17 @@ class PyMssqlDriver:
     pymssql releases the GIL while waiting for the network.
     pymssql's timeout and login_timeout are process-wide: the last connection opened sets them for every query.
 
-    At most `pool_size` queries run at once, a query waiting longer than _acquire_timeout_secs for its turn fails."""
+    At most server.max_concurrency queries run at once, a query waiting longer than _acquire_timeout_secs for its
+    turn fails."""
 
     _acquire_timeout_secs = 10.0
 
-    def __init__(self, server: Server, pool_size: int = 30) -> None:
+    def __init__(self, server: Server) -> None:
         self._server = copy.copy(server)  # parameters as they are now, edits apply once connections are reset
-        self._slots = asyncio.Semaphore(pool_size)
-        self._executor = ThreadPoolExecutor(max_workers=pool_size, thread_name_prefix=f"pymssql_{server.id}")
+        self._slots = asyncio.Semaphore(server.max_concurrency)
+        self._executor = ThreadPoolExecutor(
+            max_workers=server.max_concurrency, thread_name_prefix=f"pymssql_{server.id}"
+        )
 
     async def connect(self) -> None:
         pass  # no pool to open, each query opens its own connection
@@ -231,32 +235,20 @@ class AsyncpgDriver:
         asyncpg.TooManyConnectionsError,
     )
 
-    def __init__(
-        self,
-        host: str,
-        port: int,
-        database: str,
-        username: str,
-        password: str,
-        trust_certificate: bool = False,
-        login_timeout: int = 60,
-        statement_timeout_secs: int = 300,
-        pool_size: int = 30,
-    ) -> None:
-
-        self._host = host
-        self._port = port
-        self._database = database
-        self._username = username
-        self._password = password
-        self._login_timeout = login_timeout
-        self._statement_timeout_ms = int(statement_timeout_secs) * 1000
-        self._pool_size = pool_size
+    def __init__(self, server: Server) -> None:
+        self._host = server.host
+        self._port = int(server.port)
+        self._database = server.database
+        self._username = server.user
+        self._password = server.password
+        self._login_timeout = server.login_timeout
+        self._statement_timeout_ms = int(server.timeout) * 1000  # sec -> ms
+        self._pool_size = server.max_concurrency
         self._pool: asyncpg.Pool | None = None
 
         # secure by default (certificate chain and host name verified). Trusting the server means accepting
         # what it offers: TLS without verification if available, plain connection otherwise.
-        self._ssl: bool | str = "prefer" if trust_certificate else True
+        self._ssl: bool | str = "prefer" if server.trust_certificate else True
 
     async def connect(self) -> None:
         try:
@@ -339,21 +331,6 @@ class AsyncpgDriver:
     @staticmethod
     def _error_msg(error: Exception) -> str:
         return str(error) or type(error).__name__  # e.g. TimeoutError has an empty message
-
-    @classmethod
-    def _driver(cls, server: Server, pool_size: int) -> AsyncpgDriver:
-        """Returns a postgre driver built from server's parameters."""
-        return AsyncpgDriver(
-            host=server.host,
-            port=int(server.port),
-            database=server.database,
-            username=server.user,
-            password=server.password,
-            trust_certificate=server.trust_server_certificate,
-            login_timeout=server.login_timeout,
-            statement_timeout_secs=server.timeout,
-            pool_size=pool_size,
-        )
 
 
 class _AsyncpgResult:

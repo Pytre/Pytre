@@ -6,6 +6,7 @@ its pinned connection details) - skipped automatically if it isn't reachable.
 
 import asyncio
 import json
+import os
 import time
 from typing import Any
 from unittest.mock import Mock
@@ -171,10 +172,13 @@ async def test_saturated_pool_is_a_connection_error():
 
 
 async def _sessions_of_pytre_server(driver) -> int:
+    """Sessions of Pytre_Server opened by this process, other than the one counting them: each test worker is a
+    process of its own, its tests run one at a time."""
     [(count,)] = await _rows(
         driver,
-        "SELECT COUNT(*) FROM sys.dm_exec_sessions WHERE program_name = %(@app)s AND session_id <> @@SPID",
-        {"@app": APP_ID},
+        "SELECT COUNT(*) FROM sys.dm_exec_sessions "
+        "WHERE program_name = %(@app)s AND host_process_id = %(@pid)s AND session_id <> @@SPID",
+        {"@app": APP_ID, "@pid": os.getpid()},
     )
     return count
 

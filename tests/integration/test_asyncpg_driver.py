@@ -8,6 +8,7 @@ skipped if it can't be reached.
 import asyncio
 import json
 import time
+import uuid
 from typing import Any
 from unittest.mock import Mock
 
@@ -257,13 +258,19 @@ async def test_saturated_pool_is_a_connection_error():
 _SLOW_QUERY = "SELECT g AS n, pg_sleep(0.001) FROM generate_series(1, 1000000) g"
 
 
-async def _running_queries(driver: AsyncpgDriver) -> int:
-    """Queries of Pytre_Server running on PostgreSQL, other than the one counting them."""
+def _marked_slow_query() -> tuple[str, str]:
+    """_SLOW_QUERY with a marker of its own, to tell it from the queries other test workers run at the same time."""
+    marker = uuid.uuid4().hex
+    return f"{_SLOW_QUERY} /* {marker} */", marker
+
+
+async def _running_queries(driver: AsyncpgDriver, marker: str) -> int:
+    """Queries of Pytre_Server holding `marker` running on PostgreSQL, other than the one counting them."""
     [row] = await _rows(
         driver,
-        "SELECT count(*) AS n FROM pg_stat_activity "
-        "WHERE application_name = %(@app)s AND state = 'active' AND pid <> pg_backend_pid()",
-        {"@app": APP_ID},
+        "SELECT count(*) AS n FROM pg_stat_activity WHERE application_name = %(@app)s AND state = 'active' "
+        "AND query LIKE %(@pattern)s AND pid <> pg_backend_pid()",
+        {"@app": APP_ID, "@pattern": f"%{marker}%"},
     )
     return row["n"]
 
@@ -296,30 +303,37 @@ async def test_first_rows_arrive_before_the_query_is_done(driver):
 @requires_postgre_docker
 @pytest.mark.anyio
 async def test_closing_before_the_last_row_stops_the_query(driver):
-    result = await driver.execute(_SLOW_QUERY, {})
+    query, marker = _marked_slow_query()
+    result = await driver.execute(query, {})
     await result.fetch(10)
 
     await result.close()
 
-    assert await _running_queries(driver) == 0
+    assert await _running_queries(driver, marker) == 0
 
 
 @requires_postgre_docker
 @pytest.mark.anyio
 async def test_cancelled_fetch_stops_the_query_on_the_server(driver):
     """Client gone during a fetch: the fetch task is cancelled, then the result closed."""
-    result = await driver.execute(_SLOW_QUERY, {})
+    query, marker = _marked_slow_query()
+    result = await driver.execute(query, {})
     fetch_task = asyncio.create_task(result.fetch(100_000))
-    await asyncio.sleep(0.3)
-    assert await _running_queries(driver) == 1
+    try:
+        await asyncio.sleep(0.3)
+        assert await _running_queries(driver, marker) == 1
 
-    fetch_task.cancel()
-    await asyncio.gather(fetch_task, return_exceptions=True)
-    start = time.monotonic()
-    await result.close()
+        fetch_task.cancel()
+        await asyncio.gather(fetch_task, return_exceptions=True)
+        start = time.monotonic()
+        await result.close()
 
-    assert time.monotonic() - start < 5
-    assert await _running_queries(driver) == 0
+        assert time.monotonic() - start < 5
+        assert await _running_queries(driver, marker) == 0
+    finally:  # the connection held by a failed run would make the driver's disconnect() wait for it forever
+        fetch_task.cancel()
+        await asyncio.gather(fetch_task, return_exceptions=True)
+        await result.close()
 
 
 @requires_postgre_docker

@@ -267,7 +267,7 @@ class Job:
             rows = await self._result.fetch(self.batch_size)
             last = len(rows) < self.batch_size  # a full batch may be followed by an empty last one
             columns = self._result.columns() if n == 1 else None
-            body = Batch(n, rows, last, columns).encode()
+            body = await asyncio.to_thread(Batch(n, rows, last, columns).encode)  # JSON of thousands of rows
         except Exception as e:
             self._fail(e, step=f"batch {n}")
             await self._release()

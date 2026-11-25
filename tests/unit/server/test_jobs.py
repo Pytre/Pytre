@@ -4,6 +4,7 @@ Tests for Pytre_Server/jobs.py: executions by jobs, read by batches, without Fas
 
 import asyncio
 import json
+import threading
 import time
 from contextlib import AbstractAsyncContextManager
 from datetime import datetime, timezone
@@ -12,7 +13,7 @@ from unittest.mock import Mock
 import pytest
 
 from Pytre_Core.logs_central import ExecutionLogEntry
-from Pytre_Core.remote_protocol import JOB_ABANDON_SECS, JobKey, JobStatus
+from Pytre_Core.remote_protocol import JOB_ABANDON_SECS, Batch, JobKey, JobStatus
 from Pytre_Core.sql_query.query_drivers_server import AsyncSqlConnectionError, AsyncSqlExecutionError
 from Pytre_Server import jobs as jobs_module
 from Pytre_Server.jobs import Job, JobNotFound, JobRegistry, JobSequenceError
@@ -317,6 +318,24 @@ async def test_a_value_json_can_not_encode_reports_an_unexpected_error():
 
     assert body[JobKey.STATUS] == JobStatus.ERROR
     assert body[JobKey.ERROR]["type"] == "TypeError"
+
+
+@pytest.mark.unit
+@pytest.mark.anyio
+async def test_a_batch_is_encoded_outside_the_event_loop(monkeypatch):
+    """Encoding thousands of rows would hold up every other request meanwhile"""
+    encoding_threads: list[threading.Thread] = []
+    encode = Batch.encode
+
+    def recording_encode(batch: Batch) -> bytes:
+        encoding_threads.append(threading.current_thread())
+        return encode(batch)
+
+    monkeypatch.setattr(Batch, "encode", recording_encode)
+    started = await _ready(await _start(rows=[(1,)]))
+
+    assert (await _batch(started.job, 1))[JobKey.ROWS] == [[1]]
+    assert encoding_threads and threading.current_thread() not in encoding_threads
 
 
 @pytest.mark.unit
